@@ -1,0 +1,24 @@
+# test_app/.gitlab-ci.yml — Pipeline CI for the test app.
+#
+# This is a fully working example of how to consume the ci-templates pipeline.
+# It is intentionally identical in structure to example-app/.gitlab-ci.yml
+# but points at a real app (test_app/) that you can actually run and test.
+#
+# To use this for your own app:
+#   1. Copy this file to your repo root as .gitlab-ci.yml
+#   2. Update app_name, app_port, config_repo_url
+#   3. Set CONFIG_REPO_TOKEN in GitLab → Settings → CI/CD → Variables
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "prod"'
+
+include:
+  - project: 'nazim.lameche/ci-templates'
+    ref: main
+    file: 'pipeline.yml'
+    inputs:
+      app_name: "test-app"
+      app_port: "8080"
+      config_repo_url: "https://gitlab.example.com/platform/k8s-config.git"
