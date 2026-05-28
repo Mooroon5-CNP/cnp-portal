@@ -19,6 +19,6 @@ include:
     ref: main
     file: 'pipeline.yml'
     inputs:
-      app_name: "test-app"
+      app_name: "test_app"
       app_port: "8080"
       config_repo_url: "https://gitlab.example.com/platform/k8s-config.git"
