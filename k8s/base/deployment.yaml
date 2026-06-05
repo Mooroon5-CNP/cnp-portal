@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cnp-portal
+  labels:
+    app.kubernetes.io/name: "cnp-portal"
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/owner: "team-cnp"
+    cost-center: "projet-epita"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cnp-portal
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "cnp-portal"
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/owner: "team-cnp"
+        cost-center: "projet-epita"
+        tags.datadoghq.com/env: "dev"
+        tags.datadoghq.com/service: "cnp-portal"
+        tags.datadoghq.com/version: "1.0.0"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      automountServiceAccountToken: false
+      containers:
+        - name: cnp-portal
+          image: registry.gitlab.com/cnp/cnp-portal:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: DD_ENV
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/env']
+            - name: DD_SERVICE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/service']
+            - name: DD_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/version']
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cnp-portal-dev-session-secret
+                  key: SESSION_SECRET
+            - name: GITLAB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cnp-portal-dev-gitlab-oauth
+                  key: GITLAB_CLIENT_ID
+            - name: GITLAB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cnp-portal-dev-gitlab-oauth
+                  key: GITLAB_CLIENT_SECRET
+            - name: GITLAB_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: cnp-portal-dev-gitlab-oauth
+                  key: GITLAB_REDIRECT_URI
+            - name: DATADOG_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cnp-portal-dev-datadog-api-key
+                  key: DATADOG_API_KEY
+                  optional: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

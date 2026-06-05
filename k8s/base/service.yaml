@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cnp-portal
+  labels:
+    app.kubernetes.io/name: "cnp-portal"
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/owner: "team-cnp"
+    cost-center: "projet-epita"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cnp-portal
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

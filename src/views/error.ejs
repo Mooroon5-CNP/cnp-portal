@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('partials/head', { title: title }) %>
+<body>
+<% if (locals.user) { %>
+<div class="layout">
+  <%- include('partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper" style="display:flex;align-items:center;justify-content:center;min-height:80vh;">
+      <div class="error-card">
+        <div class="error-code"><%= code %></div>
+        <div class="error-title"><%= title %></div>
+        <div class="error-message"><%= message %></div>
+        <a href="/" class="btn btn-primary">Retour au dashboard</a>
+      </div>
+    </div>
+  </main>
+</div>
+<% } else { %>
+<div class="error-page">
+  <div class="error-card">
+    <div class="error-code"><%= code %></div>
+    <div class="error-title"><%= title %></div>
+    <div class="error-message"><%= message %></div>
+    <a href="/auth/login" class="btn btn-primary">Se connecter</a>
+  </div>
+</div>
+<% } %>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Documentation</div>
+          <div class="page-subtitle">Fichiers locaux depuis /documentation</div>
+        </div>
+      </div>
+
+      <div class="doc-layout">
+        <div class="doc-sidebar">
+          <% if (files.length === 0) { %>
+            <div style="padding:16px;color:var(--text-muted);font-size:13px;">Aucun fichier .md trouvé</div>
+          <% } else { %>
+            <% files.forEach(file => { %>
+              <a href="/docs/<%= file %>" class="<%= locals.currentFile === file ? 'active' : '' %>">
+                📄 <%= file %>
+              </a>
+            <% }) %>
+          <% } %>
+        </div>
+
+        <div class="doc-content">
+          <% if (!content) { %>
+            <div style="color:var(--text-muted);text-align:center;padding:60px 0;">
+              <div style="font-size:48px;margin-bottom:16px;">📄</div>
+              <div style="font-size:16px;font-weight:600;margin-bottom:8px;">Sélectionnez un fichier</div>
+              <div style="font-size:14px;">Choisissez un document dans la liste à gauche</div>
+            </div>
+          <% } else { %>
+            <%- content %>
+          <% } %>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

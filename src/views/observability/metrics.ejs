@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Métriques</div>
+          <div class="page-subtitle">4 golden signals — via Datadog (lecture seule)</div>
+        </div>
+      </div>
+
+      <div class="grid-2 mb-6">
+        <div class="metric-card card">
+          <div class="metric-name">Latence (p50 / p95 / p99)</div>
+          <div class="metric-value"><%= metrics.latency.p50 %></div>
+          <div class="metric-unit"><%= metrics.latency.unit %> · p95: <%= metrics.latency.p95 %><%= metrics.latency.unit %> · p99: <%= metrics.latency.p99 %><%= metrics.latency.unit %></div>
+        </div>
+        <div class="metric-card card">
+          <div class="metric-name">Taux d'erreur</div>
+          <div class="metric-value" style="color: <%= metrics.errorRate.value > 5 ? 'var(--danger)' : 'var(--success)' %>"><%= metrics.errorRate.value %></div>
+          <div class="metric-unit"><%= metrics.errorRate.unit %></div>
+        </div>
+        <div class="metric-card card">
+          <div class="metric-name">Saturation (CPU / Mémoire)</div>
+          <div class="metric-value" style="color: <%= metrics.saturation.cpu > 80 ? 'var(--danger)' : 'var(--text)' %>"><%= metrics.saturation.cpu %></div>
+          <div class="metric-unit"><%= metrics.saturation.unit %> CPU · <%= metrics.saturation.memory %><%= metrics.saturation.unit %> Mémoire</div>
+        </div>
+        <div class="metric-card card">
+          <div class="metric-name">Trafic</div>
+          <div class="metric-value"><%= metrics.traffic.rps %></div>
+          <div class="metric-unit"><%= metrics.traffic.unit %></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px;">
+          <strong>Note MVP :</strong> Les graphiques temps-réel seront disponibles en V2 via les dashboards Datadog embarqués (iframes ou Datadog Embed API).
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">ArgoCD</div>
+          <div class="page-subtitle">État des applications GitOps</div>
+        </div>
+        <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès ArgoCD</button>
+      </div>
+
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title">Applications</span>
+          <span class="badge badge-gray"><%= apps.length %> apps</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr><th>Application</th><th>Projet</th><th>Namespace</th><th>Sync</th><th>Santé</th><th>Dernier sync</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              <% apps.forEach(app => { %>
+              <tr>
+                <td><strong><%= app.name %></strong></td>
+                <td class="text-muted"><%= app.project %></td>
+                <td><span class="badge badge-gray"><%= app.namespace %></span></td>
+                <td>
+                  <% if (app.status === 'Synced') { %><span class="badge badge-success status-synced">Synced</span>
+                  <% } else { %><span class="badge badge-warning status-outofsync"><%= app.status %></span>
+                  <% } %>
+                </td>
+                <td>
+                  <% if (app.health === 'Healthy') { %><span class="badge badge-success">Healthy</span>
+                  <% } else if (app.health === 'Degraded') { %><span class="badge badge-danger">Degraded</span>
+                  <% } else if (app.health === 'Progressing') { %><span class="badge badge-info">Progressing</span>
+                  <% } else { %><span class="badge badge-gray"><%= app.health %></span>
+                  <% } %>
+                </td>
+                <td class="text-muted"><%= new Date(app.syncedAt).toLocaleString('fr-FR') %></td>
+                <td>
+                  <% if (can('argocd:sync')) { %>
+                  <form action="/argocd/sync/<%= app.name %>" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-secondary btn-sm">Force sync</button>
+                  </form>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+              <% if (apps.length === 0) { %>
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucune application</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Access requests (manager only) -->
+      <% if (can('argocd:access:approve') && accessRequests.length > 0) { %>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Demandes d'accès ArgoCD</span></div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Utilisateur</th><th>Application</th><th>Raison</th><th>Date</th><th>Action</th></tr></thead>
+            <tbody>
+              <% accessRequests.forEach((r, idx) => { %>
+              <tr>
+                <td class="font-mono"><%= r.userId %></td>
+                <td><%= r.appName %></td>
+                <td><%= r.reason %></td>
+                <td class="text-muted"><%= new Date(r.requestedAt).toLocaleString('fr-FR') %></td>
+                <td>
+                  <% if (!r.approved) { %>
+                  <form action="/argocd/access-request/<%= idx %>/approve" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
+                  </form>
+                  <% } else { %>
+                  <span class="badge badge-success">Approuvé</span>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- Access request modal -->
+      <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+        <div class="card" style="width:460px;">
+          <div class="card-header">
+            <span class="card-title">Demande d'accès ArgoCD</span>
+            <button onclick="document.getElementById('access-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
+          </div>
+          <div class="card-body">
+            <form action="/argocd/access-request" method="POST">
+              <div class="form-group">
+                <label>Application cible</label>
+                <input type="text" name="appName" placeholder="ex: app-alpha" required>
+              </div>
+              <div class="form-group">
+                <label>Raison de la demande</label>
+                <textarea name="reason" rows="3" placeholder="Pourquoi avez-vous besoin d'accès à cette application ?" required></textarea>
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button type="submit" class="btn btn-primary">Envoyer</button>
+                <button type="button" onclick="document.getElementById('access-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

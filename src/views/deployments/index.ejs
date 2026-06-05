@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Déploiements</div>
+          <div class="page-subtitle">Gestion des applications déployées sur les clouds CNP</div>
+        </div>
+        <a href="/deployments/new" class="btn btn-primary">+ Nouveau déploiement</a>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Applications déployées</span>
+          <span class="badge badge-gray"><%= deployments.length %> apps</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Application</th>
+                <th>Cloud</th>
+                <th>Réplicas</th>
+                <th>Statut</th>
+                <th>Repo GitLab</th>
+                <th>Déployé le</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% deployments.forEach(dep => { %>
+              <tr>
+                <td><strong><%= dep.app %></strong></td>
+                <td>
+                  <% if (dep.cloud === 'GCP') { %><span class="badge badge-info">GCP</span>
+                  <% } else if (dep.cloud === 'AWS') { %><span class="badge badge-warning">AWS</span>
+                  <% } else { %><span class="badge badge-purple">OpenStack</span>
+                  <% } %>
+                </td>
+                <td><%= dep.replicas %></td>
+                <td>
+                  <% if (dep.status === 'running') { %><span class="badge badge-success">Running</span>
+                  <% } else if (dep.status === 'failed') { %><span class="badge badge-danger">Failed</span>
+                  <% } else { %><span class="badge badge-warning"><%= dep.status %></span>
+                  <% } %>
+                </td>
+                <td class="font-mono"><%= dep.gitlabRepo %></td>
+                <td class="text-muted"><%= new Date(dep.deployedAt).toLocaleString('fr-FR') %></td>
+                <td>
+                  <div class="actions-cell">
+                    <form action="/deployments/<%= dep.id %>/delete" method="POST" class="inline-form"
+                          onsubmit="return confirm('Supprimer ce déploiement ?')">
+                      <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              <% }) %>
+              <% if (deployments.length === 0) { %>
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun déploiement</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

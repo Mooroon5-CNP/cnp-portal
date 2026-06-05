@@ -1,70 +1,78 @@
-# test_app — End-to-end test app for the CNP CI pipeline
+# CNP Portal
 
-This is a minimal Node.js/Express app that satisfies every CNP contract requirement.
-Use it to test the CI pipeline before building your real application.
+Cloud Native Platform — Interface de gestion multi-cloud (MVP)
 
-## Project structure
+## Stack
 
-```
-test_app/
-├── src/
-│   └── index.js          Express app with /, /healthz, /ready endpoints
-├── test/
-│   └── index.test.js     Jest tests (uses supertest)
-├── package.json
-├── .eslintrc.js
-├── Dockerfile            node:20-alpine, non-root user, EXPOSE 8080
-├── .dockerignore
-└── .gitlab-ci.yml        Uses the ci-templates pipeline
-```
+- **Runtime:** Node.js 20 + Express 4 + EJS (SSR)
+- **Auth:** GitLab OAuth 2.0
+- **Logs:** Winston (JSON structuré)
+- **Container:** `node:20-alpine`, non-root, readOnlyRootFilesystem
+- **K8s:** Kustomize (overlays `dev` / `prod`)
+- **CI/CD:** GitLab CI — `lint → test → scan-secu → build → push`
+- **Observabilité:** Datadog Unified Service Tagging
 
-## First-time setup (run this locally before your first push)
+## Démarrage rapide
 
 ```bash
-cd test_app/
-npm install          # generates package-lock.json — commit this file!
-npm run lint         # should pass with no errors
-npm test             # should pass: 5 tests across 3 suites
-```
-
-Then commit the lockfile:
-```bash
-git add package-lock.json
-git commit -m "chore(test-app): add package-lock.json"
-```
-
-> **Why?** The CI pipeline uses `npm ci`, which requires `package-lock.json`
-> to be committed. Without it, the lint and test jobs will fail.
-
-## Run the app locally
-
-```bash
+cp .env.example .env
+# Remplissez GITLAB_CLIENT_ID, GITLAB_CLIENT_SECRET, SESSION_SECRET
 npm install
-node src/index.js
-# or: npm start
+npm start
+# → http://localhost:3000
 ```
 
-Then test it:
+## Tests
+
 ```bash
-curl http://localhost:8080/
-# {"message":"Hello from test_app!","service":"test-app","version":"1.0.0","env":"dev"}
-
-curl http://localhost:8080/healthz
-# 200 OK
-
-curl http://localhost:8080/ready
-# 200 OK
+npm test
 ```
 
-## What the pipeline checks on this app
+## Build Docker
 
-| Stage | Job | Expected result |
-|---|---|---|
-| `lint` | `lint-eslint` | Passes — no ESLint errors |
-| `lint` | `lint-hadolint` | Passes — Dockerfile uses node:20-alpine, non-root user |
-| `test` | `test` | Passes — 5 Jest tests all green |
-| `scan-secu` | `scan-secrets` | Passes — no secrets in git history |
-| `scan-secu` | `scan-deps` | Passes (unless a new CVE is published in express or jest) |
-| `build` | `build` | Passes — image pushed to registry |
-| `push` | `scan-image` | Passes — Alpine images have very few CVEs |
-| `push` | `update-config-dev` | Passes — updates dev kustomization |
+```bash
+docker build -t cnp-portal:local .
+docker run --env-file .env -p 3000:3000 cnp-portal:local
+```
+
+## Déploiement K8s
+
+```bash
+# Dev
+kubectl apply -k k8s/overlays/dev
+
+# Prod
+kubectl apply -k k8s/overlays/prod
+```
+
+## Structure
+
+```
+src/
+  index.js            Point d'entrée Express
+  middleware/         auth, rbac, logger
+  models/             user store (in-memory), token store
+  routes/             auth, dashboard, deployments, k8s, observability, argocd, docs, admin
+  services/           gitlab, k8s, datadog, argocd (mock → real post-MVP)
+  views/              Templates EJS
+public/               Assets statiques (CSS)
+documentation/        Fichiers .md servis via /docs
+k8s/                  Manifests Kubernetes (base + overlays dev/prod)
+docs/adr/             Architecture Decision Records
+```
+
+## Rôles IAM
+
+| Rôle | Description |
+|------|-------------|
+| `manager` | Accès complet |
+| `devops` | Ops infra, CI/CD, K8s, observabilité |
+| `dev` | Ses propres apps uniquement |
+
+Voir [iam-matrix.md](iam-matrix.md) pour la matrice complète.
+
+## Environnement
+
+Variables requises — voir [.env.example](.env.example).
+
+Les secrets de production sont injectés via K8s Secrets (`cnp-portal-{env}-{type}`), jamais committés.

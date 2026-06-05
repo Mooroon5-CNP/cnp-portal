@@ -1,25 +1,29 @@
-# CNP-compliant Dockerfile for a Node.js/Express application.
-# Base image: node:20-alpine (required by CNP contracts — no ubuntu, no node:latest).
-FROM node:20-alpine
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
 
+FROM node:20-alpine AS final
 WORKDIR /app
 
-# Copy dependency manifests first so Docker layer cache is used when only
-# source code changes (not dependencies).
-COPY package*.json ./
+RUN addgroup -S cnp && adduser -S cnp -G cnp
 
-# Install production dependencies only — dev tools (eslint, jest) stay out.
-RUN npm ci --only=production
+COPY --from=deps --chown=cnp:cnp /app/node_modules ./node_modules
+COPY --chown=cnp:cnp src/ ./src/
+COPY --chown=cnp:cnp public/ ./public/
+COPY --chown=cnp:cnp documentation/ ./documentation/
 
-# Copy application source code.
-COPY src/ ./src/
+USER cnp
 
-# Create a non-root user and switch to it (required by CNP contracts).
-RUN adduser -D appuser
-USER appuser
+EXPOSE 3000
 
-# Declare the port the application listens on.
-EXPOSE 8080
+ENV NODE_ENV=production \
+    PORT=3000 \
+    LOG_LEVEL=INFO \
+    DD_SERVICE=cnp-portal \
+    DD_VERSION=1.0.0
 
-# Start the application.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/healthz || exit 1
+
 CMD ["node", "src/index.js"]

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Ressources Kubernetes</div>
+          <div class="page-subtitle">Pods, quotas et événements du cluster</div>
+        </div>
+      </div>
+
+      <!-- Pods -->
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title">Pods</span>
+          <span class="badge badge-gray"><%= pods.length %> pods</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Nom</th>
+                <th>Namespace</th>
+                <th>Application</th>
+                <th>Statut</th>
+                <th>Restarts</th>
+                <th>Age</th>
+                <% if (can('k8s:pods:scale') || can('k8s:pods:delete')) { %><th>Actions</th><% } %>
+              </tr>
+            </thead>
+            <tbody>
+              <% pods.forEach(pod => { %>
+              <tr>
+                <td class="font-mono"><%= pod.name %></td>
+                <td><span class="badge badge-gray"><%= pod.namespace %></span></td>
+                <td><%= pod.app %></td>
+                <td>
+                  <% if (pod.status === 'Running') { %><span class="badge badge-success"><%= pod.status %></span>
+                  <% } else if (pod.status === 'Pending') { %><span class="badge badge-info"><%= pod.status %></span>
+                  <% } else { %><span class="badge badge-danger"><%= pod.status %></span>
+                  <% } %>
+                </td>
+                <td><% if (pod.restarts > 5) { %><span class="text-danger"><strong><%= pod.restarts %></strong></span><% } else { %><%= pod.restarts %><% } %></td>
+                <td class="text-muted"><%= pod.age %></td>
+                <% if (can('k8s:pods:scale') || can('k8s:pods:delete')) { %>
+                <td>
+                  <div class="actions-cell">
+                    <% if (can('k8s:pods:scale')) { %>
+                    <form action="/k8s/deployments/<%= pod.app %>/scale" method="POST" class="scale-form">
+                      <input type="number" name="replicas" value="1" min="0" max="10" title="Réplicas">
+                      <button type="submit" class="btn btn-secondary btn-sm">Scale</button>
+                    </form>
+                    <% } %>
+                    <% if (can('k8s:pods:delete')) { %>
+                    <form action="/k8s/pods/<%= pod.name %>/delete" method="POST" class="inline-form"
+                          onsubmit="return confirm('Supprimer le pod <%= pod.name %> ?')">
+                      <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
+                    </form>
+                    <% } %>
+                  </div>
+                </td>
+                <% } %>
+              </tr>
+              <% }) %>
+              <% if (pods.length === 0) { %>
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun pod trouvé</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Resource quotas -->
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title">Resource Quotas</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr><th>Namespace</th><th>CPU Request</th><th>CPU Limit</th><th>Mem Request</th><th>Mem Limit</th><th>CPU utilisé</th><th>Mem utilisée</th></tr>
+            </thead>
+            <tbody>
+              <% quotas.forEach(q => { %>
+              <tr>
+                <td><span class="badge badge-gray"><%= q.namespace %></span></td>
+                <td class="font-mono"><%= q.cpuRequest %></td>
+                <td class="font-mono"><%= q.cpuLimit %></td>
+                <td class="font-mono"><%= q.memRequest %></td>
+                <td class="font-mono"><%= q.memLimit %></td>
+                <td class="font-mono"><%= q.usedCpuRequest %></td>
+                <td class="font-mono"><%= q.usedMemRequest %></td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Events (manager/devops only) -->
+      <% if (can('k8s:events:view') && events.length > 0) { %>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Événements K8s</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr><th>Namespace</th><th>Type</th><th>Raison</th><th>Message</th><th>Compteur</th><th>Dernière occurrence</th></tr>
+            </thead>
+            <tbody>
+              <% events.forEach(ev => { %>
+              <tr>
+                <td><span class="badge badge-gray"><%= ev.namespace %></span></td>
+                <td>
+                  <% if (ev.type === 'Warning') { %><span class="badge badge-warning"><%= ev.type %></span>
+                  <% } else { %><span class="badge badge-info"><%= ev.type %></span>
+                  <% } %>
+                </td>
+                <td><strong><%= ev.reason %></strong></td>
+                <td style="max-width:400px;font-size:12.5px;"><%= ev.message %></td>
+                <td><%= ev.count %></td>
+                <td class="text-muted"><%= ev.lastSeen %></td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

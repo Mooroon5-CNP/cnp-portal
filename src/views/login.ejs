@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('partials/head', { title: title }) %>
+<body>
+<div class="login-page">
+  <div class="login-card">
+    <div class="login-logo">CNP Portal</div>
+    <div class="login-tagline">Cloud Native Platform — Gestion multi-cloud</div>
+
+    <% if (locals.flash && flash.error && flash.error.length) { %>
+      <% flash.error.forEach(msg => { %>
+        <div class="flash flash-error" style="margin-bottom:20px; text-align:left;">✗ <%= msg %></div>
+      <% }) %>
+    <% } %>
+
+    <a href="/auth/gitlab" class="btn-gitlab">
+      <svg width="20" height="20" viewBox="0 0 25 24" fill="currentColor">
+        <path d="M24.507 9.5l-.034-.09L21.082.562a.896.896 0 00-1.694.091l-2.29 7.01H7.902L5.61.653a.898.898 0 00-1.694-.09L.108 9.408l-.034.09a6.289 6.289 0 002.082 7.257l.012.009.03.022 5.16 3.867 2.56 1.935 1.554 1.176a1.051 1.051 0 001.268 0l1.555-1.176 2.56-1.935 5.197-3.89.014-.01A6.289 6.289 0 0024.507 9.5z"/>
+      </svg>
+      Se connecter avec GitLab
+    </a>
+
+    <div class="login-footer">
+      Accès réservé aux membres de l'équipe CNP.<br>
+      Authentification via compte GitLab.com uniquement.
+    </div>
+  </div>
+</div>
+</body>
+</html>

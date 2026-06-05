@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Gestion des utilisateurs</div>
+          <div class="page-subtitle">Administration des comptes et des rôles CNP</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Utilisateurs</span>
+          <span class="badge badge-gray"><%= users.length %> compte(s)</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Utilisateur GitLab</th>
+                <th>Email</th>
+                <th>Rôle CNP</th>
+                <th>Statut</th>
+                <th>Créé le</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% users.forEach(u => { %>
+              <tr>
+                <td>
+                  <div class="flex-center">
+                    <% if (u.avatarUrl) { %>
+                      <img src="<%= u.avatarUrl %>" width="28" height="28" style="border-radius:50%;object-fit:cover;">
+                    <% } else { %>
+                      <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0;">
+                        <%= u.gitlabUsername.charAt(0).toUpperCase() %>
+                      </div>
+                    <% } %>
+                    <strong><%= u.gitlabUsername %></strong>
+                    <% if (u.id === user.id) { %><span class="badge badge-gray">vous</span><% } %>
+                  </div>
+                </td>
+                <td class="text-muted"><%= u.email || '—' %></td>
+                <td>
+                  <span class="badge role-badge-<%= u.role %>"><%= u.role %></span>
+                </td>
+                <td>
+                  <% if (u.active) { %>
+                    <span class="badge badge-success">Actif</span>
+                  <% } else { %>
+                    <span class="badge badge-danger">Désactivé</span>
+                  <% } %>
+                </td>
+                <td class="text-muted"><%= new Date(u.createdAt).toLocaleDateString('fr-FR') %></td>
+                <td>
+                  <% if (u.id !== user.id) { %>
+                  <div class="actions-cell">
+                    <form action="/admin/users/<%= u.id %>/role" method="POST" class="flex-center">
+                      <select name="role" style="padding:4px 8px;font-size:12px;width:auto;">
+                        <option value="manager" <%= u.role === 'manager' ? 'selected' : '' %>>manager</option>
+                        <option value="devops"  <%= u.role === 'devops'  ? 'selected' : '' %>>devops</option>
+                        <option value="dev"     <%= u.role === 'dev'     ? 'selected' : '' %>>dev</option>
+                      </select>
+                      <button type="submit" class="btn btn-secondary btn-sm">Appliquer</button>
+                    </form>
+                    <form action="/admin/users/<%= u.id %>/toggle" method="POST" class="inline-form">
+                      <button type="submit" class="btn btn-sm <%= u.active ? 'btn-warning' : 'btn-secondary' %>">
+                        <%= u.active ? 'Désactiver' : 'Réactiver' %>
+                      </button>
+                    </form>
+                  </div>
+                  <% } else { %>
+                    <span class="text-muted" style="font-size:12px;">—</span>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+              <% if (users.length === 0) { %>
+              <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun utilisateur</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cnp-portal
+  labels:
+    app.kubernetes.io/name: "cnp-portal"
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/owner: "team-cnp"
+    cost-center: "projet-epita"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - cnp-portal.dev.example.com
+      secretName: cnp-portal-tls
+  rules:
+    - host: cnp-portal.dev.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cnp-portal
+                port:
+                  name: http

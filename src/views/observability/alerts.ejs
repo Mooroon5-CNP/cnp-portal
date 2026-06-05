@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Alertes Datadog</div>
+          <div class="page-subtitle">Gestion des moniteurs et alertes</div>
+        </div>
+        <% if (can('observability:alerts:create')) { %>
+        <button onclick="document.getElementById('create-modal').style.display='flex'" class="btn btn-primary">+ Créer une alerte</button>
+        <% } %>
+      </div>
+
+      <div class="card mb-6">
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr><th>Alerte</th><th>Service</th><th>Statut</th><th>Silencé</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              <% alerts.forEach(alert => { %>
+              <tr>
+                <td>
+                  <div style="font-weight:600;"><%= alert.name %></div>
+                  <div class="font-mono text-muted" style="font-size:11.5px;margin-top:2px;"><%= alert.query %></div>
+                </td>
+                <td><span class="badge badge-gray"><%= alert.app %></span></td>
+                <td>
+                  <% if (alert.status === 'ALERT') { %><span class="badge badge-danger"><%= alert.status %></span>
+                  <% } else if (alert.status === 'WARN') { %><span class="badge badge-warning"><%= alert.status %></span>
+                  <% } else { %><span class="badge badge-success"><%= alert.status %></span>
+                  <% } %>
+                </td>
+                <td><% if (alert.silenced) { %><span class="badge badge-gray">Silencé</span><% } else { %>—<% } %></td>
+                <td>
+                  <% if (can('observability:alerts:silence') && !alert.silenced) { %>
+                  <form action="/observability/alerts/<%= alert.id %>/silence" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-warning btn-sm">Silencer</button>
+                  </form>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+              <% if (alerts.length === 0) { %>
+              <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:32px;">Aucune alerte</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Access requests (manager only) -->
+      <% if (can('observability:access:approve') && accessRequests.length > 0) { %>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Demandes d'accès Datadog en attente</span></div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Utilisateur</th><th>Raison</th><th>Date</th><th>Statut</th><th>Action</th></tr></thead>
+            <tbody>
+              <% accessRequests.forEach((req, idx) => { %>
+              <tr>
+                <td class="font-mono"><%= req.userId %></td>
+                <td><%= req.reason %></td>
+                <td class="text-muted"><%= new Date(req.requestedAt).toLocaleString('fr-FR') %></td>
+                <td><% if (req.approved) { %><span class="badge badge-success">Approuvé</span><% } else { %><span class="badge badge-warning">En attente</span><% } %></td>
+                <td>
+                  <% if (!req.approved) { %>
+                  <form action="/observability/access-request/<%= idx %>/approve" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
+                  </form>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- Create alert modal -->
+      <% if (can('observability:alerts:create')) { %>
+      <div id="create-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+        <div class="card" style="width:500px;">
+          <div class="card-header">
+            <span class="card-title">Nouvelle alerte Datadog</span>
+            <button onclick="document.getElementById('create-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
+          </div>
+          <div class="card-body">
+            <form action="/observability/alerts" method="POST">
+              <div class="form-group">
+                <label>Nom de l'alerte</label>
+                <input type="text" name="name" placeholder="ex: High Error Rate" required>
+              </div>
+              <div class="form-group">
+                <label>Query Datadog</label>
+                <input type="text" name="query" placeholder="avg(last_5m):sum:trace.web.request.errors{env:prod} > 5" required>
+              </div>
+              <div class="form-group">
+                <label>Service cible</label>
+                <input type="text" name="app" placeholder="ex: cnp-portal">
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button type="submit" class="btn btn-primary">Créer</button>
+                <button type="button" onclick="document.getElementById('create-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <% } %>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

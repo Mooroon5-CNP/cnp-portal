@@ -1,0 +1,23 @@
+<% if (locals.flash) { %>
+  <% if (flash.success && flash.success.length) { %>
+    <div class="flash-container">
+      <% flash.success.forEach(msg => { %>
+        <div class="flash flash-success">✓ <%= msg %></div>
+      <% }) %>
+    </div>
+  <% } %>
+  <% if (flash.error && flash.error.length) { %>
+    <div class="flash-container">
+      <% flash.error.forEach(msg => { %>
+        <div class="flash flash-error">✗ <%= msg %></div>
+      <% }) %>
+    </div>
+  <% } %>
+  <% if (flash.info && flash.info.length) { %>
+    <div class="flash-container">
+      <% flash.info.forEach(msg => { %>
+        <div class="flash flash-info">ℹ <%= msg %></div>
+      <% }) %>
+    </div>
+  <% } %>
+<% } %>

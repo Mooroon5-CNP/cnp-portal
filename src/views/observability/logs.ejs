@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Logs</div>
+          <div class="page-subtitle">Logs applicatifs via Datadog</div>
+        </div>
+        <% if (can('observability:access:request')) { %>
+        <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès Datadog</button>
+        <% } %>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Flux de logs</span>
+          <span class="badge badge-gray"><%= logs.length %> entrées</span>
+        </div>
+        <div style="background:#1e2330; border-radius:0 0 8px 8px; overflow-x:auto;">
+          <% if (logs.length === 0) { %>
+            <div style="padding:32px;text-align:center;color:#9aa3b8;">Aucun log disponible</div>
+          <% } else { %>
+            <% logs.forEach(log => { %>
+            <div class="log-line">
+              <span class="log-ts"><%= new Date(log.timestamp).toLocaleTimeString('fr-FR') %></span>
+              <span class="log-level-<%= log.level %>"><%= log.level %></span>
+              <span class="log-service"><%= log.service %></span>
+              <span style="color:#e2e8f0;"><%= log.message %></span>
+            </div>
+            <% }) %>
+          <% } %>
+        </div>
+      </div>
+
+      <!-- Access request modal -->
+      <% if (can('observability:access:request')) { %>
+      <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+        <div class="card" style="width:460px;">
+          <div class="card-header">
+            <span class="card-title">Demande d'accès Datadog</span>
+            <button onclick="document.getElementById('access-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
+          </div>
+          <div class="card-body">
+            <form action="/observability/access-request" method="POST">
+              <div class="form-group">
+                <label for="reason">Raison de la demande</label>
+                <textarea name="reason" id="reason" rows="3" placeholder="Décrivez pourquoi vous avez besoin d'accès Datadog..." required></textarea>
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button type="submit" class="btn btn-primary">Envoyer la demande</button>
+                <button type="button" onclick="document.getElementById('access-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <% } %>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

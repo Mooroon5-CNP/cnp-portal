@@ -1,0 +1,85 @@
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">
+      <span>CNP Portal</span>
+      <span class="logo-badge">MVP</span>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">Navigation</div>
+    <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'dashboard' ? 'active' : '' %>">
+        <a href="/"><span class="nav-icon">◈</span> Dashboard</a>
+      </li>
+      <li class="<%= locals.currentPage === 'deployments' ? 'active' : '' %>">
+        <a href="/deployments"><span class="nav-icon">⬆</span> Déploiements</a>
+      </li>
+      <li class="<%= locals.currentPage === 'k8s' ? 'active' : '' %>">
+        <a href="/k8s/pods"><span class="nav-icon">☸</span> Ressources K8s</a>
+      </li>
+    </ul>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">Observabilité</div>
+    <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'logs' ? 'active' : '' %>">
+        <a href="/observability/logs"><span class="nav-icon">≡</span> Logs</a>
+      </li>
+      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'metrics' ? 'active' : '' %>">
+        <a href="/observability/metrics"><span class="nav-icon">◎</span> Métriques</a>
+      </li>
+      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'alerts' ? 'active' : '' %>">
+        <a href="/observability/alerts"><span class="nav-icon">⚑</span> Alertes</a>
+      </li>
+    </ul>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">Outils</div>
+    <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'argocd' ? 'active' : '' %>">
+        <a href="/argocd"><span class="nav-icon">⟳</span> ArgoCD</a>
+      </li>
+      <li class="<%= locals.currentPage === 'docs' ? 'active' : '' %>">
+        <a href="/docs"><span class="nav-icon">📄</span> Documentation</a>
+      </li>
+    </ul>
+  </div>
+
+  <% if (locals.user && user.role === 'manager') { %>
+  <div class="nav-section">
+    <div class="nav-section-label">Administration</div>
+    <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'admin' ? 'active' : '' %>">
+        <a href="/admin/users"><span class="nav-icon">👥</span> Utilisateurs</a>
+      </li>
+      <li>
+        <a href="/admin/secrets"><span class="nav-icon">🔑</span> Secrets</a>
+      </li>
+    </ul>
+  </div>
+  <% } %>
+
+  <div style="flex:1"></div>
+
+  <div class="sidebar-footer">
+    <% if (locals.user) { %>
+    <div class="user-info">
+      <% if (user.avatarUrl) { %>
+        <img src="<%= user.avatarUrl %>" alt="avatar" class="user-avatar">
+      <% } else { %>
+        <div class="user-avatar-placeholder"><%= user.gitlabUsername.charAt(0).toUpperCase() %></div>
+      <% } %>
+      <div class="user-details">
+        <div class="user-name"><%= user.gitlabUsername %></div>
+        <div class="user-role-label"><%= user.role %></div>
+      </div>
+    </div>
+    <form action="/auth/logout" method="POST" class="inline-form">
+      <button type="submit" class="btn-logout">Déconnexion</button>
+    </form>
+    <% } %>
+  </div>
+</nav>

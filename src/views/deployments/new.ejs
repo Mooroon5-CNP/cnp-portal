@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Nouveau déploiement</div>
+          <div class="page-subtitle">Déployer une application depuis un repo GitLab</div>
+        </div>
+        <a href="/deployments" class="btn btn-secondary">← Retour</a>
+      </div>
+
+      <div class="card" style="max-width:640px;">
+        <div class="card-header"><span class="card-title">Configuration du déploiement</span></div>
+        <div class="card-body">
+          <form action="/deployments" method="POST">
+
+            <div class="form-group">
+              <label for="repoId">Repo GitLab</label>
+              <% if (repos.length > 0) { %>
+                <select name="repoId" id="repoId" required>
+                  <option value="">-- Sélectionner un repo --</option>
+                  <% repos.forEach(repo => { %>
+                    <option value="<%= repo.id %>" data-name="<%= repo.path_with_namespace %>">
+                      <%= repo.path_with_namespace %>
+                    </option>
+                  <% }) %>
+                </select>
+                <input type="hidden" name="repoName" id="repoName">
+              <% } else { %>
+                <input type="text" name="repoName" id="repoName" placeholder="ex: namespace/mon-app" required>
+                <input type="hidden" name="repoId" value="">
+                <div class="form-hint">Connectez votre compte GitLab pour sélectionner parmi vos repos.</div>
+              <% } %>
+            </div>
+
+            <div class="form-group">
+              <label for="ref">Branche / tag</label>
+              <input type="text" name="ref" id="ref" value="main" placeholder="main">
+            </div>
+
+            <% if (can('deployments:choose-cloud')) { %>
+            <div class="form-group">
+              <label for="cloud">Cloud cible</label>
+              <select name="cloud" id="cloud" required>
+                <option value="GCP">GCP — Google Cloud Platform</option>
+                <option value="AWS">AWS — Amazon Web Services</option>
+                <option value="OpenStack">OpenStack — Cloud privé EPITA</option>
+              </select>
+            </div>
+            <% } %>
+
+            <div class="form-group">
+              <label>Stratégie HA</label>
+              <div style="display:flex;gap:10px;margin-top:6px;">
+                <div class="v2-placeholder">
+                  Actif / Actif <span class="v2-badge">V2</span>
+                </div>
+                <div class="v2-placeholder">
+                  Actif / Passif <span class="v2-badge">V2</span>
+                </div>
+              </div>
+              <div class="form-hint">Disponible en V2. Le déploiement utilise une stratégie RollingUpdate standard.</div>
+            </div>
+
+            <% if (can('deployments:choose-replicas')) { %>
+            <div class="form-group">
+              <label for="replicas">Nombre de réplicas</label>
+              <input type="number" name="replicas" id="replicas" value="1" min="1" max="10">
+            </div>
+            <% } %>
+
+            <div style="display:flex;gap:10px;margin-top:24px;">
+              <button type="submit" class="btn btn-primary">Déclencher le déploiement</button>
+              <a href="/deployments" class="btn btn-secondary">Annuler</a>
+            </div>
+          </form>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+<script>
+  const repoSelect = document.getElementById('repoId');
+  const repoNameInput = document.getElementById('repoName');
+  if (repoSelect) {
+    repoSelect.addEventListener('change', function() {
+      const opt = this.options[this.selectedIndex];
+      if (repoNameInput) repoNameInput.value = opt.dataset.name || '';
+    });
+  }
+</script>
+</body>
+</html>
