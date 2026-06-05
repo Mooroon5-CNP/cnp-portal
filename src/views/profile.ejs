@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Mon profil</div>
+          <div class="page-subtitle">Informations du compte et niveau d'accès IAM</div>
+        </div>
+      </div>
+
+      <div class="card" style="max-width:480px;">
+        <div class="card-header">
+          <span class="card-title">Identité</span>
+        </div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <% if (user.avatarUrl) { %>
+              <img src="<%= user.avatarUrl %>" width="52" height="52" style="border-radius:50%;object-fit:cover;">
+            <% } else { %>
+              <div style="width:52px;height:52px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0;">
+                <%= user.username.charAt(0).toUpperCase() %>
+              </div>
+            <% } %>
+            <div>
+              <div style="font-weight:600;font-size:16px;"><%= user.username %></div>
+              <div style="color:var(--text-muted);font-size:13px;"><%= user.email || 'Pas d\'email renseigné' %></div>
+              <% if (user.gitlabId) { %>
+                <div style="color:var(--text-muted);font-size:12px;margin-top:2px;">GitLab ID : <%= user.gitlabId %></div>
+              <% } %>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--border);padding-top:14px;">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Rôle actuel</div>
+            <span class="badge role-badge-<%= user.role %>" style="font-size:13px;padding:4px 12px;"><%= user.role %></span>
+          </div>
+
+          <div style="color:var(--text-muted);font-size:12px;">
+            Compte créé le <%= new Date(user.createdAt).toLocaleDateString('fr-FR') %>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="max-width:480px;margin-top:20px;">
+        <div class="card-header">
+          <span class="card-title">Changer mon niveau IAM</span>
+        </div>
+        <div style="padding:20px;">
+          <form action="/profile/role" method="POST" style="display:flex;flex-direction:column;gap:16px;">
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <% roles.forEach(r => { %>
+              <label style="display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;<%= user.role === r ? 'border-color:var(--accent);background:rgba(99,102,241,0.06);' : '' %>">
+                <input type="radio" name="role" value="<%= r %>" <%= user.role === r ? 'checked' : '' %> style="margin-top:2px;accent-color:var(--accent);">
+                <div>
+                  <div style="font-weight:600;font-size:13px;"><%= r %></div>
+                  <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                    <% if (r === 'manager') { %>Accès complet — gestion des utilisateurs, secrets, toutes les ressources
+                    <% } else if (r === 'devops') { %>Ops infra — K8s, CI/CD, ArgoCD, observabilité (pas de gestion users/secrets)
+                    <% } else { %>Développeur — déploiements de ses propres apps, lecture des logs et métriques
+                    <% } %>
+                  </div>
+                </div>
+              </label>
+              <% }) %>
+            </div>
+            <button type="submit" class="btn btn-primary" style="align-self:flex-start;padding:8px 20px;">
+              Appliquer le rôle
+            </button>
+          </form>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

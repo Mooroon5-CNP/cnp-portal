@@ -3,7 +3,7 @@
 const axios = require('axios');
 const tokenStore = require('../models/tokenStore');
 
-const GITLAB_BASE = 'https://gitlab.com/api/v4';
+const GITLAB_BASE = `${process.env.GITLAB_HOST || 'https://gitlab.cri.epita.fr'}/api/v4`;
 
 async function apiCall(userId, method, path, data = null) {
   const tokens = tokenStore.get(userId);

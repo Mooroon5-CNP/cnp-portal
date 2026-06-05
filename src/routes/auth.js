@@ -2,18 +2,46 @@
 
 const express = require('express');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
 const userStore = require('../models/user');
 const tokenStore = require('../models/tokenStore');
 const gitlabService = require('../services/gitlab');
 
-const GITLAB_AUTH_URL = 'https://gitlab.com/oauth/authorize';
-const GITLAB_TOKEN_URL = 'https://gitlab.com/oauth/token';
+const GITLAB_HOST = process.env.GITLAB_HOST || 'https://gitlab.cri.epita.fr';
+const GITLAB_AUTH_URL = `${GITLAB_HOST}/oauth/authorize`;
+const GITLAB_TOKEN_URL = `${GITLAB_HOST}/oauth/token`;
 const SCOPES = 'read_user api read_repository';
 
 router.get('/login', (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
   res.render('login', { title: 'Connexion — CNP Portal', user: null });
+});
+
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    req.flash('error', 'Identifiant et mot de passe requis.');
+    return res.redirect('/auth/login');
+  }
+  const user = userStore.findByUsername(username.trim());
+  if (!user || !user.passwordHash) {
+    req.flash('error', 'Identifiant ou mot de passe incorrect.');
+    return res.redirect('/auth/login');
+  }
+  if (!user.active) {
+    req.flash('error', 'Ce compte est désactivé.');
+    return res.redirect('/auth/login');
+  }
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    req.flash('error', 'Identifiant ou mot de passe incorrect.');
+    return res.redirect('/auth/login');
+  }
+  req.session.userId = user.id;
+  req.session.role = user.role;
+  req.session.gitlabUsername = user.username;
+  res.redirect('/');
 });
 
 router.get('/gitlab', (req, res) => {

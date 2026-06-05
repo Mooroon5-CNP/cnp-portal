@@ -1,59 +1,77 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const db = require('./db');
 
-// In-memory user store. Post-MVP: replace with PostgreSQL.
-const users = new Map();
+function rowToUser(row) {
+  if (!row) return null;
+  return {
+    id:            row.id,
+    gitlabId:      row.gitlab_id,
+    username:      row.username,
+    gitlabUsername: row.username,  // backward-compat alias
+    email:         row.email,
+    avatarUrl:     row.avatar_url,
+    passwordHash:  row.password_hash,
+    role:          row.role,
+    active:        row.active === 1,
+    createdAt:     row.created_at,
+    updatedAt:     row.updated_at,
+  };
+}
 
 function findById(id) {
-  return users.get(id) || null;
+  return rowToUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id));
 }
 
 function findByGitlabId(gitlabId) {
-  for (const user of users.values()) {
-    if (user.gitlabId === gitlabId) return user;
-  }
-  return null;
+  return rowToUser(db.prepare('SELECT * FROM users WHERE gitlab_id = ?').get(gitlabId));
+}
+
+function findByUsername(username) {
+  return rowToUser(db.prepare('SELECT * FROM users WHERE username = ?').get(username));
 }
 
 function findAll() {
-  return Array.from(users.values());
+  return db.prepare('SELECT * FROM users ORDER BY created_at ASC').all().map(rowToUser);
 }
 
-function create({ gitlabId, gitlabUsername, email, avatarUrl }) {
+function create({ gitlabId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev' }) {
   const id = uuidv4();
-  const user = {
-    id,
-    gitlabId,
-    gitlabUsername,
-    email,
-    avatarUrl,
-    role: 'dev',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    active: true,
-  };
-  users.set(id, user);
-  return user;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO users (id, gitlab_id, username, email, avatar_url, password_hash, role, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(id, gitlabId, username, email, avatarUrl, passwordHash, role, now, now);
+  return findById(id);
 }
 
 function update(id, fields) {
-  const user = users.get(id);
-  if (!user) return null;
-  const allowed = ['gitlabUsername', 'email', 'avatarUrl', 'role', 'active'];
-  for (const key of allowed) {
-    if (fields[key] !== undefined) user[key] = fields[key];
+  if (!findById(id)) return null;
+  const now = new Date().toISOString();
+  const colMap = { username: 'username', email: 'email', avatarUrl: 'avatar_url', role: 'role', active: 'active' };
+  const sets = ['updated_at = ?'];
+  const values = [now];
+  for (const [jsKey, col] of Object.entries(colMap)) {
+    if (fields[jsKey] !== undefined) {
+      sets.push(`${col} = ?`);
+      const v = fields[jsKey];
+      values.push(v === true ? 1 : v === false ? 0 : v);
+    }
   }
-  user.updatedAt = new Date().toISOString();
-  return user;
+  values.push(id);
+  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  return findById(id);
 }
 
 function upsertFromGitlab({ gitlabId, gitlabUsername, email, avatarUrl }) {
   let user = findByGitlabId(gitlabId);
   if (user) {
-    return update(user.id, { gitlabUsername, email, avatarUrl });
+    return update(user.id, { username: gitlabUsername, email, avatarUrl });
   }
-  return create({ gitlabId, gitlabUsername, email, avatarUrl });
+  const taken = findByUsername(gitlabUsername);
+  const username = taken ? `${gitlabUsername}_gl` : gitlabUsername;
+  return create({ gitlabId, username, email, avatarUrl });
 }
 
-module.exports = { findById, findByGitlabId, findAll, create, update, upsertFromGitlab };
+module.exports = { findById, findByGitlabId, findByUsername, findAll, create, update, upsertFromGitlab };

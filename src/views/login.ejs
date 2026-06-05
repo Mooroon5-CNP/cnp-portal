@@ -12,17 +12,50 @@
         <div class="flash flash-error" style="margin-bottom:20px; text-align:left;">✗ <%= msg %></div>
       <% }) %>
     <% } %>
+    <% if (locals.flash && flash.success && flash.success.length) { %>
+      <% flash.success.forEach(msg => { %>
+        <div class="flash flash-success" style="margin-bottom:20px; text-align:left;">✓ <%= msg %></div>
+      <% }) %>
+    <% } %>
 
     <a href="/auth/gitlab" class="btn-gitlab">
       <svg width="20" height="20" viewBox="0 0 25 24" fill="currentColor">
         <path d="M24.507 9.5l-.034-.09L21.082.562a.896.896 0 00-1.694.091l-2.29 7.01H7.902L5.61.653a.898.898 0 00-1.694-.09L.108 9.408l-.034.09a6.289 6.289 0 002.082 7.257l.012.009.03.022 5.16 3.867 2.56 1.935 1.554 1.176a1.051 1.051 0 001.268 0l1.555-1.176 2.56-1.935 5.197-3.89.014-.01A6.289 6.289 0 0024.507 9.5z"/>
       </svg>
-      Se connecter avec GitLab
+      Se connecter avec GitLab EPITA
     </a>
 
-    <div class="login-footer">
+    <div class="login-divider" style="display:flex;align-items:center;gap:12px;margin:24px 0;color:var(--text-muted);font-size:12px;">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <span>ou</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>
+
+    <form action="/auth/login" method="POST" style="display:flex;flex-direction:column;gap:12px;">
+      <input
+        type="text"
+        name="username"
+        placeholder="Identifiant"
+        autocomplete="username"
+        style="padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:14px;outline:none;"
+        required
+      >
+      <input
+        type="password"
+        name="password"
+        placeholder="Mot de passe"
+        autocomplete="current-password"
+        style="padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:14px;outline:none;"
+        required
+      >
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:10px;font-size:14px;">
+        Se connecter
+      </button>
+    </form>
+
+    <div class="login-footer" style="margin-top:24px;">
       Accès réservé aux membres de l'équipe CNP.<br>
-      Authentification via compte GitLab.com uniquement.
+      SSO via GitLab EPITA ou compte local.
     </div>
   </div>
 </div>

@@ -12,12 +12,13 @@ fi
 # Check required vars
 check_var() {
   val=$(grep "^$1=" .env | cut -d= -f2-)
-  if [ -z "$val" ] || [ "$val" = "REPLACE_WITH_YOUR_APPLICATION_ID" ] || [ "$val" = "REPLACE_WITH_YOUR_SECRET" ]; then
+  if [ -z "$val" ] || echo "$val" | grep -q "REPLACE_WITH"; then
     echo "ERROR: $1 is not set in .env"
     exit 1
   fi
 }
 
+check_var GITLAB_HOST
 check_var GITLAB_CLIENT_ID
 check_var GITLAB_CLIENT_SECRET
 check_var SESSION_SECRET

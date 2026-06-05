@@ -64,16 +64,24 @@
 
   <div style="flex:1"></div>
 
+  <div class="nav-section">
+    <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'profile' ? 'active' : '' %>">
+        <a href="/profile"><span class="nav-icon">◉</span> Mon profil</a>
+      </li>
+    </ul>
+  </div>
+
   <div class="sidebar-footer">
     <% if (locals.user) { %>
     <div class="user-info">
       <% if (user.avatarUrl) { %>
         <img src="<%= user.avatarUrl %>" alt="avatar" class="user-avatar">
       <% } else { %>
-        <div class="user-avatar-placeholder"><%= user.gitlabUsername.charAt(0).toUpperCase() %></div>
+        <div class="user-avatar-placeholder"><%= user.username.charAt(0).toUpperCase() %></div>
       <% } %>
       <div class="user-details">
-        <div class="user-name"><%= user.gitlabUsername %></div>
+        <div class="user-name"><%= user.username %></div>
         <div class="user-role-label"><%= user.role %></div>
       </div>
     </div>

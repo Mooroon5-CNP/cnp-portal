@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('./models/db'); // initialize SQLite and seed admin
 const express = require('express');
 const session = require('express-session');
 const flash = require('connect-flash');
@@ -46,6 +47,7 @@ app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/ready',   (req, res) => res.status(200).json({ status: 'ready' }));
 
 app.use('/auth',         require('./routes/auth'));
+app.use('/profile',      require('./routes/profile'));
 app.use('/',             require('./routes/dashboard'));
 app.use('/deployments',  require('./routes/deployments'));
 app.use('/k8s',          require('./routes/k8s'));
