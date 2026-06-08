@@ -1,114 +1,133 @@
 <!DOCTYPE html>
 <html lang="fr">
 <%- include('partials/head', { title: title }) %>
-<body>
-<div class="layout">
-  <%- include('partials/sidebar') %>
-  <main class="main-content">
-    <div class="content-wrapper">
-      <%- include('partials/flash') %>
 
-      <div class="page-header">
-        <div>
-          <div class="page-title">Dashboard</div>
-          <div class="page-subtitle">Bienvenue, <%= user.gitlabUsername %> — vue d'ensemble de la plateforme</div>
-        </div>
-      </div>
+  <body>
+    <div class="layout">
+      <%- include('partials/sidebar') %>
+        <main class="main-content">
+          <div class="content-wrapper">
+            <%- include('partials/flash') %>
 
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Pods actifs</div>
-          <div class="stat-value"><%= stats.runningPods %></div>
-          <div class="stat-meta"><%= stats.totalPods %> pods au total</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Alertes actives</div>
-          <div class="stat-value" style="color: <%= stats.activeAlerts > 0 ? 'var(--danger)' : 'var(--success)' %>"><%= stats.activeAlerts %></div>
-          <div class="stat-meta">Datadog alerts</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Apps ArgoCD</div>
-          <div class="stat-value"><%= stats.syncedApps %></div>
-          <div class="stat-meta"><%= stats.totalApps %> apps gérées</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Environnement</div>
-          <div class="stat-value" style="font-size:20px;padding-top:6px;"><%= process.env.DD_ENV || 'dev' %></div>
-          <div class="stat-meta">v<%= process.env.DD_VERSION || '1.0.0' %></div>
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Clouds gérés</span>
-            <span class="badge badge-success">3 connectés</span>
-          </div>
-          <div class="card-body">
-            <div class="cloud-grid" style="grid-template-columns:1fr;">
-              <div class="cloud-card">
-                <div class="cloud-icon">☁</div>
+              <div class="page-header">
                 <div>
-                  <div class="cloud-name">GCP</div>
-                  <div class="cloud-status">Google Cloud Platform · <span class="text-success">Opérationnel</span></div>
-                </div>
-                <span class="badge badge-success" style="margin-left:auto;">OK</span>
-              </div>
-              <div class="cloud-card">
-                <div class="cloud-icon">⬡</div>
-                <div>
-                  <div class="cloud-name">AWS</div>
-                  <div class="cloud-status">Amazon Web Services · <span class="text-success">Opérationnel</span></div>
-                </div>
-                <span class="badge badge-success" style="margin-left:auto;">OK</span>
-              </div>
-              <div class="cloud-card">
-                <div class="cloud-icon">🏠</div>
-                <div>
-                  <div class="cloud-name">OpenStack</div>
-                  <div class="cloud-status">Cloud privé EPITA · <span class="text-success">Opérationnel</span></div>
-                </div>
-                <span class="badge badge-success" style="margin-left:auto;">OK</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Alertes récentes</span>
-            <a href="/observability/alerts" class="btn btn-ghost btn-sm">Voir tout</a>
-          </div>
-          <div class="card-body">
-            <% if (recentAlerts.length === 0) { %>
-              <div style="text-align:center; padding:20px; color:var(--text-muted);">
-                <div style="font-size:24px;margin-bottom:8px;">✓</div>
-                Aucune alerte active
-              </div>
-            <% } else { %>
-              <% recentAlerts.forEach(alert => { %>
-                <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
-                  <% if (alert.status === 'ALERT') { %>
-                    <span class="badge badge-danger"><%= alert.status %></span>
-                  <% } else { %>
-                    <span class="badge badge-warning"><%= alert.status %></span>
-                  <% } %>
-                  <div style="flex:1;">
-                    <div style="font-weight:600;font-size:13px;"><%= alert.name %></div>
-                    <div style="font-size:12px;color:var(--text-muted);">Service: <%= alert.app %></div>
+                  <div class="page-title">Dashboard</div>
+                  <div class="page-subtitle">Bienvenue, <%= user.gitlabUsername %> — vue d'ensemble de la plateforme
                   </div>
-                  <% if (alert.silenced) { %>
-                    <span class="badge badge-gray">Silencé</span>
-                  <% } %>
                 </div>
-              <% }) %>
-            <% } %>
-          </div>
-        </div>
-      </div>
+              </div>
 
+              <div class="stats-grid">
+                <div class="stat-card">
+                  <div class="stat-label">Pods actifs</div>
+                  <div class="stat-value">
+                    <%= stats.runningPods %>
+                  </div>
+                  <div class="stat-meta">
+                    <%= stats.totalPods %> pods au total
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Alertes actives</div>
+                  <div class="stat-value"
+                    style="color: <%= stats.activeAlerts > 0 ? 'var(--danger)' : 'var(--success)' %>">
+                    <%= stats.activeAlerts %>
+                  </div>
+                  <div class="stat-meta">Datadog alerts</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Apps ArgoCD</div>
+                  <div class="stat-value">
+                    <%= stats.syncedApps %>
+                  </div>
+                  <div class="stat-meta">
+                    <%= stats.totalApps %> apps gérées
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Environnement</div>
+                  <div class="stat-value" style="font-size:20px;padding-top:6px;">
+                    <%= process.env.DD_ENV || 'dev' %>
+                  </div>
+                  <div class="stat-meta">v<%= process.env.DD_VERSION || '1.0.0' %>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="card">
+                  <div class="card-header">
+                    <span class="card-title">Clouds gérés</span>
+                    <span class="badge badge-success">3 connectés</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="cloud-grid" style="grid-template-columns:1fr;">
+                      <div class="cloud-card">
+                        <div class="cloud-icon">☁</div>
+                        <div>
+                          <div class="cloud-name">GCP</div>
+                          <div class="cloud-status">Google Cloud Platform · <span
+                              class="text-success">Opérationnel</span></div>
+                        </div>
+                        <span class="badge badge-success" style="margin-left:auto;">OK</span>
+                      </div>
+                      <div class="cloud-card">
+                        <div class="cloud-icon">⬡</div>
+                        <div>
+                          <div class="cloud-name">AWS</div>
+                          <div class="cloud-status">Amazon Web Services · <span class="text-success">Opérationnel</span>
+                          </div>
+                        </div>
+                        <span class="badge badge-success" style="margin-left:auto;">OK</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-header">
+                    <span class="card-title">Alertes récentes</span>
+                    <a href="/observability/alerts" class="btn btn-ghost btn-sm">Voir tout</a>
+                  </div>
+                  <div class="card-body">
+                    <% if (recentAlerts.length===0) { %>
+                      <div style="text-align:center; padding:20px; color:var(--text-muted);">
+                        <div style="font-size:24px;margin-bottom:8px;">✓</div>
+                        Aucune alerte active
+                      </div>
+                      <% } else { %>
+                        <% recentAlerts.forEach(alert=> { %>
+                          <div
+                            style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
+                            <% if (alert.status==='ALERT' ) { %>
+                              <span class="badge badge-danger">
+                                <%= alert.status %>
+                              </span>
+                              <% } else { %>
+                                <span class="badge badge-warning">
+                                  <%= alert.status %>
+                                </span>
+                                <% } %>
+                                  <div style="flex:1;">
+                                    <div style="font-weight:600;font-size:13px;">
+                                      <%= alert.name %>
+                                    </div>
+                                    <div style="font-size:12px;color:var(--text-muted);">Service: <%= alert.app %>
+                                    </div>
+                                  </div>
+                                  <% if (alert.silenced) { %>
+                                    <span class="badge badge-gray">Silencé</span>
+                                    <% } %>
+                          </div>
+                          <% }) %>
+                            <% } %>
+                  </div>
+                </div>
+              </div>
+
+          </div>
+        </main>
     </div>
-  </main>
-</div>
-</body>
+  </body>
+
 </html>

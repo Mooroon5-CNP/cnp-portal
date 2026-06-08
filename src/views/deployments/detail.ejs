@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+
+    <body>
+        <div class="layout">
+            <%- include('../partials/sidebar') %>
+                <main class="main-content">
+                    <div class="content-wrapper">
+                        <%- include('../partials/flash') %>
+
+                            <div class="page-header">
+                                <div>
+                                    <div class="page-title">
+                                        <%= deployment.appName %>
+                                    </div>
+                                    <div class="page-subtitle">Détails du pipeline</div>
+                                </div>
+                                <a href="/deployments" class="btn btn-secondary">← Retour</a>
+                            </div>
+
+                            <div class="card">
+                                <div class="card-header">
+                                    <span class="card-title">Dernière exécution</span>
+                                    <% if (latest) { %>
+                                        <a href="<%= githubActionsUrl %>" class="btn btn-ghost" target="_blank"
+                                            rel="noreferrer">Voir sur GitHub Actions</a>
+                                        <% } %>
+                                </div>
+                                <div class="card-body">
+                                    <% if (!latest) { %>
+                                        <div>Aucune exécution trouvée pour ce dépôt.</div>
+                                        <% } else { %>
+                                            <div style="display:flex;gap:16px;align-items:center;">
+                                                <div>
+                                                    <div><strong>ID</strong></div>
+                                                    <div class="font-mono">
+                                                        <%= latest.id %>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <div><strong>Trigger</strong></div>
+                                                    <div>
+                                                        <%= latest.event %>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <div><strong>Statut</strong></div>
+                                                    <div><span
+                                                            class="badge <%= (latest.status === 'in_progress') ? 'badge-warning' : (latest.conclusion === 'success' ? 'badge-success' : (latest.conclusion === 'failure' ? 'badge-danger' : 'badge-gray')) %>">
+                                                            <%= latest.status==='in_progress' ? 'CI en cours' :
+                                                                (latest.conclusion || latest.status) %>
+                                                        </span></div>
+                                                </div>
+                                                <div>
+                                                    <div><strong>Début</strong></div>
+                                                    <div class="text-muted">
+                                                        <%= latest.run_started_at || latest.created_at %>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <h4 style="margin-top:18px;margin-bottom:8px;">Jobs</h4>
+                                            <div>
+                                                <% jobs.forEach(job=> { %>
+                                                    <div
+                                                        style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+                                                        <div style="flex:1;">
+                                                            <div style="font-weight:600;">
+                                                                <%= job.name %>
+                                                            </div>
+                                                            <div class="text-muted" style="font-size:12px;">Durée: <%=
+                                                                    job.completed_at && job.started_at ? Math.max(0, new
+                                                                    Date(job.completed_at) - new Date(job.started_at))
+                                                                    : '-' %> ms</div>
+                                                        </div>
+                                                        <div style="display:flex;gap:8px;align-items:center;">
+                                                            <% if (job.status==='in_progress' ) { %>
+                                                                <span class="badge badge-warning">En cours</span>
+                                                                <% } else if (job.conclusion==='success' ) { %>
+                                                                    <span class="badge badge-success">Succès</span>
+                                                                    <% } else if (job.conclusion==='failure' ) { %>
+                                                                        <span class="badge badge-danger">Échec</span>
+                                                                        <% } else { %>
+                                                                            <span class="badge badge-gray">
+                                                                                <%= job.status || job.conclusion %>
+                                                                            </span>
+                                                                            <% } %>
+                                                                                <a href="<%= githubActionsUrl %>"
+                                                                                    target="_blank" rel="noreferrer"
+                                                                                    class="btn btn-sm btn-ghost">Voir
+                                                                                    les logs</a>
+                                                        </div>
+                                                    </div>
+                                                    <% }) %>
+                                            </div>
+
+                                            <% if (failureHint) { %>
+                                                <div class="flash flash-error mt-4"><strong>Indice:</strong>
+                                                    <%= failureHint %>
+                                                </div>
+                                                <% } %>
+                                                    <% } %>
+                                </div>
+                            </div>
+
+                    </div>
+                </main>
+        </div>
+    </body>
+
+</html>

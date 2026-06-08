@@ -53,13 +53,15 @@
                   <div class="actions-cell">
                     <% if (can('k8s:pods:scale')) { %>
                     <form action="/k8s/deployments/<%= pod.app %>/scale" method="POST" class="scale-form">
-                      <input type="number" name="replicas" value="1" min="0" max="10" title="Réplicas">
+                      <input type="hidden" name="namespace" value="<%= pod.namespace %>">
+                      <input type="number" name="replicas" value="1" min="0" max="20" title="Réplicas">
                       <button type="submit" class="btn btn-secondary btn-sm">Scale</button>
                     </form>
                     <% } %>
                     <% if (can('k8s:pods:delete')) { %>
                     <form action="/k8s/pods/<%= pod.name %>/delete" method="POST" class="inline-form"
                           onsubmit="return confirm('Supprimer le pod <%= pod.name %> ?')">
+                      <input type="hidden" name="namespace" value="<%= pod.namespace %>">
                       <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
                     </form>
                     <% } %>

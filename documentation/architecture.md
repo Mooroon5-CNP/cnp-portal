@@ -5,7 +5,7 @@
 La CNP Platform gère des déploiements sur **3 clouds** :
 - **GCP** — Google Cloud Platform (public)
 - **AWS** — Amazon Web Services (public)
-- **OpenStack** — Cloud privé EPITA
+- **Cloud privé à def** — 
 
 ## Stack applicative
 

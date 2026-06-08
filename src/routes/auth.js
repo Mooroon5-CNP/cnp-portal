@@ -13,6 +13,10 @@ const GITLAB_AUTH_URL = `${GITLAB_HOST}/oauth/authorize`;
 const GITLAB_TOKEN_URL = `${GITLAB_HOST}/oauth/token`;
 const SCOPES = 'read_user api read_repository';
 
+const GITHUB_AUTH_URL = 'https://github.com/login/oauth/authorize';
+const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+const GITHUB_API_URL = 'https://api.github.com';
+
 router.get('/login', (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
   res.render('login', { title: 'Connexion — CNP Portal', user: null });
@@ -96,6 +100,75 @@ router.get('/gitlab/callback', async (req, res) => {
     res.redirect('/');
   } catch (err) {
     req.flash('error', 'Échec de l\'authentification GitLab. Veuillez réessayer.');
+    res.redirect('/auth/login');
+  }
+});
+
+router.get('/github', (req, res) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    req.flash('error', 'GitHub OAuth non configuré. Ajoutez GITHUB_CLIENT_ID et GITHUB_CLIENT_SECRET dans votre .env.');
+    return res.redirect('/auth/login');
+  }
+  const state = require('crypto').randomBytes(16).toString('hex');
+  req.session.githubOAuthState = state;
+  const params = new URLSearchParams({
+    client_id: process.env.GITHUB_CLIENT_ID,
+    redirect_uri: process.env.GITHUB_REDIRECT_URI,
+    scope: 'read:user user:email',
+    state,
+  });
+  res.redirect(`${GITHUB_AUTH_URL}?${params.toString()}`);
+});
+
+router.get('/github/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    req.flash('error', `Erreur GitHub: ${error}`);
+    return res.redirect('/auth/login');
+  }
+
+  if (!state || state !== req.session.githubOAuthState) {
+    req.flash('error', 'État OAuth invalide. Veuillez réessayer.');
+    return res.redirect('/auth/login');
+  }
+  delete req.session.githubOAuthState;
+
+  try {
+    const tokenResponse = await axios.post(GITHUB_TOKEN_URL, {
+      client_id: process.env.GITHUB_CLIENT_ID,
+      client_secret: process.env.GITHUB_CLIENT_SECRET,
+      code,
+      redirect_uri: process.env.GITHUB_REDIRECT_URI,
+    }, { headers: { Accept: 'application/json' } });
+
+    const { access_token } = tokenResponse.data;
+    if (!access_token) throw new Error('No access token returned');
+
+    const [profileRes, emailsRes] = await Promise.all([
+      axios.get(`${GITHUB_API_URL}/user`, { headers: { Authorization: `Bearer ${access_token}`, 'User-Agent': 'CNP-Portal' } }),
+      axios.get(`${GITHUB_API_URL}/user/emails`, { headers: { Authorization: `Bearer ${access_token}`, 'User-Agent': 'CNP-Portal' } }),
+    ]);
+
+    const profile = profileRes.data;
+    const primaryEmail = emailsRes.data.find(e => e.primary && e.verified)?.email || profile.email || null;
+
+    const user = userStore.upsertFromGithub({
+      githubId: profile.id,
+      githubUsername: profile.login,
+      email: primaryEmail,
+      avatarUrl: profile.avatar_url,
+    });
+
+    tokenStore.set(user.id, { accessToken: access_token, refreshToken: null, expiresAt: null });
+
+    req.session.userId = user.id;
+    req.session.role = user.role;
+    req.session.githubUsername = user.username;
+
+    res.redirect('/');
+  } catch (err) {
+    req.flash('error', 'Échec de l\'authentification GitHub. Veuillez réessayer.');
     res.redirect('/auth/login');
   }
 });

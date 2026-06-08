@@ -1,7 +1,11 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN apk add --no-cache --virtual .build-deps python3 make g++ build-base linux-headers sqlite-dev \
+  && PYTHON=/usr/bin/python3 npm ci --only=production \
+  && apk add --no-cache sqlite-libs \
+  && apk del .build-deps \
+  && npm cache clean --force
 
 FROM node:20-alpine AS final
 WORKDIR /app

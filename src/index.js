@@ -7,7 +7,7 @@ const session = require('express-session');
 const flash = require('connect-flash');
 const path = require('path');
 const { createLogger, requestMiddleware } = require('./middleware/logger');
-const { populateUser } = require('./middleware/auth');
+const { populateUser, requirePending } = require('./middleware/auth');
 const { can } = require('./middleware/rbac');
 
 const app = express();
@@ -45,8 +45,12 @@ app.use((req, res, next) => {
 // Health checks — no auth required
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/ready',   (req, res) => res.status(200).json({ status: 'ready' }));
+app.use('/api',     require('./routes/health'));
 
 app.use('/auth',         require('./routes/auth'));
+app.get('/pending', requirePending, (req, res) => {
+  res.render('pending', { title: 'Demande en cours — CNP Portal', user: req.user || null });
+});
 app.use('/profile',      require('./routes/profile'));
 app.use('/',             require('./routes/dashboard'));
 app.use('/deployments',  require('./routes/deployments'));

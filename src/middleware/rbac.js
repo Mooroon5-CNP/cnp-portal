@@ -1,7 +1,8 @@
 'use strict';
 
 const PERMISSIONS = {
-  'users:list':              ['manager'],
+  'users:list':              ['manager', 'devops'],
+  'users:approve':           ['manager', 'devops'],
   'users:create':            ['manager'],
   'users:modify-role':       ['manager'],
   'users:invite':            ['manager'],

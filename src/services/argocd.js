@@ -1,30 +1,30 @@
 'use strict';
 
-// Mock ArgoCD service — swap for real ArgoCD API calls post-MVP.
-// Uses ARGOCD_URL and ARGOCD_TOKEN when real mode is enabled.
+const client = require('../clients/argocd');
 
-const mockApps = [
-  { name: 'cnp-portal',  project: 'cnp', namespace: 'cnp-portal', status: 'Synced',    health: 'Healthy',   syncedAt: new Date(Date.now() - 86400000).toISOString(), owner: null },
-  { name: 'app-alpha',   project: 'cnp', namespace: 'default',    status: 'Synced',    health: 'Healthy',   syncedAt: new Date(Date.now() - 3600000).toISOString(),  owner: 'alice' },
-  { name: 'app-beta',    project: 'cnp', namespace: 'default',    status: 'OutOfSync', health: 'Degraded',  syncedAt: new Date(Date.now() - 7200000).toISOString(),  owner: 'bob' },
-  { name: 'app-gamma',   project: 'cnp', namespace: 'default',    status: 'Synced',    health: 'Progressing', syncedAt: new Date(Date.now() - 600000).toISOString(), owner: 'alice' },
-];
-
+// Portal-level access request workflow (not an ArgoCD native feature)
 const accessRequests = [];
 
-async function listApps(ownerFilter = null) {
-  if (ownerFilter) {
-    return mockApps.filter(a => a.owner === ownerFilter || a.owner === null);
+async function listApps() {
+  try {
+    const apps = await client.listApplications();
+    return apps.map(app => ({
+      name:      app.name,
+      project:   app.project,
+      namespace: app.namespace,
+      status:    app.sync    || 'Unknown',
+      health:    app.health  || 'Unknown',
+      syncedAt:  app.lastDeployedAt || new Date().toISOString(),
+      revision:  app.revision,
+    }));
+  } catch (err) {
+    console.error('[argocd] listApps error:', err.message);
+    return [];
   }
-  return mockApps;
 }
 
 async function syncApp(appName) {
-  const app = mockApps.find(a => a.name === appName);
-  if (!app) throw new Error('Application not found');
-  app.status = 'Synced';
-  app.syncedAt = new Date().toISOString();
-  return app;
+  return client.syncApplication(appName);
 }
 
 async function requestAccess(userId, appName, reason) {

@@ -7,11 +7,10 @@ const { requirePermission, can } = require('../middleware/rbac');
 const argocdService = require('../services/argocd');
 
 router.get('/', requireAuth, requirePermission('argocd:apps:view-own'), async (req, res) => {
-  const canViewAll = can(req.user, 'argocd:apps:view-all');
-  const apps = await argocdService.listApps(canViewAll ? null : req.user.gitlabUsername);
-  const accessRequests = can(req.user, 'argocd:access:approve')
-    ? await argocdService.getAccessRequests()
-    : [];
+  const [apps, accessRequests] = await Promise.all([
+    argocdService.listApps(),
+    can(req.user, 'argocd:access:approve') ? argocdService.getAccessRequests() : [],
+  ]);
 
   res.render('argocd/index', {
     title: 'ArgoCD — CNP Portal',

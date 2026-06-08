@@ -6,17 +6,19 @@ const db = require('./db');
 function rowToUser(row) {
   if (!row) return null;
   return {
-    id:            row.id,
-    gitlabId:      row.gitlab_id,
-    username:      row.username,
+    id:             row.id,
+    gitlabId:       row.gitlab_id,
+    githubId:       row.github_id,
+    username:       row.username,
     gitlabUsername: row.username,  // backward-compat alias
-    email:         row.email,
-    avatarUrl:     row.avatar_url,
-    passwordHash:  row.password_hash,
-    role:          row.role,
-    active:        row.active === 1,
-    createdAt:     row.created_at,
-    updatedAt:     row.updated_at,
+    email:          row.email,
+    avatarUrl:      row.avatar_url,
+    passwordHash:   row.password_hash,
+    role:           row.role,
+    active:         row.active === 1,
+    approved:       row.approved === 1,
+    createdAt:      row.created_at,
+    updatedAt:      row.updated_at,
   };
 }
 
@@ -28,6 +30,10 @@ function findByGitlabId(gitlabId) {
   return rowToUser(db.prepare('SELECT * FROM users WHERE gitlab_id = ?').get(gitlabId));
 }
 
+function findByGithubId(githubId) {
+  return rowToUser(db.prepare('SELECT * FROM users WHERE github_id = ?').get(githubId));
+}
+
 function findByUsername(username) {
   return rowToUser(db.prepare('SELECT * FROM users WHERE username = ?').get(username));
 }
@@ -36,20 +42,24 @@ function findAll() {
   return db.prepare('SELECT * FROM users ORDER BY created_at ASC').all().map(rowToUser);
 }
 
-function create({ gitlabId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev' }) {
+function findPending() {
+  return db.prepare('SELECT * FROM users WHERE approved = 0 ORDER BY created_at ASC').all().map(rowToUser);
+}
+
+function create({ gitlabId = null, githubId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 0, approved = 0 }) {
   const id = uuidv4();
   const now = new Date().toISOString();
   db.prepare(`
-    INSERT INTO users (id, gitlab_id, username, email, avatar_url, password_hash, role, active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-  `).run(id, gitlabId, username, email, avatarUrl, passwordHash, role, now, now);
+    INSERT INTO users (id, gitlab_id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, gitlabId, githubId, username, email, avatarUrl, passwordHash, role, active ? 1 : 0, approved ? 1 : 0, now, now);
   return findById(id);
 }
 
 function update(id, fields) {
   if (!findById(id)) return null;
   const now = new Date().toISOString();
-  const colMap = { username: 'username', email: 'email', avatarUrl: 'avatar_url', role: 'role', active: 'active' };
+  const colMap = { username: 'username', email: 'email', avatarUrl: 'avatar_url', role: 'role', active: 'active', approved: 'approved', githubId: 'github_id' };
   const sets = ['updated_at = ?'];
   const values = [now];
   for (const [jsKey, col] of Object.entries(colMap)) {
@@ -71,7 +81,17 @@ function upsertFromGitlab({ gitlabId, gitlabUsername, email, avatarUrl }) {
   }
   const taken = findByUsername(gitlabUsername);
   const username = taken ? `${gitlabUsername}_gl` : gitlabUsername;
-  return create({ gitlabId, username, email, avatarUrl });
+  return create({ gitlabId, username, email, avatarUrl, active: 0 });
 }
 
-module.exports = { findById, findByGitlabId, findByUsername, findAll, create, update, upsertFromGitlab };
+function upsertFromGithub({ githubId, githubUsername, email, avatarUrl }) {
+  let user = findByGithubId(githubId);
+  if (user) {
+    return update(user.id, { username: githubUsername, email, avatarUrl, githubId });
+  }
+  const taken = findByUsername(githubUsername);
+  const username = taken ? `${githubUsername}_gh` : githubUsername;
+  return create({ githubId, username, email, avatarUrl, active: 0 });
+}
+
+module.exports = { findById, findByGitlabId, findByGithubId, findByUsername, findAll, findPending, create, update, upsertFromGitlab, upsertFromGithub };

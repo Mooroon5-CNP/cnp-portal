@@ -13,7 +13,20 @@ function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.redirect('/auth/login');
   }
+  if (req.user && !req.user.active) {
+    return res.redirect('/pending');
+  }
   next();
 }
 
-module.exports = { populateUser, requireAuth };
+function requirePending(req, res, next) {
+  if (!req.session || !req.session.userId) {
+    return res.redirect('/auth/login');
+  }
+  if (req.user && req.user.active) {
+    return res.redirect('/');
+  }
+  next();
+}
+
+module.exports = { populateUser, requireAuth, requirePending };

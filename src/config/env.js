@@ -1,0 +1,62 @@
+'use strict';
+
+require('dotenv').config();
+
+const REQUIRED_VARS = [
+  'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_APP_INSTALLATION_ID',
+  'GITHUB_CONFIG_REPO_NAME',
+  'ARGOCD_SERVER_URL',
+  'ARGOCD_TOKEN',
+  'DD_API_KEY',
+  'DD_APP_KEY',
+  'KUBE_API_URL',
+  'KUBE_TOKEN',
+  'KUBE_CA_CERT',
+];
+
+function getMissingVars() {
+  return REQUIRED_VARS.filter(v => !process.env[v] || process.env[v].trim() === '');
+}
+
+// When run directly: validate and exit with the list of missing vars
+if (require.main === module) {
+  const missing = getMissingVars();
+  if (missing.length > 0) {
+    missing.forEach(v => console.error(`MISSING ENV VAR: ${v}`));
+    process.exit(1);
+  }
+  console.log('All required env vars are present.');
+  process.exit(0);
+}
+
+const config = {
+  github: {
+    appId: process.env.GITHUB_APP_ID,
+    privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
+    installationId: process.env.GITHUB_APP_INSTALLATION_ID,
+    configRepoName: process.env.GITHUB_CONFIG_REPO_NAME,
+  },
+  argocd: {
+    serverUrl: process.env.ARGOCD_SERVER_URL,
+    token: process.env.ARGOCD_TOKEN,
+    insecure: process.env.ARGOCD_INSECURE === 'true',
+  },
+  datadog: {
+    apiKey: process.env.DD_API_KEY,
+    appKey: process.env.DD_APP_KEY,
+    site: process.env.DD_SITE || 'datadoghq.com',
+  },
+  kubernetes: {
+    apiUrl: process.env.KUBE_API_URL,
+    token: process.env.KUBE_TOKEN,
+    caCert: process.env.KUBE_CA_CERT,
+    namespacePrefix: process.env.KUBE_NAMESPACE_PREFIX || '',
+  },
+  crossplane: {
+    namespace: process.env.CROSSPLANE_NAMESPACE || 'crossplane-system',
+  },
+};
+
+module.exports = { config, getMissingVars };

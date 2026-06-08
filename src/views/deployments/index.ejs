@@ -1,78 +1,148 @@
 <!DOCTYPE html>
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
-<body>
-<div class="layout">
-  <%- include('../partials/sidebar') %>
-  <main class="main-content">
-    <div class="content-wrapper">
-      <%- include('../partials/flash') %>
 
-      <div class="page-header">
-        <div>
-          <div class="page-title">Déploiements</div>
-          <div class="page-subtitle">Gestion des applications déployées sur les clouds CNP</div>
-        </div>
-        <a href="/deployments/new" class="btn btn-primary">+ Nouveau déploiement</a>
-      </div>
+  <body>
+    <div class="layout">
+      <%- include('../partials/sidebar') %>
+        <main class="main-content">
+          <div class="content-wrapper">
+            <%- include('../partials/flash') %>
 
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Applications déployées</span>
-          <span class="badge badge-gray"><%= deployments.length %> apps</span>
-        </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Application</th>
-                <th>Cloud</th>
-                <th>Réplicas</th>
-                <th>Statut</th>
-                <th>Repo GitLab</th>
-                <th>Déployé le</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <% deployments.forEach(dep => { %>
-              <tr>
-                <td><strong><%= dep.app %></strong></td>
-                <td>
-                  <% if (dep.cloud === 'GCP') { %><span class="badge badge-info">GCP</span>
-                  <% } else if (dep.cloud === 'AWS') { %><span class="badge badge-warning">AWS</span>
-                  <% } else { %><span class="badge badge-purple">OpenStack</span>
-                  <% } %>
-                </td>
-                <td><%= dep.replicas %></td>
-                <td>
-                  <% if (dep.status === 'running') { %><span class="badge badge-success">Running</span>
-                  <% } else if (dep.status === 'failed') { %><span class="badge badge-danger">Failed</span>
-                  <% } else { %><span class="badge badge-warning"><%= dep.status %></span>
-                  <% } %>
-                </td>
-                <td class="font-mono"><%= dep.gitlabRepo %></td>
-                <td class="text-muted"><%= new Date(dep.deployedAt).toLocaleString('fr-FR') %></td>
-                <td>
-                  <div class="actions-cell">
-                    <form action="/deployments/<%= dep.id %>/delete" method="POST" class="inline-form"
-                          onsubmit="return confirm('Supprimer ce déploiement ?')">
-                      <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
-                    </form>
+              <div class="page-header">
+                <div>
+                  <div class="page-title">Déploiements</div>
+                  <div class="page-subtitle">Gestion des applications déployées sur les clouds CNP</div>
+                </div>
+                <button id="openNewDeployment" class="btn btn-primary">+ Nouveau déploiement</button>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <span class="card-title">Applications déployées</span>
+                  <span class="badge badge-gray">
+                    <%= deployments.length %> apps
+                  </span>
+                </div>
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Application</th>
+                        <th>Repository</th>
+                        <th>Statut</th>
+                        <th>Dernier tag</th>
+                        <th>Dernière exécution</th>
+                        <th>Branche</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <% deployments.forEach(dep=> { %>
+                        <tr>
+                          <td><strong><a href="/deployments/<%= dep.id %>">
+                                <%= dep.appName %>
+                              </a></strong></td>
+                          <td class="font-mono"><a href="<%= dep.githubRepoUrl %>" target="_blank" rel="noreferrer">
+                              <%= dep.githubRepoUrl %>
+                            </a></td>
+                          <td><span class="badge <%= dep.status.badge %>">
+                              <%= dep.status.label %>
+                            </span></td>
+                          <td class="font-mono">
+                            <%= dep.deployedTag || '-' %>
+                          </td>
+                          <td class="text-muted">
+                            <%= dep.lastRunTime ? new Date(dep.lastRunTime).toLocaleString('fr-FR') : '-' %>
+                          </td>
+                          <td>
+                            <%= dep.branch || 'main' %>
+                          </td>
+                          <td>
+                            <div class="actions-cell">
+                              <form action="/deployments/<%= dep.id %>/delete" method="POST" class="inline-form"
+                                onsubmit="return confirm('Supprimer ce déploiement ?')">
+                                <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
+                              </form>
+                            </div>
+                          </td>
+                        </tr>
+                        <% }) %>
+                          <% if (deployments.length===0) { %>
+                            <tr>
+                              <td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun
+                                déploiement</td>
+                            </tr>
+                            <% } %>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Nouveau déploiement modal -->
+              <div id="newDeploymentModal"
+                style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
+                <div
+                  style="background:var(--surface);width:640px;border-radius:8px;padding:20px;box-shadow:var(--shadow);">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <h3 style="margin:0;">Nouveau déploiement</h3>
+                    <button id="closeNewDeployment" class="btn btn-ghost">Fermer</button>
                   </div>
-                </td>
-              </tr>
-              <% }) %>
-              <% if (deployments.length === 0) { %>
-              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun déploiement</td></tr>
-              <% } %>
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  <form action="/deployments" method="POST">
+                    <div class="form-group">
+                      <label for="appName">Nom de l'application</label>
+                      <input type="text" name="appName" id="appName"
+                        placeholder="Nom du répertoire dans config-repo/apps/" required>
+                    </div>
+                    <div class="form-group">
+                      <label for="githubRepoUrl">URL du dépôt GitHub</label>
+                      <input type="text" name="githubRepoUrl" id="githubRepoUrl"
+                        placeholder="https://github.com/Mooroon5-CNP/mon-app" required>
+                    </div>
+                    <div class="form-group">
+                      <label for="appPort">Port applicatif</label>
+                      <input type="number" name="appPort" id="appPort" min="1" placeholder="ex: 3000" required>
+                    </div>
+                    <div class="form-group">
+                      <label for="configRepoToken">Token CONFIG_REPO_TOKEN</label>
+                      <input type="password" name="configRepoToken" id="configRepoToken"
+                        placeholder="Token GitHub (écrit uniquement)" required>
+                      <div class="form-hint">Le token sera stocké chiffré et n'apparaîtra plus après sauvegarde.</div>
+                    </div>
 
+                    <div class="form-group">
+                      <label>Cloud cible</label>
+                      <div class="v2-placeholder" title="bientôt disponible">Sélectionner (bientôt disponible)</div>
+                    </div>
+
+                    <div class="form-group">
+                      <label>Stratégie HA</label>
+                      <div class="v2-placeholder" title="bientôt disponible">Sélectionner (bientôt disponible)</div>
+                    </div>
+
+                    <div style="display:flex;gap:10px;margin-top:12px;">
+                      <button type="submit" class="btn btn-primary">Enregistrer</button>
+                      <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              <script>
+                const openBtn = document.getElementById('openNewDeployment');
+                const modal = document.getElementById('newDeploymentModal');
+                const closeBtn = document.getElementById('closeNewDeployment');
+                const cancelBtn = document.getElementById('cancelNewDeployment');
+                function showModal() { modal.style.display = 'flex'; }
+                function hideModal() { modal.style.display = 'none'; }
+                if (openBtn) openBtn.addEventListener('click', showModal);
+                if (closeBtn) closeBtn.addEventListener('click', hideModal);
+                if (cancelBtn) cancelBtn.addEventListener('click', hideModal);
+              </script>
+
+          </div>
+        </main>
     </div>
-  </main>
-</div>
-</body>
+  </body>
+
 </html>

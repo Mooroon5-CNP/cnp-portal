@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %></title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      overflow: hidden;
+      background: #0a0a0f;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    #fluid-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+
+    .pending-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .pending-card {
+      pointer-events: auto;
+      background: rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      padding: 52px 48px;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 8px 64px rgba(82, 39, 255, 0.25), 0 0 0 1px rgba(255,255,255,0.05) inset;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .pending-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(82,39,255,0.08) 0%, rgba(0,212,255,0.04) 100%);
+      pointer-events: none;
+    }
+
+    .pending-icon {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 28px;
+      position: relative;
+    }
+
+    .pending-icon svg {
+      width: 100%;
+      height: 100%;
+      animation: pulse-ring 2.4s ease-in-out infinite;
+    }
+
+    @keyframes pulse-ring {
+      0%, 100% { filter: drop-shadow(0 0 8px rgba(82,39,255,0.6)); transform: scale(1); }
+      50% { filter: drop-shadow(0 0 20px rgba(82,39,255,1)); transform: scale(1.05); }
+    }
+
+    .pending-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f0f0f0;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+
+    .pending-subtitle {
+      font-size: 14px;
+      color: rgba(255,255,255,0.5);
+      line-height: 1.6;
+      margin-bottom: 36px;
+    }
+
+    .pending-user {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 40px;
+      padding: 8px 18px 8px 8px;
+      margin-bottom: 36px;
+    }
+
+    .pending-user img {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+
+    .pending-user-placeholder {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #5227ff, #00d4ff);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .pending-user span {
+      font-size: 13px;
+      color: rgba(255,255,255,0.7);
+    }
+
+    .pending-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 36px;
+      text-align: left;
+    }
+
+    .pending-step {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .step-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .step-dot.done { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.6); }
+    .step-dot.active {
+      background: #5227ff;
+      box-shadow: 0 0 10px rgba(82,39,255,0.8);
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    .step-dot.waiting { background: rgba(255,255,255,0.2); }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .step-label {
+      font-size: 13px;
+      color: rgba(255,255,255,0.6);
+    }
+    .step-label.done { color: rgba(255,255,255,0.8); }
+    .step-label.active { color: #fff; }
+
+    .pending-logout {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.35);
+      text-decoration: none;
+      transition: color 0.2s;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+    .pending-logout:hover { color: rgba(255,255,255,0.7); }
+  </style>
+</head>
+<body>
+  <canvas id="fluid-canvas"></canvas>
+
+  <div class="pending-overlay">
+    <div class="pending-card">
+      <div class="pending-icon">
+        <svg viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="36" cy="36" r="34" stroke="rgba(82,39,255,0.3)" stroke-width="1.5"/>
+          <circle cx="36" cy="36" r="26" stroke="rgba(82,39,255,0.5)" stroke-width="1.5"/>
+          <circle cx="36" cy="36" r="18" fill="rgba(82,39,255,0.15)" stroke="#5227ff" stroke-width="1.5"/>
+          <path d="M36 24v13l7 4" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+
+      <div class="pending-title">Demande en cours de traitement</div>
+      <div class="pending-subtitle">
+        Votre compte est en attente de validation par un administrateur CNP.<br>
+        Vous serez notifié dès que votre accès est activé.
+      </div>
+
+      <% if (user) { %>
+      <div class="pending-user">
+        <% if (user.avatarUrl) { %>
+          <img src="<%= user.avatarUrl %>" alt="avatar">
+        <% } else { %>
+          <div class="pending-user-placeholder"><%= (user.username || '?')[0].toUpperCase() %></div>
+        <% } %>
+        <span><%= user.email || user.username %></span>
+      </div>
+      <% } %>
+
+      <div class="pending-steps">
+        <div class="pending-step">
+          <div class="step-dot done"></div>
+          <span class="step-label done">Compte créé</span>
+        </div>
+        <div class="pending-step">
+          <div class="step-dot active"></div>
+          <span class="step-label active">En attente d'approbation admin</span>
+        </div>
+        <div class="pending-step">
+          <div class="step-dot waiting"></div>
+          <span class="step-label">Accès à la plateforme</span>
+        </div>
+      </div>
+
+      <form action="/auth/logout" method="POST">
+        <button type="submit" class="pending-logout">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          Se déconnecter
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    // FluidGlass-inspired Three.js lens effect (vanilla, no React required)
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.167.1/build/three.module.js';
+
+    const canvas = document.getElementById('fluid-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x0a0a0f, 1);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = 5;
+
+    // Background: animated gradient mesh
+    const bgGeo = new THREE.PlaneGeometry(20, 20, 32, 32);
+    const bgMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uRes: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) } },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform vec2 uRes;
+        varying vec2 vUv;
+        vec3 palette(float t) {
+          return mix(vec3(0.08,0.04,0.18), vec3(0.0,0.06,0.2), t);
+        }
+        float blob(vec2 uv, vec2 c, float r) {
+          return smoothstep(r, 0.0, length(uv - c));
+        }
+        void main() {
+          vec2 uv = vUv - 0.5;
+          uv.x *= uRes.x / uRes.y;
+          float t = uTime * 0.25;
+          vec2 c1 = vec2(sin(t * 0.7) * 0.4, cos(t * 0.5) * 0.3);
+          vec2 c2 = vec2(cos(t * 0.6 + 1.0) * 0.35, sin(t * 0.8 + 2.0) * 0.28);
+          vec2 c3 = vec2(sin(t * 0.4 + 3.0) * 0.3, cos(t * 0.9 + 1.5) * 0.35);
+          float b = blob(uv, c1, 0.45) * 0.7 + blob(uv, c2, 0.4) * 0.5 + blob(uv, c3, 0.38) * 0.4;
+          vec3 col = mix(vec3(0.04, 0.02, 0.1), vec3(0.2, 0.1, 0.6), b * 1.4);
+          col += vec3(0.0, 0.06, 0.15) * blob(uv, vec2(cos(t*0.3)*0.5, sin(t*0.4)*0.4), 0.5);
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+      depthWrite: false,
+    });
+    const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+    bgMesh.position.z = -2;
+    scene.add(bgMesh);
+
+    // Floating particles
+    const particleCount = 80;
+    const pPositions = new Float32Array(particleCount * 3);
+    const pSizes = new Float32Array(particleCount);
+    for (let i = 0; i < particleCount; i++) {
+      pPositions[i*3]   = (Math.random() - 0.5) * 10;
+      pPositions[i*3+1] = (Math.random() - 0.5) * 8;
+      pPositions[i*3+2] = (Math.random() - 0.5) * 2 - 1;
+      pSizes[i] = Math.random() * 3 + 1;
+    }
+    const pGeo = new THREE.BufferGeometry();
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+    pGeo.setAttribute('size', new THREE.BufferAttribute(pSizes, 1));
+    const pMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: `
+        attribute float size;
+        uniform float uTime;
+        varying float vAlpha;
+        void main() {
+          vec3 pos = position;
+          pos.y += sin(uTime * 0.3 + position.x * 0.8) * 0.15;
+          pos.x += cos(uTime * 0.25 + position.y * 0.6) * 0.1;
+          vAlpha = 0.3 + 0.2 * sin(uTime + position.z * 10.0);
+          vec4 mvp = modelViewMatrix * vec4(pos, 1.0);
+          gl_PointSize = size * (300.0 / -mvp.z);
+          gl_Position = projectionMatrix * mvp;
+        }
+      `,
+      fragmentShader: `
+        varying float vAlpha;
+        void main() {
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          if (d > 1.0) discard;
+          gl_FragColor = vec4(0.5, 0.3, 1.0, vAlpha * (1.0 - d));
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+    });
+    scene.add(new THREE.Points(pGeo, pMat));
+
+    // Lens / glass sphere — follows mouse with damping
+    const lensGeo = new THREE.SphereGeometry(0.7, 64, 64);
+    const renderTarget = new THREE.WebGLRenderTarget(512, 512);
+    const lensMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uEnv: { value: renderTarget.texture },
+        uTime: { value: 0 },
+        uMouse: { value: new THREE.Vector2(0, 0) },
+        uRes: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vPos;
+        varying vec2 vUv;
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vPos = (modelViewMatrix * vec4(position, 1.0)).xyz;
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uEnv;
+        uniform float uTime;
+        uniform vec2 uMouse;
+        uniform vec2 uRes;
+        varying vec3 vNormal;
+        varying vec3 vPos;
+        varying vec2 vUv;
+        void main() {
+          vec3 N = normalize(vNormal);
+          vec3 V = normalize(-vPos);
+          vec3 refr = refract(-V, N, 1.0 / 1.45);
+          vec2 screenUv = gl_FragCoord.xy / uRes;
+          vec2 offset = refr.xy * 0.18 + N.xy * 0.05;
+          vec4 refracted = texture2D(uEnv, clamp(screenUv + offset, 0.0, 1.0));
+          float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+          vec3 rimCol = mix(vec3(0.4, 0.2, 1.0), vec3(0.0, 0.7, 1.0), rim) * rim * 0.6;
+          float spec = pow(max(dot(reflect(-V, N), normalize(vec3(1,1,1))), 0.0), 64.0) * 0.5;
+          vec3 col = refracted.rgb + rimCol + spec;
+          float ca = 0.012;
+          float r = texture2D(uEnv, clamp(screenUv + offset + vec2(ca, 0), 0.0, 1.0)).r;
+          float b = texture2D(uEnv, clamp(screenUv + offset - vec2(ca, 0), 0.0, 1.0)).b;
+          col.r = mix(col.r, r, 0.5);
+          col.b = mix(col.b, b, 0.5);
+          gl_FragColor = vec4(col, 0.92);
+        }
+      `,
+      transparent: true,
+    });
+    const lens = new THREE.Mesh(lensGeo, lensMat);
+    scene.add(lens);
+
+    // Mouse tracking
+    const mouse = new THREE.Vector2(0, 0);
+    const lensPos = new THREE.Vector2(0, 0);
+    window.addEventListener('mousemove', e => {
+      mouse.x = (e.clientX / window.innerWidth - 0.5) * 8;
+      mouse.y = -(e.clientY / window.innerHeight - 0.5) * 6;
+    });
+
+    // Resize
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      bgMat.uniforms.uRes.value.set(w, h);
+      lensMat.uniforms.uRes.value.set(w, h);
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    let t = 0;
+    function animate() {
+      requestAnimationFrame(animate);
+      t += 0.016;
+      bgMat.uniforms.uTime.value = t;
+      pMat.uniforms.uTime.value = t;
+      lensMat.uniforms.uTime.value = t;
+
+      // Damp lens toward mouse
+      lensPos.x += (mouse.x - lensPos.x) * 0.06;
+      lensPos.y += (mouse.y - lensPos.y) * 0.06;
+      lens.position.set(lensPos.x, lensPos.y, 0);
+
+      // Render background into renderTarget for refraction
+      lens.visible = false;
+      renderer.setRenderTarget(renderTarget);
+      renderer.render(scene, camera);
+      renderer.setRenderTarget(null);
+      lens.visible = true;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>

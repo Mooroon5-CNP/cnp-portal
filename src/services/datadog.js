@@ -1,56 +1,78 @@
 'use strict';
 
-// Mock Datadog service — swap for real Datadog API v2 calls post-MVP.
-// Uses env vars DATADOG_API_KEY and DATADOG_APP_KEY when real mode is enabled.
+const client = require('../clients/datadog');
 
-const mockLogs = [
-  { timestamp: new Date(Date.now() - 30000).toISOString(), level: 'INFO',  service: 'cnp-portal', message: 'Request handled: GET /deployments 200 45ms',    app: 'cnp-portal' },
-  { timestamp: new Date(Date.now() - 60000).toISOString(), level: 'ERROR', service: 'app-beta',   message: 'Connection refused to database on port 5432',    app: 'app-beta' },
-  { timestamp: new Date(Date.now() - 90000).toISOString(), level: 'WARN',  service: 'app-alpha',  message: 'High memory usage detected: 87% of limit',       app: 'app-alpha' },
-  { timestamp: new Date(Date.now() - 120000).toISOString(), level: 'INFO', service: 'cnp-portal', message: 'User login: alice via GitLab OAuth',              app: 'cnp-portal' },
-  { timestamp: new Date(Date.now() - 150000).toISOString(), level: 'INFO', service: 'app-gamma',  message: 'Deployment triggered for ref: main',              app: 'app-gamma' },
-];
-
-const mockMetrics = {
-  latency: { p50: 42, p95: 189, p99: 340, unit: 'ms' },
-  errorRate: { value: 1.2, unit: '%' },
-  saturation: { cpu: 18, memory: 62, unit: '%' },
-  traffic: { rps: 23, unit: 'req/s' },
-};
-
-const mockAlerts = [
-  { id: 'alert-001', name: 'High Error Rate', query: 'avg(last_5m):sum:trace.web.request.errors{env:prod} > 5', status: 'OK',       silenced: false, app: 'cnp-portal' },
-  { id: 'alert-002', name: 'CrashLoopBackOff Detected', query: 'kubernetes.containers.restarts > 10', status: 'ALERT',   silenced: false, app: 'app-beta' },
-  { id: 'alert-003', name: 'Memory Saturation',    query: 'avg(last_10m):avg:kubernetes.memory.usage_pct{*} > 85', status: 'WARN',    silenced: true,  app: 'app-alpha' },
-];
-
+// Portal-level access request workflow (not a Datadog native feature)
 const accessRequests = [];
 
-async function getLogs(appFilter = null) {
-  if (appFilter) return mockLogs.filter(l => l.app === appFilter);
-  return mockLogs;
+const SERVICE_NAME = process.env.DD_SERVICE || 'cnp-portal';
+
+async function getLogs(serviceFilter = null) {
+  try {
+    const service = serviceFilter || SERVICE_NAME;
+    const rawLogs = await client.getLogs(service, 100);
+    return rawLogs.map(entry => ({
+      timestamp: entry.attributes?.timestamp || new Date().toISOString(),
+      level:     (entry.attributes?.status || 'info').toUpperCase().replace('WARNING', 'WARN'),
+      service:   entry.attributes?.service || service,
+      message:   entry.attributes?.message || entry.attributes?.['message.attributes']?.msg || '—',
+    }));
+  } catch (err) {
+    console.error('[datadog] getLogs error:', err.message);
+    return [];
+  }
 }
 
 async function getMetrics() {
-  return mockMetrics;
+  try {
+    return await client.getGoldenSignals(SERVICE_NAME);
+  } catch (err) {
+    console.error('[datadog] getMetrics error:', err.message);
+    // Return a shape with '—' values so the view doesn't crash
+    return {
+      latency:    { p50: '—', p95: '—', p99: '—', unit: 'ms' },
+      errorRate:  { value: '—', unit: '%' },
+      saturation: { cpu: '—', memory: '—', unit: '%' },
+      traffic:    { rps: '—', unit: 'req/s' },
+    };
+  }
 }
 
-async function getAlerts(appFilter = null) {
-  if (appFilter) return mockAlerts.filter(a => a.app === appFilter);
-  return mockAlerts;
+async function getAlerts(serviceFilter = null) {
+  try {
+    const service = serviceFilter || SERVICE_NAME;
+    const monitors = await client.getMonitors(service);
+    return monitors.map(m => ({
+      id:      String(m.id),
+      name:    m.name,
+      query:   m.query,
+      app:     (m.tags || []).find(t => t.startsWith('service:'))?.replace('service:', '') || service,
+      status:  normalizeMonitorState(m.overall_state),
+      silenced: m.options?.silenced ? Object.keys(m.options.silenced).length > 0 : false,
+    }));
+  } catch (err) {
+    console.error('[datadog] getAlerts error:', err.message);
+    return [];
+  }
 }
 
-async function silenceAlert(alertId) {
-  const alert = mockAlerts.find(a => a.id === alertId);
-  if (!alert) throw new Error('Alert not found');
-  alert.silenced = true;
-  return alert;
+function normalizeMonitorState(state) {
+  switch (state) {
+    case 'Alert':   return 'ALERT';
+    case 'Warn':    return 'WARN';
+    case 'OK':      return 'OK';
+    case 'No Data': return 'NO DATA';
+    default:        return state || 'UNKNOWN';
+  }
 }
 
-async function createAlert(alert) {
-  const newAlert = { id: `alert-${Date.now()}`, ...alert, status: 'OK', silenced: false };
-  mockAlerts.push(newAlert);
-  return newAlert;
+async function silenceAlert(monitorId) {
+  return client.silenceMonitor(Number(monitorId));
+}
+
+async function createAlert({ name, query, app }) {
+  const tags = app ? [`service:${app}`] : [`service:${SERVICE_NAME}`];
+  return client.createMonitor({ name, query, tags });
 }
 
 async function requestAccess(userId, reason) {

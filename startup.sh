@@ -29,5 +29,5 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-echo "==> Starting CNP Portal on http://localhost:${PORT:-3000}"
+echo "==> Starting CNP Portal on http://localhost:${PORT:-3001}"
 exec node src/index.js
