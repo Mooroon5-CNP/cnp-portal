@@ -5,6 +5,24 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission, can } = require('../middleware/rbac');
 const datadogService = require('../services/datadog');
+const teamService = require('../services/teams');
+
+router.get('/datadog', requireAuth, async (req, res) => {
+  let accessRequests = [];
+  if (can(req.user, 'observability:access:approve')) {
+    const myTeamMemberIds = teamService.getTeamMemberIds(req.user.id);
+    const all = await datadogService.getAccessRequests();
+    accessRequests = all.filter(r => myTeamMemberIds.has(r.userId));
+  }
+
+  res.render('observability/datadog', {
+    title: 'DataDog — CNP Portal',
+    currentPage: 'observability',
+    accessRequests,
+    user: req.user,
+    can: (p) => can(req.user, p),
+  });
+});
 
 router.get('/logs', requireAuth, requirePermission('observability:logs:own'), async (req, res) => {
   const canViewAll = can(req.user, 'observability:logs:all');

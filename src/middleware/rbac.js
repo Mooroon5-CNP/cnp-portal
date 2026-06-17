@@ -43,6 +43,9 @@ const PERMISSIONS = {
   'argocd:sync':             ['manager', 'devops'],
   'argocd:modify':           ['manager'],
 
+  'teams:view':              ['manager', 'devops'],
+  'teams:create':            ['manager'],
+
   'docs:read':               ['manager', 'devops', 'dev'],
 
   'secrets:view-names':      ['manager', 'devops'],

@@ -92,6 +92,34 @@ async function pathExists(owner, repo, path, token, ref = 'main') {
     }
 }
 
+// Create or update a file in a repo using a PAT token (e.g. for config-repo writes).
+// sha must be provided when updating an existing file; omit for new files.
+async function createOrUpdateFileWithToken(owner, repo, path, content, message, token, sha) {
+    const body = {
+        message,
+        content: Buffer.from(content, 'utf8').toString('base64'),
+    };
+    if (sha) body.sha = sha;
+    await axios.put(
+        `${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+        body,
+        { headers: defaultHeaders(token) }
+    );
+}
+
+// Get the SHA of an existing file via PAT token. Returns null if not found.
+async function getFileSha(owner, repo, path, token) {
+    try {
+        const res = await axios.get(
+            `${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+            { headers: defaultHeaders(token) }
+        );
+        return res.data.sha || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 module.exports = {
     parseRepoUrl,
     getRepo,
@@ -100,4 +128,6 @@ module.exports = {
     getRunJobs,
     getFileContent,
     pathExists,
+    createOrUpdateFileWithToken,
+    getFileSha,
 };

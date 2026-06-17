@@ -11,61 +11,72 @@
       <div class="page-header">
         <div>
           <div class="page-title">ArgoCD</div>
-          <div class="page-subtitle">État des applications GitOps</div>
+          <div class="page-subtitle">Déploiements GitOps — suivi des applications</div>
         </div>
-        <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès ArgoCD</button>
+        <div style="display:flex;gap:10px;">
+          <% if (can('argocd:access:request')) { %>
+          <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès</button>
+          <% } %>
+          <!-- TODO: replace with real ArgoCD URL -->
+          <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" class="btn btn-primary">Ouvrir ArgoCD ↗</a>
+        </div>
       </div>
 
       <div class="card mb-6">
-        <div class="card-header">
-          <span class="card-title">Applications</span>
-          <span class="badge badge-gray"><%= apps.length %> apps</span>
-        </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr><th>Application</th><th>Projet</th><th>Namespace</th><th>Sync</th><th>Santé</th><th>Dernier sync</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              <% apps.forEach(app => { %>
-              <tr>
-                <td><strong><%= app.name %></strong></td>
-                <td class="text-muted"><%= app.project %></td>
-                <td><span class="badge badge-gray"><%= app.namespace %></span></td>
-                <td>
-                  <% if (app.status === 'Synced') { %><span class="badge badge-success status-synced">Synced</span>
-                  <% } else { %><span class="badge badge-warning status-outofsync"><%= app.status %></span>
-                  <% } %>
-                </td>
-                <td>
-                  <% if (app.health === 'Healthy') { %><span class="badge badge-success">Healthy</span>
-                  <% } else if (app.health === 'Degraded') { %><span class="badge badge-danger">Degraded</span>
-                  <% } else if (app.health === 'Progressing') { %><span class="badge badge-info">Progressing</span>
-                  <% } else { %><span class="badge badge-gray"><%= app.health %></span>
-                  <% } %>
-                </td>
-                <td class="text-muted"><%= new Date(app.syncedAt).toLocaleString('fr-FR') %></td>
-                <td>
-                  <% if (can('argocd:sync')) { %>
-                  <form action="/argocd/sync/<%= app.name %>" method="POST" class="inline-form">
-                    <button type="submit" class="btn btn-secondary btn-sm">Force sync</button>
-                  </form>
-                  <% } %>
-                </td>
-              </tr>
-              <% }) %>
-              <% if (apps.length === 0) { %>
-              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucune application</td></tr>
-              <% } %>
-            </tbody>
-          </table>
+        <div class="card-header"><span class="card-title">Accéder à ArgoCD</span></div>
+        <div class="card-body" style="line-height:1.8;">
+          <p style="margin-bottom:16px;">L'accès à ArgoCD est géré par l'équipe infra. Suivez les étapes ci-dessous pour obtenir un accès.</p>
+
+          <ol style="margin-left:20px;margin-bottom:0;">
+            <li style="margin-bottom:12px;">
+              <strong>Demander un accès</strong> — Contactez votre manager ou l'équipe CNP (canal Slack <code>#cnp-infra</code>) en indiquant votre nom, votre rôle et les applications sur lesquelles vous avez besoin de visibilité.
+            </li>
+            <li style="margin-bottom:12px;">
+              <strong>Réception des credentials</strong> — Un compte sera créé et les identifiants vous seront transmis par votre manager. L'authentification se fait via SSO GitLab ou avec un compte local selon la configuration en place.
+            </li>
+            <li style="margin-bottom:12px;">
+              <strong>Se connecter</strong> — Rendez-vous sur
+              <!-- TODO: replace with real ArgoCD URL -->
+              <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" style="color:var(--primary);">argocd.fake-cnp.example.com</a>
+              et authentifiez-vous.
+            </li>
+          </ol>
         </div>
       </div>
 
-      <!-- Access requests (manager only) -->
-      <% if (can('argocd:access:approve') && accessRequests.length > 0) { %>
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Retrouver votre projet CNP</span></div>
+        <div class="card-body" style="line-height:1.8;">
+          <p style="margin-bottom:12px;">Une fois connecté, retrouvez les applications CNP de la façon suivante :</p>
+          <ol style="margin-left:20px;margin-bottom:0;">
+            <li style="margin-bottom:12px;">
+              Sur la page d'accueil d'ArgoCD (<strong>Applications</strong>), utilisez le filtre <code>Project: cnp</code> pour afficher uniquement les applications du projet CNP.
+            </li>
+            <li style="margin-bottom:12px;">
+              Chaque application correspond à un service déployé. Cliquez sur une application pour voir son état de synchronisation, sa santé, et l'historique des déploiements.
+            </li>
+            <li style="margin-bottom:12px;">
+              Pour forcer une synchronisation, cliquez sur <strong>Sync</strong> dans la vue de l'application (nécessite le rôle <code>developer</code> ou supérieur).
+            </li>
+            <li style="margin-bottom:0;">
+              Les logs des pods sont accessibles via l'onglet <strong>Pods</strong> dans la vue d'une application.
+            </li>
+          </ol>
+        </div>
+      </div>
+
       <div class="card">
-        <div class="card-header"><span class="card-title">Demandes d'accès ArgoCD</span></div>
+        <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:20px;">
+          <!-- TODO: update with real ArgoCD URL once configured -->
+          Lien direct vers ArgoCD CNP :
+          <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" style="color:var(--primary);margin-left:6px;">https://argocd.fake-cnp.example.com</a>
+        </div>
+      </div>
+
+      <!-- Pending access requests — managers only -->
+      <% if (can('argocd:access:approve') && accessRequests.length > 0) { %>
+      <div class="card mt-6">
+        <div class="card-header"><span class="card-title">Demandes d'accès ArgoCD en attente</span></div>
         <div class="table-container">
           <table>
             <thead><tr><th>Utilisateur</th><th>Application</th><th>Raison</th><th>Date</th><th>Action</th></tr></thead>
@@ -73,7 +84,7 @@
               <% accessRequests.forEach((r, idx) => { %>
               <tr>
                 <td class="font-mono"><%= r.userId %></td>
-                <td><%= r.appName %></td>
+                <td><%= r.appName || '—' %></td>
                 <td><%= r.reason %></td>
                 <td class="text-muted"><%= new Date(r.requestedAt).toLocaleString('fr-FR') %></td>
                 <td>
@@ -94,6 +105,7 @@
       <% } %>
 
       <!-- Access request modal -->
+      <% if (can('argocd:access:request')) { %>
       <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
         <div class="card" style="width:460px;">
           <div class="card-header">
@@ -101,23 +113,25 @@
             <button onclick="document.getElementById('access-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
           </div>
           <div class="card-body">
+            <p style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">Votre demande sera transmise aux managers. Ils vous fourniront un compte ArgoCD par retour.</p>
             <form action="/argocd/access-request" method="POST">
               <div class="form-group">
-                <label>Application cible</label>
-                <input type="text" name="appName" placeholder="ex: app-alpha" required>
+                <label>Application cible (optionnel)</label>
+                <input type="text" name="appName" placeholder="ex: cnp-portal">
               </div>
               <div class="form-group">
                 <label>Raison de la demande</label>
-                <textarea name="reason" rows="3" placeholder="Pourquoi avez-vous besoin d'accès à cette application ?" required></textarea>
+                <textarea name="reason" rows="3" placeholder="Pourquoi avez-vous besoin d'un accès ArgoCD ?" required></textarea>
               </div>
               <div style="display:flex;gap:10px;">
-                <button type="submit" class="btn btn-primary">Envoyer</button>
+                <button type="submit" class="btn btn-primary">Envoyer la demande</button>
                 <button type="button" onclick="document.getElementById('access-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
               </div>
             </form>
           </div>
         </div>
       </div>
+      <% } %>
 
     </div>
   </main>

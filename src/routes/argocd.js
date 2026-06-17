@@ -5,17 +5,19 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission, can } = require('../middleware/rbac');
 const argocdService = require('../services/argocd');
+const teamService = require('../services/teams');
 
-router.get('/', requireAuth, requirePermission('argocd:apps:view-own'), async (req, res) => {
-  const [apps, accessRequests] = await Promise.all([
-    argocdService.listApps(),
-    can(req.user, 'argocd:access:approve') ? argocdService.getAccessRequests() : [],
-  ]);
+router.get('/', requireAuth, async (req, res) => {
+  let accessRequests = [];
+  if (can(req.user, 'argocd:access:approve')) {
+    const myTeamMemberIds = teamService.getTeamMemberIds(req.user.id);
+    const all = await argocdService.getAccessRequests();
+    accessRequests = all.filter(r => myTeamMemberIds.has(r.userId));
+  }
 
   res.render('argocd/index', {
     title: 'ArgoCD — CNP Portal',
     currentPage: 'argocd',
-    apps,
     accessRequests,
     user: req.user,
     can: (p) => can(req.user, p),

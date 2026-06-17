@@ -24,14 +24,8 @@
   <div class="nav-section">
     <div class="nav-section-label">Observabilité</div>
     <ul class="nav-menu">
-      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'logs' ? 'active' : '' %>">
-        <a href="/observability/logs"><span class="nav-icon">≡</span> Logs</a>
-      </li>
-      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'metrics' ? 'active' : '' %>">
-        <a href="/observability/metrics"><span class="nav-icon">◎</span> Métriques</a>
-      </li>
-      <li class="<%= locals.currentPage === 'observability' && locals.obsTab === 'alerts' ? 'active' : '' %>">
-        <a href="/observability/alerts"><span class="nav-icon">⚑</span> Alertes</a>
+      <li class="<%= locals.currentPage === 'observability' ? 'active' : '' %>">
+        <a href="/observability/datadog"><span class="nav-icon">◎</span> DataDog</a>
       </li>
     </ul>
   </div>
@@ -48,16 +42,23 @@
     </ul>
   </div>
 
-  <% if (locals.user && user.role === 'manager') { %>
+  <% if (locals.user && (user.role === 'manager' || user.role === 'devops')) { %>
   <div class="nav-section">
     <div class="nav-section-label">Administration</div>
     <ul class="nav-menu">
+      <% if (user.role === 'manager') { %>
       <li class="<%= locals.currentPage === 'admin' ? 'active' : '' %>">
         <a href="/admin/users"><span class="nav-icon">👥</span> Utilisateurs</a>
       </li>
+      <% } %>
+      <li class="<%= locals.currentPage === 'teams' ? 'active' : '' %>">
+        <a href="/admin/teams"><span class="nav-icon">◫</span> Équipes</a>
+      </li>
+      <% if (user.role === 'manager') { %>
       <li>
         <a href="/admin/secrets"><span class="nav-icon">🔑</span> Secrets</a>
       </li>
+      <% } %>
     </ul>
   </div>
   <% } %>

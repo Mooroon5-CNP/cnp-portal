@@ -83,45 +83,43 @@
               <div id="newDeploymentModal"
                 style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
                 <div
-                  style="background:var(--surface);width:640px;border-radius:8px;padding:20px;box-shadow:var(--shadow);">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                  style="background:var(--surface);width:600px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                     <h3 style="margin:0;">Nouveau déploiement</h3>
                     <button id="closeNewDeployment" class="btn btn-ghost">Fermer</button>
                   </div>
+
+                  <div style="background:var(--surface-alt,#f8f9fa);border-radius:6px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--text-muted);">
+                    La plateforme configure automatiquement le pipeline CI/CD, les secrets GitHub et les manifests
+                    Kubernetes. Vous n'avez rien d'autre à faire.
+                  </div>
+
                   <form action="/deployments" method="POST">
+                    <div class="form-group">
+                      <label for="githubRepoUrl">URL du dépôt GitHub</label>
+                      <input type="url" name="githubRepoUrl" id="githubRepoUrl"
+                        placeholder="https://github.com/org/mon-app" required
+                        oninput="suggestAppName(this.value)">
+                      <div class="form-hint">Le dépôt doit être accessible par la GitHub App CNP.</div>
+                    </div>
+
                     <div class="form-group">
                       <label for="appName">Nom de l'application</label>
                       <input type="text" name="appName" id="appName"
-                        placeholder="Nom du répertoire dans config-repo/apps/" required>
+                        placeholder="mon-app" required
+                        pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
+                        title="Minuscules, chiffres et tirets uniquement">
+                      <div class="form-hint">Minuscules et tirets uniquement (ex: mon-app). Doit être unique dans la plateforme.</div>
                     </div>
-                    <div class="form-group">
-                      <label for="githubRepoUrl">URL du dépôt GitHub</label>
-                      <input type="text" name="githubRepoUrl" id="githubRepoUrl"
-                        placeholder="https://github.com/Mooroon5-CNP/mon-app" required>
-                    </div>
+
                     <div class="form-group">
                       <label for="appPort">Port applicatif</label>
-                      <input type="number" name="appPort" id="appPort" min="1" placeholder="ex: 3000" required>
-                    </div>
-                    <div class="form-group">
-                      <label for="configRepoToken">Token CONFIG_REPO_TOKEN</label>
-                      <input type="password" name="configRepoToken" id="configRepoToken"
-                        placeholder="Token GitHub (écrit uniquement)" required>
-                      <div class="form-hint">Le token sera stocké chiffré et n'apparaîtra plus après sauvegarde.</div>
+                      <input type="number" name="appPort" id="appPort" min="1" max="65535" value="8080" required>
+                      <div class="form-hint">Le port que votre application écoute (doit correspondre à EXPOSE dans le Dockerfile).</div>
                     </div>
 
-                    <div class="form-group">
-                      <label>Cloud cible</label>
-                      <div class="v2-placeholder" title="bientôt disponible">Sélectionner (bientôt disponible)</div>
-                    </div>
-
-                    <div class="form-group">
-                      <label>Stratégie HA</label>
-                      <div class="v2-placeholder" title="bientôt disponible">Sélectionner (bientôt disponible)</div>
-                    </div>
-
-                    <div style="display:flex;gap:10px;margin-top:12px;">
-                      <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    <div style="display:flex;gap:10px;margin-top:16px;">
+                      <button type="submit" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
                     </div>
                   </form>
@@ -138,6 +136,23 @@
                 if (openBtn) openBtn.addEventListener('click', showModal);
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);
+
+                // Auto-suggest app name from repo URL
+                function suggestAppName(url) {
+                  const appNameInput = document.getElementById('appName');
+                  if (appNameInput.dataset.userEdited) return;
+                  try {
+                    const u = new URL(url);
+                    const parts = u.pathname.replace(/^\/+|\/+$/g, '').split('/');
+                    if (parts.length >= 2) {
+                      const repo = parts[1].replace(/\.git$/, '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                      appNameInput.value = repo;
+                    }
+                  } catch (_) {}
+                }
+                document.getElementById('appName').addEventListener('input', function() {
+                  this.dataset.userEdited = '1';
+                });
               </script>
 
           </div>

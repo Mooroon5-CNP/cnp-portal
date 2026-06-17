@@ -2,111 +2,233 @@
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
 
-    <body>
-        <div class="layout">
-            <%- include('../partials/sidebar') %>
-                <main class="main-content">
-                    <div class="content-wrapper">
-                        <%- include('../partials/flash') %>
+  <body>
+    <div class="layout">
+      <%- include('../partials/sidebar') %>
+        <main class="main-content">
+          <div class="content-wrapper">
+            <%- include('../partials/flash') %>
 
-                            <div class="page-header">
-                                <div>
-                                    <div class="page-title">
-                                        <%= deployment.appName %>
-                                    </div>
-                                    <div class="page-subtitle">Détails du pipeline</div>
-                                </div>
-                                <a href="/deployments" class="btn btn-secondary">← Retour</a>
-                            </div>
+              <div class="page-header">
+                <div>
+                  <div class="page-title"><%= deployment.appName %></div>
+                  <div class="page-subtitle">Détails du pipeline</div>
+                </div>
+                <a href="/deployments" class="btn btn-secondary">← Retour</a>
+              </div>
 
-                            <div class="card">
-                                <div class="card-header">
-                                    <span class="card-title">Dernière exécution</span>
-                                    <% if (latest) { %>
-                                        <a href="<%= githubActionsUrl %>" class="btn btn-ghost" target="_blank"
-                                            rel="noreferrer">Voir sur GitHub Actions</a>
-                                        <% } %>
-                                </div>
-                                <div class="card-body">
-                                    <% if (!latest) { %>
-                                        <div>Aucune exécution trouvée pour ce dépôt.</div>
-                                        <% } else { %>
-                                            <div style="display:flex;gap:16px;align-items:center;">
-                                                <div>
-                                                    <div><strong>ID</strong></div>
-                                                    <div class="font-mono">
-                                                        <%= latest.id %>
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div><strong>Trigger</strong></div>
-                                                    <div>
-                                                        <%= latest.event %>
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div><strong>Statut</strong></div>
-                                                    <div><span
-                                                            class="badge <%= (latest.status === 'in_progress') ? 'badge-warning' : (latest.conclusion === 'success' ? 'badge-success' : (latest.conclusion === 'failure' ? 'badge-danger' : 'badge-gray')) %>">
-                                                            <%= latest.status==='in_progress' ? 'CI en cours' :
-                                                                (latest.conclusion || latest.status) %>
-                                                        </span></div>
-                                                </div>
-                                                <div>
-                                                    <div><strong>Début</strong></div>
-                                                    <div class="text-muted">
-                                                        <%= latest.run_started_at || latest.created_at %>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <h4 style="margin-top:18px;margin-bottom:8px;">Jobs</h4>
-                                            <div>
-                                                <% jobs.forEach(job=> { %>
-                                                    <div
-                                                        style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-                                                        <div style="flex:1;">
-                                                            <div style="font-weight:600;">
-                                                                <%= job.name %>
-                                                            </div>
-                                                            <div class="text-muted" style="font-size:12px;">Durée: <%=
-                                                                    job.completed_at && job.started_at ? Math.max(0, new
-                                                                    Date(job.completed_at) - new Date(job.started_at))
-                                                                    : '-' %> ms</div>
-                                                        </div>
-                                                        <div style="display:flex;gap:8px;align-items:center;">
-                                                            <% if (job.status==='in_progress' ) { %>
-                                                                <span class="badge badge-warning">En cours</span>
-                                                                <% } else if (job.conclusion==='success' ) { %>
-                                                                    <span class="badge badge-success">Succès</span>
-                                                                    <% } else if (job.conclusion==='failure' ) { %>
-                                                                        <span class="badge badge-danger">Échec</span>
-                                                                        <% } else { %>
-                                                                            <span class="badge badge-gray">
-                                                                                <%= job.status || job.conclusion %>
-                                                                            </span>
-                                                                            <% } %>
-                                                                                <a href="<%= githubActionsUrl %>"
-                                                                                    target="_blank" rel="noreferrer"
-                                                                                    class="btn btn-sm btn-ghost">Voir
-                                                                                    les logs</a>
-                                                        </div>
-                                                    </div>
-                                                    <% }) %>
-                                            </div>
-
-                                            <% if (failureHint) { %>
-                                                <div class="flash flash-error mt-4"><strong>Indice:</strong>
-                                                    <%= failureHint %>
-                                                </div>
-                                                <% } %>
-                                                    <% } %>
-                                </div>
-                            </div>
-
+              <!-- ── Onboarding: configuring ─────────────────────────────── -->
+              <% if (deployment.onboardingStatus === 'configuring') { %>
+                <div id="onboarding-card" class="card">
+                  <div class="card-header">
+                    <span class="card-title">Configuration en cours</span>
+                    <span class="badge badge-warning">En cours</span>
+                  </div>
+                  <div class="card-body">
+                    <div id="onboarding-steps" style="display:flex;flex-direction:column;gap:10px;padding:8px 0;">
+                      <div class="onboarding-step" data-step="config-repo">
+                        <span class="step-icon">⏳</span>
+                        <span>Création des manifests Kubernetes dans config-repo</span>
+                      </div>
+                      <div class="onboarding-step" data-step="registry">
+                        <span class="step-icon">⏳</span>
+                        <span>Enregistrement de l'application dans le registre</span>
+                      </div>
+                      <div class="onboarding-step" data-step="ci">
+                        <span class="step-icon">⏳</span>
+                        <span>Création du pipeline CI/CD dans le dépôt applicatif</span>
+                      </div>
+                      <div class="onboarding-step" data-step="secret">
+                        <span class="step-icon">⏳</span>
+                        <span>Injection du secret CONFIG_REPO_TOKEN</span>
+                      </div>
+                      <div class="onboarding-step" data-step="branch">
+                        <span class="step-icon">⏳</span>
+                        <span>Création de la branche <code>prod</code></span>
+                      </div>
+                      <div class="onboarding-step" data-step="trigger">
+                        <span class="step-icon">⏳</span>
+                        <span>Déclenchement du premier pipeline</span>
+                      </div>
                     </div>
-                </main>
-        </div>
-    </body>
+                    <div id="onboarding-error" style="display:none;" class="flash flash-error mt-4"></div>
+                  </div>
+                </div>
 
+              <!-- ── Onboarding: failed (setup error) ───────────────────── -->
+              <% } else if (deployment.onboardingStatus === 'failed' && !latest) { %>
+                <div class="card">
+                  <div class="card-header">
+                    <span class="card-title">Échec de la configuration</span>
+                    <span class="badge badge-danger">Erreur</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="flash flash-error">
+                      <strong>Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.</strong>
+                      <% if (deployment.onboardingError) { %>
+                        <div style="margin-top:8px;font-size:13px;color:inherit;opacity:0.85;">
+                          Détail : <%= deployment.onboardingError %>
+                        </div>
+                      <% } %>
+                    </div>
+                  </div>
+                </div>
+
+              <!-- ── Ready: show pipeline runs ──────────────────────────── -->
+              <% } else { %>
+                <!-- Final status banner (shown once CI has a result) -->
+                <% if (latest && latest.status === 'completed') { %>
+                  <% if (latest.conclusion === 'success') { %>
+                    <div class="flash flash-success" style="margin-bottom:16px;">
+                      <strong>Votre application a été déployée avec succès.</strong>
+                    </div>
+                  <% } else if (latest.conclusion === 'failure') { %>
+                    <div class="flash flash-error" style="margin-bottom:16px;">
+                      <strong>Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.</strong>
+                    </div>
+                  <% } %>
+                <% } %>
+
+                <div class="card">
+                  <div class="card-header">
+                    <span class="card-title">Dernière exécution</span>
+                    <% if (latest) { %>
+                      <a href="<%= githubActionsUrl %>" class="btn btn-ghost" target="_blank" rel="noreferrer">
+                        Voir sur GitHub Actions
+                      </a>
+                    <% } %>
+                  </div>
+                  <div class="card-body">
+                    <% if (!latest) { %>
+                      <div id="waiting-run" style="color:var(--text-muted);">
+                        En attente du premier pipeline CI...
+                        <span style="margin-left:8px;">⏳</span>
+                      </div>
+                    <% } else { %>
+                      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                        <div>
+                          <div><strong>ID</strong></div>
+                          <div class="font-mono"><%= latest.id %></div>
+                        </div>
+                        <div>
+                          <div><strong>Trigger</strong></div>
+                          <div><%= latest.event %></div>
+                        </div>
+                        <div>
+                          <div><strong>Statut</strong></div>
+                          <div>
+                            <span class="badge <%= (latest.status === 'in_progress' || latest.status === 'queued') ? 'badge-warning' : (latest.conclusion === 'success' ? 'badge-success' : (latest.conclusion === 'failure' ? 'badge-danger' : 'badge-gray')) %>">
+                              <%= latest.status === 'in_progress' ? 'CI en cours' : latest.status === 'queued' ? 'En file' : (latest.conclusion || latest.status) %>
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <div><strong>Début</strong></div>
+                          <div class="text-muted"><%= latest.run_started_at || latest.created_at %></div>
+                        </div>
+                      </div>
+
+                      <h4 style="margin-top:18px;margin-bottom:8px;">Jobs</h4>
+                      <div>
+                        <% jobs.forEach(job => { %>
+                          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+                            <div style="flex:1;">
+                              <div style="font-weight:600;"><%= job.name %></div>
+                              <div class="text-muted" style="font-size:12px;">
+                                Durée: <%= job.completed_at && job.started_at ? Math.max(0, new Date(job.completed_at) - new Date(job.started_at)) : '-' %> ms
+                              </div>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                              <% if (job.status === 'in_progress') { %>
+                                <span class="badge badge-warning">En cours</span>
+                              <% } else if (job.conclusion === 'success') { %>
+                                <span class="badge badge-success">Succès</span>
+                              <% } else if (job.conclusion === 'failure') { %>
+                                <span class="badge badge-danger">Échec</span>
+                              <% } else { %>
+                                <span class="badge badge-gray"><%= job.status || job.conclusion %></span>
+                              <% } %>
+                              <a href="<%= githubActionsUrl %>" target="_blank" rel="noreferrer" class="btn btn-sm btn-ghost">
+                                Logs
+                              </a>
+                            </div>
+                          </div>
+                        <% }) %>
+                      </div>
+
+                      <% if (failureHint) { %>
+                        <div class="flash flash-error mt-4">
+                          <strong>Indice :</strong> <%= failureHint %>
+                        </div>
+                      <% } %>
+                    <% } %>
+                  </div>
+                </div>
+              <% } %>
+
+          </div>
+        </main>
+    </div>
+
+    <!-- ── Polling script ────────────────────────────────────────────────── -->
+    <script>
+      (function () {
+        const depId = '<%= deployment.id %>';
+        const initialStatus = '<%= deployment.onboardingStatus %>';
+
+        // Animate onboarding steps while configuring.
+        if (initialStatus === 'configuring') {
+          const steps = document.querySelectorAll('.onboarding-step');
+          let current = 0;
+          const stepInterval = setInterval(() => {
+            if (current < steps.length) {
+              steps[current].querySelector('.step-icon').textContent = '✓';
+              steps[current].style.color = 'var(--success, #22c55e)';
+              current++;
+            } else {
+              clearInterval(stepInterval);
+            }
+          }, 2500);
+        }
+
+        // Only poll if the pipeline is not yet in a terminal state.
+        const latestConclusion = '<%= latest ? (latest.conclusion || "") : "" %>';
+        const latestStatus = '<%= latest ? latest.status : "" %>';
+        const isTerminal = (latestConclusion === 'success' || latestConclusion === 'failure' || latestConclusion === 'cancelled');
+        const isConfiguring = initialStatus === 'configuring';
+
+        if (!isTerminal || isConfiguring) {
+          const pollInterval = setInterval(async () => {
+            try {
+              const resp = await fetch(`/deployments/${depId}/status`);
+              if (!resp.ok) return;
+              const data = await resp.json();
+
+              if (data.phase === 'configuring') return; // still setting up
+
+              if (data.phase === 'success' || data.phase === 'failed') {
+                clearInterval(pollInterval);
+                window.location.reload();
+                return;
+              }
+
+              // If we were configuring and are now running/waiting, reload to show runs UI.
+              if (isConfiguring && (data.phase === 'running' || data.phase === 'waiting')) {
+                clearInterval(pollInterval);
+                window.location.reload();
+                return;
+              }
+
+              // If run is now completed, reload.
+              if (data.phase === 'success' || data.phase === 'failed') {
+                clearInterval(pollInterval);
+                window.location.reload();
+              }
+            } catch (_) {}
+          }, 4000);
+        }
+      })();
+    </script>
+
+  </body>
 </html>

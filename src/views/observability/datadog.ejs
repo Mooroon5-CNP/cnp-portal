@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">DataDog</div>
+          <div class="page-subtitle">Observabilité — logs, métriques et alertes</div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <% if (can('observability:access:request')) { %>
+          <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès</button>
+          <% } %>
+          <!-- TODO: replace with real DataDog URL -->
+          <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" class="btn btn-primary">Ouvrir DataDog ↗</a>
+        </div>
+      </div>
+
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Accéder à DataDog</span></div>
+        <div class="card-body" style="line-height:1.8;">
+          <p style="margin-bottom:16px;">L'accès à DataDog est géré par invitation. Suivez les étapes ci-dessous pour obtenir un accès.</p>
+
+          <ol style="margin-left:20px;margin-bottom:0;">
+            <li style="margin-bottom:12px;">
+              <strong>Demander un accès</strong> — Contactez votre manager ou un membre de l'équipe CNP (canal Slack <code>#cnp-infra</code>) en indiquant votre adresse e-mail et le contexte de votre besoin.
+            </li>
+            <li style="margin-bottom:12px;">
+              <strong>Accepter l'invitation</strong> — Vous recevrez un e-mail d'invitation de la part de DataDog. Cliquez sur le lien pour créer votre compte ou vous connecter avec votre compte existant.
+            </li>
+            <li style="margin-bottom:12px;">
+              <strong>Se connecter</strong> — Rendez-vous sur
+              <!-- TODO: replace with real DataDog URL -->
+              <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" style="color:var(--primary);">app.datadoghq.eu</a>
+              et authentifiez-vous avec le compte créé lors de l'invitation.
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Retrouver le projet CNP</span></div>
+        <div class="card-body" style="line-height:1.8;">
+          <p style="margin-bottom:12px;">Une fois connecté, naviguez dans DataDog de la façon suivante :</p>
+          <ol style="margin-left:20px;margin-bottom:0;">
+            <li style="margin-bottom:12px;">
+              Dans le menu de gauche, cliquez sur <strong>Infrastructure</strong> ou <strong>APM</strong> selon votre besoin.
+            </li>
+            <li style="margin-bottom:12px;">
+              Utilisez le filtre <code>env:prod service:cnp-portal</code> (ou <code>env:dev</code> pour l'environnement de dev) pour isoler les données du projet CNP.
+            </li>
+            <li style="margin-bottom:12px;">
+              Les dashboards CNP se trouvent dans <strong>Dashboards → Dashboard List</strong>, recherchez <code>CNP</code>.
+            </li>
+            <li style="margin-bottom:0;">
+              Pour les logs, allez dans <strong>Logs → Search</strong> et filtrez par <code>service:cnp-portal</code>.
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:20px;">
+          <!-- TODO: update with real DataDog org URL once configured -->
+          Lien direct vers l'organisation DataDog CNP :
+          <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" style="color:var(--primary);margin-left:6px;">https://app.datadoghq.eu/fake-cnp-org</a>
+        </div>
+      </div>
+
+      <!-- Pending access requests — managers only -->
+      <% if (can('observability:access:approve') && accessRequests.length > 0) { %>
+      <div class="card mt-6">
+        <div class="card-header"><span class="card-title">Demandes d'accès DataDog en attente</span></div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Utilisateur</th><th>Raison</th><th>Date</th><th>Statut</th><th>Action</th></tr></thead>
+            <tbody>
+              <% accessRequests.forEach((r, idx) => { %>
+              <tr>
+                <td class="font-mono"><%= r.userId %></td>
+                <td><%= r.reason %></td>
+                <td class="text-muted"><%= new Date(r.requestedAt).toLocaleString('fr-FR') %></td>
+                <td><% if (r.approved) { %><span class="badge badge-success">Approuvé</span><% } else { %><span class="badge badge-warning">En attente</span><% } %></td>
+                <td>
+                  <% if (!r.approved) { %>
+                  <form action="/observability/access-request/<%= idx %>/approve" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
+                  </form>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- Access request modal -->
+      <% if (can('observability:access:request')) { %>
+      <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+        <div class="card" style="width:460px;">
+          <div class="card-header">
+            <span class="card-title">Demande d'accès DataDog</span>
+            <button onclick="document.getElementById('access-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
+          </div>
+          <div class="card-body">
+            <p style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">Votre demande sera transmise aux managers. Ils vous fourniront un compte DataDog par retour.</p>
+            <form action="/observability/access-request" method="POST">
+              <div class="form-group">
+                <label for="reason">Raison de la demande</label>
+                <textarea name="reason" id="reason" rows="3" placeholder="Décrivez pourquoi vous avez besoin d'un accès DataDog..." required></textarea>
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button type="submit" class="btn btn-primary">Envoyer la demande</button>
+                <button type="button" onclick="document.getElementById('access-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <% } %>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

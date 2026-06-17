@@ -37,6 +37,7 @@ const config = {
     privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
     installationId: process.env.GITHUB_APP_INSTALLATION_ID,
     configRepoName: process.env.GITHUB_CONFIG_REPO_NAME,
+    configRepoToken: process.env.GITHUB_CONFIG_REPO_TOKEN || null,
   },
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,

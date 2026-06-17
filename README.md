@@ -2,6 +2,39 @@
 
 Cloud Native Platform — Interface de gestion multi-cloud (MVP)
 
+
+Developer's test-app-cnp repo
+  └─ Creates new app (e.g., payments-service)
+  └─ Pushes to main → CI builds image
+
+GitHub Actions in test-app-cnp
+  └─ [NEW STEP] Calls API to register app:
+     POST https://your-api.example.com/v1/register-app
+     {
+       "app_name": "payments-service",
+       "team_owner": "team-payments",
+       "app_port": "3000",
+       "repo_url": "https://github.com/Mooroon5-CNP/payments-service",
+       "clusters": ["aws", "gcp"],
+       "environments": ["dev", "prod"]
+     }
+
+API Handler (serverless function or webhook receiver)
+  ├─ 1. Adds entry to registry.yaml (commit to config-repo)
+  ├─ 2. Creates AppProject YAML for team-payments
+  ├─ 3. Creates ApplicationSet YAML for payments-service
+  └─ 4. kubectl apply both (OR: triggers Meta-Application)
+
+Meta-Application (Phase 3.5)
+  └─ Detects registry.yaml change
+  └─ Auto-creates AppProject + ApplicationSets
+  └─ Everything synced automatically
+
+ArgoCD
+  └─ New app now visible in UI
+  └─ Deploys to dev automatically (main → dev overlay)
+  └─ Awaits manual approval for prod (→ prod overlay)
+
 ## Stack
 
 - **Runtime:** Node.js 20 + Express 4 + EJS (SSR)

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Équipes</div>
+          <div class="page-subtitle">Gestion des équipes et de leurs membres</div>
+        </div>
+        <% if (can('teams:create')) { %>
+        <button onclick="document.getElementById('create-team-modal').style.display='flex'" class="btn btn-primary">+ Créer une équipe</button>
+        <% } %>
+      </div>
+
+      <% if (teams.length === 0) { %>
+      <div class="card">
+        <div class="card-body" style="text-align:center;color:var(--text-muted);padding:40px;">
+          Aucune équipe créée.
+          <% if (can('teams:create')) { %>
+          <br><br>
+          <button onclick="document.getElementById('create-team-modal').style.display='flex'" class="btn btn-primary">Créer la première équipe</button>
+          <% } %>
+        </div>
+      </div>
+      <% } %>
+
+      <% teams.forEach(team => { %>
+      <%
+        const members = allUsers.filter(u => team.memberIds.includes(u.id));
+        const isMyTeam = team.memberIds.includes(user.id);
+        const canAddDevs = user.role === 'devops' && isMyTeam;
+        const canManage = user.role === 'manager';
+        // Users not yet in this team, filtered by what current user can add
+        const addableUsers = allUsers.filter(u => {
+          if (team.memberIds.includes(u.id)) return false;
+          if (canAddDevs) return u.role === 'dev';
+          if (canManage) return true;
+          return false;
+        });
+      %>
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title"><%= team.name %></span>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="badge badge-gray"><%= members.length %> membre<%= members.length !== 1 ? 's' : '' %></span>
+            <% if (canManage) { %>
+            <form action="/admin/teams/<%= team.id %>/delete" method="POST" class="inline-form"
+                  onsubmit="return confirm('Supprimer définitivement l\'équipe \"<%= team.name %>\" ?')">
+              <button type="submit" class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger);">Supprimer</button>
+            </form>
+            <% } %>
+          </div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr><th>Utilisateur</th><th>Rôle</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              <% if (members.length === 0) { %>
+              <tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:20px;">Aucun membre</td></tr>
+              <% } %>
+              <% members.forEach(m => { %>
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <% if (m.avatarUrl) { %>
+                      <img src="<%= m.avatarUrl %>" style="width:28px;height:28px;border-radius:50%;object-fit:cover;" alt="">
+                    <% } else { %>
+                      <div style="width:28px;height:28px;border-radius:50%;background:var(--primary-muted);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--primary);">
+                        <%= m.username.charAt(0).toUpperCase() %>
+                      </div>
+                    <% } %>
+                    <span style="font-weight:500;"><%= m.username %></span>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge <%= m.role === 'manager' ? 'badge-danger' : m.role === 'devops' ? 'badge-warning' : 'badge-gray' %>">
+                    <%= m.role %>
+                  </span>
+                </td>
+                <td>
+                  <%
+                    const canRemove = canManage || (canAddDevs && m.role === 'dev');
+                    // Managers can remove anyone including themselves; devops cannot remove themselves
+                    const selfRemoveBlocked = !canManage && m.id === user.id;
+                  %>
+                  <% if (canRemove && !selfRemoveBlocked) { %>
+                  <form action="/admin/teams/<%= team.id %>/members/<%= m.id %>/remove" method="POST" class="inline-form"
+                        onsubmit="return confirm('Retirer <%= m.username %> de l\'équipe <%= team.name %> ?')">
+                    <button type="submit" class="btn btn-secondary btn-sm">Retirer</button>
+                  </form>
+                  <% } else { %>
+                  —
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+
+        <% if (canManage || canAddDevs) { %>
+        <div class="card-body" style="border-top:1px solid var(--border);padding-top:16px;">
+          <% if (addableUsers.length > 0) { %>
+          <form action="/admin/teams/<%= team.id %>/members" method="POST" style="display:flex;gap:10px;align-items:center;">
+            <select name="userId" style="flex:1;max-width:280px;">
+              <% addableUsers.forEach(u => { %>
+              <option value="<%= u.id %>"><%= u.username %> (<%= u.role %>)</option>
+              <% }) %>
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">Ajouter</button>
+          </form>
+          <% } else { %>
+          <span style="color:var(--text-muted);font-size:13px;">Tous les utilisateurs éligibles sont déjà membres.</span>
+          <% } %>
+        </div>
+        <% } %>
+      </div>
+      <% }) %>
+
+      <!-- Create team modal — managers only -->
+      <% if (can('teams:create')) { %>
+      <div id="create-team-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+        <div class="card" style="width:420px;">
+          <div class="card-header">
+            <span class="card-title">Nouvelle équipe</span>
+            <button onclick="document.getElementById('create-team-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
+          </div>
+          <div class="card-body">
+            <form action="/admin/teams" method="POST">
+              <div class="form-group">
+                <label for="team-name">Nom de l'équipe</label>
+                <input type="text" id="team-name" name="name" placeholder="ex: equipe-backend"
+                       pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]|[a-z0-9]"
+                       title="Minuscules, chiffres et tirets uniquement — sans tiret en début ou fin"
+                       required autofocus>
+                <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">Minuscules, chiffres et tirets uniquement · ex: <code>equipe-backend</code>, <code>team-2</code></div>
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button type="submit" class="btn btn-primary">Créer</button>
+                <button type="button" onclick="document.getElementById('create-team-modal').style.display='none'" class="btn btn-secondary">Annuler</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <% } %>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
