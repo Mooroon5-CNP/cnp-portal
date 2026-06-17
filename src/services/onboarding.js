@@ -370,6 +370,21 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-c
 
     try {
         // ------------------------------------------------------------------
+        // Pre-check: verify GitHub App can access Actions secrets on app repo.
+        // Returns 404 when Actions is disabled on the repo (repo settings →
+        // Actions → General must be set to "Allow all actions").
+        // ------------------------------------------------------------------
+        try {
+            await githubClient.checkActionsEnabled(appOwner, appRepo);
+        } catch (e) {
+            await updateStatus('failed',
+                `GitHub Actions est désactivé sur le dépôt ${appOwner}/${appRepo}. ` +
+                `Allez dans Settings → Actions → General et activez "Allow all actions".`
+            );
+            return;
+        }
+
+        // ------------------------------------------------------------------
         // Step 1: Create config-repo base manifests
         // ------------------------------------------------------------------
         const base = `apps/${appName}/base`;
@@ -440,4 +455,106 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-c
     }
 }
 
-module.exports = { onboardApp };
+// Known config-repo file paths for an app (mirrors what onboardApp creates).
+function configRepoPaths(appName) {
+    const base = `apps/${appName}/base`;
+    const paths = [
+        `${base}/deployment.yaml`,
+        `${base}/kustomization.yaml`,
+        `${base}/service.yaml`,
+        `${base}/netpol-default-deny.yaml`,
+        `${base}/netpol-allow-dns.yaml`,
+        `${base}/netpol-allow-ingress-ctrl.yaml`,
+    ];
+    for (const env of ['dev', 'prod']) {
+        const ov = `apps/${appName}/overlays/${env}`;
+        paths.push(`${ov}/kustomization.yaml`, `${ov}/namespace.yaml`, `${ov}/configmap.yaml`, `${ov}/ingress.yaml`);
+    }
+    return paths;
+}
+
+async function removeFromRegistry(owner, repo, appName, token) {
+    const path = 'apps/registry.yaml';
+    const sha = await githubService.getFileSha(owner, repo, path, token);
+    if (!sha) return;
+    const raw = await githubService.getFileContent(owner, repo, path, token);
+    if (!raw) return;
+    let doc;
+    try { doc = yaml.load(raw); } catch (_) { return; }
+    if (!doc || !Array.isArray(doc.apps)) return;
+    const before = doc.apps.length;
+    doc.apps = doc.apps.filter(a => a.app_name !== appName);
+    if (doc.apps.length === before) return; // wasn't there
+    const newContent = yaml.dump(doc, { lineWidth: -1, noRefs: true });
+    await githubService.createOrUpdateFileWithToken(
+        owner, repo, path, newContent,
+        `chore(registry): remove ${appName} via CNP Portal`,
+        token, sha,
+    );
+}
+
+/**
+ * Removes everything the platform created for an app:
+ *   1. Deletes all K8s manifests from config-repo.
+ *   2. Removes the app from registry.yaml.
+ *   3. Deletes .github/workflows/ci.yml from the app repo (GitHub App).
+ *   4. Deletes CONFIG_REPO_TOKEN secret from the app repo (GitHub App).
+ */
+async function offboardApp({ appName, githubRepoUrl }) {
+    const configRepoToken = config.github.configRepoToken;
+    const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
+    const parsed = githubService.parseRepoUrl(githubRepoUrl);
+
+    const errors = [];
+
+    // Step 1 & 2: config-repo cleanup via PAT
+    if (configRepoToken) {
+        const paths = configRepoPaths(appName);
+        for (const path of paths) {
+            try {
+                const sha = await githubService.getFileSha(crOwner, crRepo, path, configRepoToken);
+                if (sha) {
+                    await githubService.deleteFileWithToken(
+                        crOwner, crRepo, path, sha,
+                        `chore: remove ${path} (app deleted via CNP Portal)`,
+                        configRepoToken,
+                    );
+                }
+            } catch (e) {
+                errors.push(`config-repo ${path}: ${e.message}`);
+            }
+        }
+        try {
+            await removeFromRegistry(crOwner, crRepo, appName, configRepoToken);
+        } catch (e) {
+            errors.push(`registry.yaml: ${e.message}`);
+        }
+    }
+
+    // Step 3 & 4: app repo cleanup via GitHub App
+    if (parsed) {
+        const { owner: appOwner, repo: appRepo } = parsed;
+        try {
+            const ciSha = await githubClient.getFileSha(appOwner, appRepo, '.github/workflows/ci.yml');
+            if (ciSha) {
+                await githubClient.deleteFile(
+                    appOwner, appRepo, '.github/workflows/ci.yml', ciSha,
+                    'chore: remove CNP pipeline (app deleted via CNP Portal)',
+                );
+            }
+        } catch (e) {
+            errors.push(`ci.yml: ${e.message}`);
+        }
+        try {
+            await githubClient.deleteSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN');
+        } catch (e) {
+            errors.push(`secret: ${e.message}`);
+        }
+    }
+
+    if (errors.length > 0) {
+        throw new Error(`Partial cleanup — some resources could not be removed:\n${errors.join('\n')}`);
+    }
+}
+
+module.exports = { onboardApp, offboardApp };

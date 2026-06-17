@@ -12,10 +12,40 @@
               <div class="page-header">
                 <div>
                   <div class="page-title"><%= deployment.appName %></div>
-                  <div class="page-subtitle">Détails du pipeline</div>
+                  <div class="page-subtitle" style="display:flex;align-items:center;gap:8px;">
+                    Détails du pipeline
+                    <% if (ownerTeam) { %>
+                    <a href="/deployments?team=<%= ownerTeam.id %>" class="badge badge-gray" style="text-decoration:none;font-size:12px;"><%= ownerTeam.name %></a>
+                    <% } %>
+                  </div>
                 </div>
-                <a href="/deployments" class="btn btn-secondary">← Retour</a>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <% if (can('deployments:delete')) { %>
+                    <% if (pendingDeletion) { %>
+                      <span class="badge badge-warning">Suppression demandée</span>
+                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('approveDeleteModal').style.display='flex'">Approuver</button>
+                      <form action="/deployments/<%= deployment.id %>/reject-delete" method="POST" class="inline-form">
+                        <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
+                      </form>
+                    <% } else { %>
+                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'">Supprimer</button>
+                    <% } %>
+                  <% } else if (can('deployments:delete:request')) { %>
+                    <% if (pendingDeletion) { %>
+                      <span class="badge badge-warning">Demande de suppression en attente</span>
+                    <% } else { %>
+                      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('requestDeleteModal').style.display='flex'">Demander suppression</button>
+                    <% } %>
+                  <% } %>
+                  <a href="/deployments" class="btn btn-secondary">← Retour</a>
+                </div>
               </div>
+
+              <% if (pendingDeletion && can('deployments:delete')) { %>
+                <div class="flash flash-error" style="margin-bottom:16px;">
+                  <strong>Demande de suppression en attente</strong> — soumise le <%= new Date(pendingDeletion.createdAt).toLocaleString('fr-FR') %><% if (pendingDeletion.reason) { %> : "<%= pendingDeletion.reason %>"<% } %>.
+                </div>
+              <% } %>
 
               <!-- ── Onboarding: configuring ─────────────────────────────── -->
               <% if (deployment.onboardingStatus === 'configuring') { %>
@@ -25,35 +55,21 @@
                     <span class="badge badge-warning">En cours</span>
                   </div>
                   <div class="card-body">
-                    <div id="onboarding-steps" style="display:flex;flex-direction:column;gap:10px;padding:8px 0;">
-                      <div class="onboarding-step" data-step="config-repo">
-                        <span class="step-icon">⏳</span>
-                        <span>Création des manifests Kubernetes dans config-repo</span>
-                      </div>
-                      <div class="onboarding-step" data-step="registry">
-                        <span class="step-icon">⏳</span>
-                        <span>Enregistrement de l'application dans le registre</span>
-                      </div>
-                      <div class="onboarding-step" data-step="ci">
-                        <span class="step-icon">⏳</span>
-                        <span>Création du pipeline CI/CD dans le dépôt applicatif</span>
-                      </div>
-                      <div class="onboarding-step" data-step="secret">
-                        <span class="step-icon">⏳</span>
-                        <span>Injection du secret CONFIG_REPO_TOKEN</span>
-                      </div>
-                      <div class="onboarding-step" data-step="branch">
-                        <span class="step-icon">⏳</span>
-                        <span>Création de la branche <code>prod</code></span>
-                      </div>
-                      <div class="onboarding-step" data-step="trigger">
-                        <span class="step-icon">⏳</span>
-                        <span>Déclenchement du premier pipeline</span>
-                      </div>
+                    <div style="display:flex;align-items:center;gap:12px;padding:12px 0;color:var(--text-muted);">
+                      <span style="font-size:22px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
+                      <span>La plateforme configure votre application — merci de patienter...</span>
                     </div>
-                    <div id="onboarding-error" style="display:none;" class="flash flash-error mt-4"></div>
+                    <div style="display:flex;flex-direction:column;gap:8px;padding:8px 0;font-size:13px;color:var(--text-muted);">
+                      <div>⏳ Création des manifests Kubernetes dans config-repo</div>
+                      <div>⏳ Enregistrement dans le registre applicatif</div>
+                      <div>⏳ Création du pipeline CI/CD dans le dépôt</div>
+                      <div>⏳ Injection du secret <code>CONFIG_REPO_TOKEN</code></div>
+                      <div>⏳ Création de la branche <code>prod</code></div>
+                      <div>⏳ Déclenchement du premier pipeline</div>
+                    </div>
                   </div>
                 </div>
+                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 
               <!-- ── Onboarding: failed (setup error) ───────────────────── -->
               <% } else if (deployment.onboardingStatus === 'failed' && !latest) { %>
@@ -166,8 +182,116 @@
                 </div>
               <% } %>
 
+              <!-- ── Team access panel (devops + manager) ─────────────────────── -->
+              <% if (can('deployments:manage-team-access')) { %>
+              <div class="card" style="margin-top:20px;">
+                <div class="card-header">
+                  <span class="card-title">Accès par équipe</span>
+                </div>
+                <div class="card-body">
+                  <% if (accessTeams.length === 0) { %>
+                    <p style="color:var(--text-muted);font-size:13px;margin:0;">Aucune équipe n'a accès à ce déploiement en dehors de ses membres directs.</p>
+                  <% } else { %>
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                      <thead>
+                        <tr style="border-bottom:1px solid var(--border);">
+                          <th style="text-align:left;padding:6px 8px;font-weight:600;">Équipe</th>
+                          <th style="text-align:left;padding:6px 8px;font-weight:600;">Rôle</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <% accessTeams.forEach(t => { %>
+                        <tr style="border-bottom:1px solid var(--border);">
+                          <td style="padding:6px 8px;"><strong><%= t.name %></strong></td>
+                          <td style="padding:6px 8px;">
+                            <% if (ownerTeam && t.id === ownerTeam.id) { %>
+                              <span class="badge badge-success">Propriétaire</span>
+                            <% } else { %>
+                              <span class="badge badge-gray">Lecture</span>
+                            <% } %>
+                          </td>
+                          <td style="padding:6px 8px;text-align:right;">
+                            <% if (!ownerTeam || t.id !== ownerTeam.id) { %>
+                            <form action="/deployments/<%= deployment.id %>/team-access/<%= t.id %>/revoke" method="POST" class="inline-form">
+                              <button type="submit" class="btn btn-secondary btn-sm">Révoquer</button>
+                            </form>
+                            <% } %>
+                          </td>
+                        </tr>
+                        <% }) %>
+                      </tbody>
+                    </table>
+                  <% } %>
+
+                  <% if (otherTeams.length > 0) { %>
+                  <form action="/deployments/<%= deployment.id %>/team-access" method="POST" style="display:flex;gap:10px;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+                    <select name="teamId" style="flex:1;max-width:260px;">
+                      <% otherTeams.forEach(t => { %>
+                      <option value="<%= t.id %>"><%= t.name %></option>
+                      <% }) %>
+                    </select>
+                    <button type="submit" class="btn btn-primary btn-sm">Donner accès</button>
+                  </form>
+                  <% } %>
+                </div>
+              </div>
+              <% } %>
+
           </div>
         </main>
+    </div>
+
+    <!-- ── Delete modal (manager) ──────────────────────────────────────── -->
+    <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+        <h3 style="margin:0 0 8px;">Supprimer l'application</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;">Supprimer "<strong><%= deployment.appName %></strong>" et toutes ses ressources ?</p>
+        <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
+          Les manifests Kubernetes dans config-repo, le pipeline CI/CD et les secrets GitHub seront définitivement supprimés.
+        </div>
+        <form action="/deployments/<%= deployment.id %>/delete" method="POST">
+          <div style="display:flex;gap:10px;">
+            <button type="submit" class="btn btn-danger">Confirmer la suppression</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('deleteModal').style.display='none'">Annuler</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ── Approve deletion modal (manager reviewing a request) ─────────── -->
+    <div id="approveDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+        <h3 style="margin:0 0 8px;">Approuver la suppression</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;">Approuver la demande de suppression de "<strong><%= deployment.appName %></strong>" ?</p>
+        <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
+          Cela supprimera définitivement l'application et toutes ses ressources.
+        </div>
+        <form action="/deployments/<%= deployment.id %>/approve-delete" method="POST">
+          <div style="display:flex;gap:10px;">
+            <button type="submit" class="btn btn-danger">Confirmer et supprimer</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('approveDeleteModal').style.display='none'">Annuler</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ── Request deletion modal (dev/devops) ──────────────────────────── -->
+    <div id="requestDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+        <h3 style="margin:0 0 8px;">Demander la suppression</h3>
+        <p style="color:var(--text-muted);margin-bottom:16px;">Un manager devra valider cette demande avant que l'application soit supprimée.</p>
+        <form action="/deployments/<%= deployment.id %>/request-delete" method="POST">
+          <div class="form-group">
+            <label for="deleteReason">Raison (optionnel)</label>
+            <textarea name="reason" id="deleteReason" rows="3" style="width:100%;resize:vertical;" placeholder="Expliquez pourquoi cette application doit être supprimée..."></textarea>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:12px;">
+            <button type="submit" class="btn btn-primary">Envoyer la demande</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('requestDeleteModal').style.display='none'">Annuler</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <!-- ── Polling script ────────────────────────────────────────────────── -->
@@ -175,21 +299,6 @@
       (function () {
         const depId = '<%= deployment.id %>';
         const initialStatus = '<%= deployment.onboardingStatus %>';
-
-        // Animate onboarding steps while configuring.
-        if (initialStatus === 'configuring') {
-          const steps = document.querySelectorAll('.onboarding-step');
-          let current = 0;
-          const stepInterval = setInterval(() => {
-            if (current < steps.length) {
-              steps[current].querySelector('.step-icon').textContent = '✓';
-              steps[current].style.color = 'var(--success, #22c55e)';
-              current++;
-            } else {
-              clearInterval(stepInterval);
-            }
-          }, 2500);
-        }
 
         // Only poll if the pipeline is not yet in a terminal state.
         const latestConclusion = '<%= latest ? (latest.conclusion || "") : "" %>';

@@ -1,71 +1,91 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const db = require('../models/db');
 
-// In-memory store — data is lost on restart (consistent with other portal stores)
-const teams = [];
+db.exec(`
+  CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS team_members (
+    team_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (team_id, user_id)
+  )
+`);
+
+function _hydrate(t) {
+  const members = db.prepare('SELECT user_id FROM team_members WHERE team_id = ?').all(t.id);
+  return {
+    id: t.id,
+    name: t.name,
+    memberIds: members.map(m => m.user_id),
+    createdAt: t.created_at,
+  };
+}
 
 function createTeam(name) {
-  const team = { id: uuidv4(), name, memberIds: new Set(), createdAt: new Date().toISOString() };
-  teams.push(team);
-  return _serialize(team);
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?)').run(id, name, now);
+  return getTeam(id);
 }
 
 function listTeams() {
-  return teams.map(_serialize);
+  return db.prepare('SELECT * FROM teams ORDER BY created_at ASC').all().map(_hydrate);
 }
 
 function getTeam(id) {
-  const t = teams.find(t => t.id === id);
-  return t ? _serialize(t) : null;
+  const t = db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
+  return t ? _hydrate(t) : null;
 }
 
 function addMember(teamId, userId) {
-  const team = _raw(teamId);
-  if (!team) throw new Error('Équipe introuvable');
-  team.memberIds.add(userId);
-  return _serialize(team);
+  if (!getTeam(teamId)) throw new Error('Équipe introuvable');
+  try {
+    db.prepare('INSERT INTO team_members (team_id, user_id) VALUES (?, ?)').run(teamId, userId);
+  } catch (_) {} // duplicate — already a member
+  return getTeam(teamId);
 }
 
 function removeMember(teamId, userId) {
-  const team = _raw(teamId);
-  if (!team) throw new Error('Équipe introuvable');
-  team.memberIds.delete(userId);
-  return _serialize(team);
+  if (!getTeam(teamId)) throw new Error('Équipe introuvable');
+  db.prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ?').run(teamId, userId);
+  return getTeam(teamId);
 }
 
 function deleteTeam(id) {
-  const idx = teams.findIndex(t => t.id === id);
-  if (idx === -1) throw new Error('Équipe introuvable');
-  teams.splice(idx, 1);
+  if (!db.prepare('SELECT id FROM teams WHERE id = ?').get(id)) throw new Error('Équipe introuvable');
+  db.prepare('DELETE FROM team_members WHERE team_id = ?').run(id);
+  db.prepare('DELETE FROM teams WHERE id = ?').run(id);
 }
 
 function isMemberOf(teamId, userId) {
-  const team = _raw(teamId);
-  return team ? team.memberIds.has(userId) : false;
+  return !!db.prepare('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
 }
 
 function getTeamsForUser(userId) {
-  return teams.filter(t => t.memberIds.has(userId)).map(_serialize);
+  return db.prepare(`
+    SELECT t.* FROM teams t
+    JOIN team_members tm ON tm.team_id = t.id
+    WHERE tm.user_id = ?
+    ORDER BY t.created_at ASC
+  `).all(userId).map(_hydrate);
 }
 
-// Returns a Set of all userIds that share at least one team with userId (including userId itself)
+// Returns a Set of all userIds that share at least one team with userId (including userId itself).
 function getTeamMemberIds(userId) {
-  const result = new Set();
-  for (const team of teams) {
-    if (team.memberIds.has(userId)) {
-      for (const id of team.memberIds) result.add(id);
-    }
-  }
-  return result;
-}
-
-function _raw(id) {
-  return teams.find(t => t.id === id) || null;
-}
-
-function _serialize(team) {
-  return { id: team.id, name: team.name, memberIds: [...team.memberIds], createdAt: team.createdAt };
+  const rows = db.prepare(`
+    SELECT DISTINCT tm2.user_id FROM team_members tm1
+    JOIN team_members tm2 ON tm2.team_id = tm1.team_id
+    WHERE tm1.user_id = ?
+  `).all(userId);
+  return new Set(rows.map(r => r.user_id));
 }
 
 module.exports = { createTeam, listTeams, getTeam, addMember, removeMember, deleteTeam, isMemberOf, getTeamsForUser, getTeamMemberIds };

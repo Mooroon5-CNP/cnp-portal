@@ -120,6 +120,18 @@ async function getFileSha(owner, repo, path, token) {
     }
 }
 
+async function deleteFileWithToken(owner, repo, path, sha, message, token) {
+    try {
+        await axios.delete(
+            `${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+            { headers: defaultHeaders(token), data: { message, sha } }
+        );
+    } catch (e) {
+        if (e.response && e.response.status === 404) return;
+        throw e;
+    }
+}
+
 module.exports = {
     parseRepoUrl,
     getRepo,
@@ -130,4 +142,5 @@ module.exports = {
     pathExists,
     createOrUpdateFileWithToken,
     getFileSha,
+    deleteFileWithToken,
 };

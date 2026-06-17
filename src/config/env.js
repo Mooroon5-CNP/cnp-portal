@@ -31,10 +31,21 @@ if (require.main === module) {
   process.exit(0);
 }
 
+function normalizePrivateKey(raw) {
+  if (!raw) return null;
+  // dotenv stores \n as literal two-char escape when the value is on one quoted line
+  let key = raw.replace(/\\n/g, '\n').trim();
+  // Add PEM armor if the downloaded key was pasted without headers
+  if (!key.startsWith('-----')) {
+    key = `-----BEGIN RSA PRIVATE KEY-----\n${key}\n-----END RSA PRIVATE KEY-----`;
+  }
+  return key;
+}
+
 const config = {
   github: {
     appId: process.env.GITHUB_APP_ID,
-    privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
+    privateKey: normalizePrivateKey(process.env.GITHUB_APP_PRIVATE_KEY),
     installationId: process.env.GITHUB_APP_INSTALLATION_ID,
     configRepoName: process.env.GITHUB_CONFIG_REPO_NAME,
     configRepoToken: process.env.GITHUB_CONFIG_REPO_TOKEN || null,

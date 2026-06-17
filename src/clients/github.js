@@ -28,11 +28,11 @@ async function setRepoSecret(owner, repo, secretName, secretValue) {
 
   let publicKeyData;
   try {
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/public-key', { owner, repo });
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/secrets/public-key', { owner, repo });
     publicKeyData = data;
   } catch (err) {
+    if (err.status === 401) { _octokit = null; throw new Error('GitHub App authentication failed. Check GITHUB_APP_PRIVATE_KEY and GITHUB_APP_ID.'); }
     if (err.status === 404) throw new Error(`Repository ${owner}/${repo} not found or GitHub App has no access.`);
-    if (err.status === 401) throw new Error('GitHub App authentication failed. Check GITHUB_APP_PRIVATE_KEY and GITHUB_APP_ID.');
     throw new Error(`Failed to fetch public key for ${owner}/${repo}: ${err.message}`);
   }
 
@@ -73,6 +73,7 @@ async function createOrUpdateFile(owner, repo, path, content, message, sha) {
       owner, repo, path, ...body,
     });
   } catch (err) {
+    if (err.status === 401) _octokit = null;
     throw new Error(`Failed to create/update ${path} in ${owner}/${repo}: ${err.message}`);
   }
 }
@@ -154,6 +155,49 @@ async function getRunJobs(owner, repo, runId) {
   }
 }
 
+// Delete a file from a repo via GitHub App auth.
+async function deleteFile(owner, repo, path, sha, message) {
+  const octokit = await getInstallationOctokit();
+  try {
+    await octokit.request('DELETE /repos/{owner}/{repo}/contents/{path}', {
+      owner, repo, path,
+      message,
+      sha,
+    });
+  } catch (err) {
+    if (err.status === 404) return; // already gone
+    throw new Error(`Failed to delete ${path} in ${owner}/${repo}: ${err.message}`);
+  }
+}
+
+// Delete an Actions secret from a repo via GitHub App auth.
+async function deleteSecret(owner, repo, secretName) {
+  const octokit = await getInstallationOctokit();
+  try {
+    await octokit.request('DELETE /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
+      owner, repo, secret_name: secretName,
+    });
+  } catch (err) {
+    if (err.status === 404) return; // already gone
+    throw new Error(`Failed to delete secret ${secretName} from ${owner}/${repo}: ${err.message}`);
+  }
+}
+
+// Verify that GitHub Actions is enabled on a repo by probing the secrets
+// public-key endpoint. Throws if Actions is disabled (404) or App lacks access.
+async function checkActionsEnabled(owner, repo) {
+  const octokit = await getInstallationOctokit();
+  try {
+    await octokit.request('GET /repos/{owner}/{repo}/actions/secrets/public-key', { owner, repo });
+  } catch (err) {
+    if (err.status === 404) {
+      throw new Error(`GitHub Actions is disabled on ${owner}/${repo}. Enable it in the repo's Settings → Actions → General.`);
+    }
+    if (err.status === 401) { _octokit = null; throw new Error('GitHub App authentication failed.'); }
+    throw err;
+  }
+}
+
 async function checkConnectivity() {
   const octokit = await getInstallationOctokit();
   await octokit.request('GET /app');
@@ -169,5 +213,8 @@ module.exports = {
   getLatestRun,
   getRuns,
   getRunJobs,
+  deleteFile,
+  deleteSecret,
+  checkActionsEnabled,
   checkConnectivity,
 };

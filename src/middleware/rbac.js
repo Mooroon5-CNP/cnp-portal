@@ -15,10 +15,12 @@ const PERMISSIONS = {
   'cicd:modify-config':      ['manager'],
   'cicd:view-logs':          ['manager', 'devops', 'dev'],
 
-  'deployments:deploy':      ['manager', 'devops', 'dev'],
-  'deployments:choose-cloud':['manager', 'devops'],
-  'deployments:choose-replicas': ['manager', 'devops'],
-  'deployments:delete':      ['manager', 'devops', 'dev'],
+  'deployments:deploy':           ['manager', 'devops', 'dev'],
+  'deployments:choose-cloud':     ['manager', 'devops'],
+  'deployments:choose-replicas':  ['manager', 'devops'],
+  'deployments:delete':               ['manager'],
+  'deployments:delete:request':       ['devops', 'dev'],
+  'deployments:manage-team-access':   ['manager', 'devops'],
 
   'k8s:pods:view-all':       ['manager', 'devops'],
   'k8s:pods:view-own':       ['manager', 'devops', 'dev'],

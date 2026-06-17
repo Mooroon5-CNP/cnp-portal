@@ -17,6 +17,22 @@
                 <button id="openNewDeployment" class="btn btn-primary">+ Nouveau déploiement</button>
               </div>
 
+              <!-- Team filter -->
+              <% if (allTeams.length > 0) { %>
+              <form method="GET" action="/deployments" style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                <label style="font-size:13px;color:var(--text-muted);white-space:nowrap;">Filtrer par équipe :</label>
+                <select name="team" onchange="this.form.submit()" style="max-width:220px;">
+                  <option value="">Toutes les équipes</option>
+                  <% allTeams.forEach(t => { %>
+                  <option value="<%= t.id %>" <%= filterTeam === t.id ? 'selected' : '' %>><%= t.name %></option>
+                  <% }) %>
+                </select>
+                <% if (filterTeam) { %>
+                <a href="/deployments" class="btn btn-ghost btn-sm">Effacer</a>
+                <% } %>
+              </form>
+              <% } %>
+
               <div class="card">
                 <div class="card-header">
                   <span class="card-title">Applications déployées</span>
@@ -29,6 +45,7 @@
                     <thead>
                       <tr>
                         <th>Application</th>
+                        <th>Équipe</th>
                         <th>Repository</th>
                         <th>Statut</th>
                         <th>Dernier tag</th>
@@ -43,6 +60,13 @@
                           <td><strong><a href="/deployments/<%= dep.id %>">
                                 <%= dep.appName %>
                               </a></strong></td>
+                          <td>
+                            <% if (dep.ownerTeam) { %>
+                              <a href="/deployments?team=<%= dep.ownerTeam.id %>" class="badge badge-gray" style="text-decoration:none;"><%= dep.ownerTeam.name %></a>
+                            <% } else { %>
+                              <span style="color:var(--text-muted);font-size:12px;">—</span>
+                            <% } %>
+                          </td>
                           <td class="font-mono"><a href="<%= dep.githubRepoUrl %>" target="_blank" rel="noreferrer">
                               <%= dep.githubRepoUrl %>
                             </a></td>
@@ -60,17 +84,30 @@
                           </td>
                           <td>
                             <div class="actions-cell">
-                              <form action="/deployments/<%= dep.id %>/delete" method="POST" class="inline-form"
-                                onsubmit="return confirm('Supprimer ce déploiement ?')">
-                                <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
-                              </form>
+                              <% if (can('deployments:delete')) { %>
+                                <% if (dep.pendingDeletion) { %>
+                                  <span class="badge badge-warning" style="margin-right:6px;">Suppression demandée</span>
+                                  <button class="btn btn-danger btn-sm" onclick="openApproveModal('<%= dep.id %>', '<%= dep.appName %>')">Approuver</button>
+                                  <form action="/deployments/<%= dep.id %>/reject-delete" method="POST" class="inline-form">
+                                    <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
+                                  </form>
+                                <% } else { %>
+                                  <button class="btn btn-danger btn-sm" onclick="openDeleteModal('<%= dep.id %>', '<%= dep.appName %>')">Supprimer</button>
+                                <% } %>
+                              <% } else if (can('deployments:delete:request')) { %>
+                                <% if (dep.pendingDeletion) { %>
+                                  <span class="badge badge-warning">Demande en attente</span>
+                                <% } else { %>
+                                  <button class="btn btn-secondary btn-sm" onclick="openRequestModal('<%= dep.id %>', '<%= dep.appName %>')">Demander suppression</button>
+                                <% } %>
+                              <% } %>
                             </div>
                           </td>
                         </tr>
                         <% }) %>
                           <% if (deployments.length===0) { %>
                             <tr>
-                              <td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun
+                              <td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px;">Aucun
                                 déploiement</td>
                             </tr>
                             <% } %>
@@ -118,9 +155,74 @@
                       <div class="form-hint">Le port que votre application écoute (doit correspondre à EXPOSE dans le Dockerfile).</div>
                     </div>
 
+                    <% if (userTeams.length > 0) { %>
+                    <div class="form-group">
+                      <label for="ownerTeamId">Équipe propriétaire</label>
+                      <select name="ownerTeamId" id="ownerTeamId">
+                        <option value="">— Aucune équipe —</option>
+                        <% userTeams.forEach(t => { %>
+                        <option value="<%= t.id %>" <%= userTeams.length === 1 ? 'selected' : '' %>><%= t.name %></option>
+                        <% }) %>
+                      </select>
+                      <div class="form-hint">L'équipe qui possède ce déploiement. Les membres de l'équipe pourront le voir.</div>
+                    </div>
+                    <% } %>
+
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Delete confirmation modal (manager) -->
+              <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  <h3 style="margin:0 0 8px;">Supprimer l'application</h3>
+                  <p id="deleteModalText" style="color:var(--text-muted);margin-bottom:20px;"></p>
+                  <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
+                    Cette action est irréversible. Les manifests Kubernetes, le pipeline CI/CD et les secrets GitHub seront supprimés.
+                  </div>
+                  <form id="deleteForm" method="POST">
+                    <div style="display:flex;gap:10px;">
+                      <button type="submit" class="btn btn-danger">Confirmer la suppression</button>
+                      <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Annuler</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Approve deletion request modal (manager) -->
+              <div id="approveModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  <h3 style="margin:0 0 8px;">Approuver la demande de suppression</h3>
+                  <p id="approveModalText" style="color:var(--text-muted);margin-bottom:20px;"></p>
+                  <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
+                    Cela supprimera définitivement l'application et toutes ses ressources.
+                  </div>
+                  <form id="approveForm" method="POST">
+                    <div style="display:flex;gap:10px;">
+                      <button type="submit" class="btn btn-danger">Confirmer et supprimer</button>
+                      <button type="button" class="btn btn-secondary" onclick="closeApproveModal()">Annuler</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Request deletion modal (dev/devops) -->
+              <div id="requestModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  <h3 style="margin:0 0 8px;">Demander la suppression</h3>
+                  <p id="requestModalText" style="color:var(--text-muted);margin-bottom:16px;"></p>
+                  <form id="requestForm" method="POST">
+                    <div class="form-group">
+                      <label for="requestReason">Raison (optionnel)</label>
+                      <textarea name="reason" id="requestReason" rows="3" style="width:100%;resize:vertical;" placeholder="Expliquez pourquoi cette application doit être supprimée..."></textarea>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:12px;">
+                      <button type="submit" class="btn btn-primary">Envoyer la demande</button>
+                      <button type="button" class="btn btn-secondary" onclick="closeRequestModal()">Annuler</button>
                     </div>
                   </form>
                 </div>
@@ -153,6 +255,30 @@
                 document.getElementById('appName').addEventListener('input', function() {
                   this.dataset.userEdited = '1';
                 });
+
+                // Delete modal (manager)
+                function openDeleteModal(id, name) {
+                  document.getElementById('deleteModalText').textContent = `Supprimer "${name}" et toutes ses ressources (config-repo, pipeline, secrets) ?`;
+                  document.getElementById('deleteForm').action = `/deployments/${id}/delete`;
+                  document.getElementById('deleteModal').style.display = 'flex';
+                }
+                function closeDeleteModal() { document.getElementById('deleteModal').style.display = 'none'; }
+
+                // Approve modal (manager)
+                function openApproveModal(id, name) {
+                  document.getElementById('approveModalText').textContent = `Approuver la demande de suppression de "${name}" ?`;
+                  document.getElementById('approveForm').action = `/deployments/${id}/approve-delete`;
+                  document.getElementById('approveModal').style.display = 'flex';
+                }
+                function closeApproveModal() { document.getElementById('approveModal').style.display = 'none'; }
+
+                // Request modal (dev/devops)
+                function openRequestModal(id, name) {
+                  document.getElementById('requestModalText').textContent = `Demander la suppression de "${name}" à un manager.`;
+                  document.getElementById('requestForm').action = `/deployments/${id}/request-delete`;
+                  document.getElementById('requestModal').style.display = 'flex';
+                }
+                function closeRequestModal() { document.getElementById('requestModal').style.display = 'none'; }
               </script>
 
           </div>
