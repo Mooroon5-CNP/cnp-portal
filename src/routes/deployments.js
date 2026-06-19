@@ -12,6 +12,7 @@ const deletionRequestModel = require('../models/deletion_request');
 const teamService = require('../services/teams');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
+const k8sClient = require('../clients/kubernetes');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,7 +154,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // ---------------------------------------------------------------------------
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const { appName, githubRepoUrl, appPort, ownerTeamId } = req.body;
+    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster } = req.body;
 
     if (!appName || !githubRepoUrl) {
         req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
@@ -196,6 +197,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         githubRepoUrl,
         appPort: parseInt(appPort, 10) || 8080,
         teamOwner: 'team-cnp',
+        targetCluster: targetCluster || 'gcp',
         updateStatus: async (status, error) => {
             deploymentModel.updateOnboardingStatus(dep.id, status, error);
         },
@@ -241,17 +243,20 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
 
     if (run.status === 'completed') {
         const runUrl = `https://github.com/${parsed.owner}/${parsed.repo}/actions/runs/${run.id}`;
+        const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
         if (run.conclusion === 'success') {
             return res.json({
                 phase: 'success',
                 message: 'Votre application a été déployée avec succès.',
                 runUrl,
+                cloudRunUrl,
             });
         }
         return res.json({
             phase: 'failed',
             message: 'Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.',
             runUrl,
+            cloudRunUrl,
         });
     }
 
@@ -291,6 +296,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
+    const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+
     const safeDeployment = {
         id: dep.id,
         appName: dep.appName,
@@ -323,6 +330,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         jobs,
         failureHint,
         githubActionsUrl,
+        cloudRunUrl,
         pendingDeletion,
         ownerTeam,
         accessTeams,

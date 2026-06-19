@@ -259,6 +259,82 @@ spec:
 `;
 }
 
+const GCP_PROJECT = 'cnp-terraform';
+const GCP_REGION = 'europe-west9';
+const CLOUD_RUN_SA = `cloud-run-sa@${GCP_PROJECT}.iam.gserviceaccount.com`;
+
+function tplCrossplaneV2Service(appName) {
+    return `apiVersion: cloudrun.gcp.upbound.io/v1beta2
+kind: V2Service
+metadata:
+  name: ${appName}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  forProvider:
+    project: ${GCP_PROJECT}
+    location: ${GCP_REGION}
+    template:
+      serviceAccount: ${CLOUD_RUN_SA}
+      containers:
+        - image: ${IMAGE_REGISTRY}/${appName}:placeholder
+  providerConfigRef:
+    name: default
+`;
+}
+
+function tplCrossplaneIAM(appName) {
+    return `apiVersion: cloudrun.gcp.upbound.io/v1beta2
+kind: ServiceIAMMember
+metadata:
+  name: ${appName}-public
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  forProvider:
+    project: ${GCP_PROJECT}
+    location: ${GCP_REGION}
+    service: ${appName}
+    role: roles/run.invoker
+    member: allUsers
+  providerConfigRef:
+    name: default
+`;
+}
+
+function tplCrossplaneKustomization() {
+    return `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cloudrun-claim.yaml
+  - cloudrun-iam.yaml
+`;
+}
+
+function tplCrossplaneArgocdApplication(appName, configRepoUrl) {
+    return {
+        apiVersion: 'argoproj.io/v1alpha1',
+        kind: 'Application',
+        metadata: { name: `${appName}-cloudrun`, namespace: 'argocd' },
+        spec: {
+            project: 'default',
+            source: {
+                repoURL: `${configRepoUrl}.git`,
+                targetRevision: 'main',
+                path: `apps/${appName}/crossplane`,
+            },
+            destination: {
+                server: 'https://kubernetes.default.svc',
+                namespace: 'crossplane-system',
+            },
+            syncPolicy: {
+                automated: { selfHeal: true, prune: true },
+                syncOptions: ['CreateNamespace=true'],
+            },
+        },
+    };
+}
+
 function tplArgocdOverlayKustomization(appName, teamOwner) {
     return `apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -460,7 +536,7 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
  * @param {string} [opts.teamOwner]    - Team slug (default: team-cnp).
  * @param {Function} opts.updateStatus - Callback(status, error?) to persist progress.
  */
-async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-cnp', updateStatus }) {
+async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-cnp', targetCluster = 'gcp', updateStatus }) {
     const configRepoToken = config.github.configRepoToken;
     if (!configRepoToken) {
         await updateStatus('failed', 'GITHUB_CONFIG_REPO_TOKEN is not configured on the platform.');
@@ -543,6 +619,21 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-c
         }
 
         // ------------------------------------------------------------------
+        // Step 3.6: Create Crossplane Cloud Run resources in config-repo and
+        // apply the ArgoCD Application that watches them (GCP only).
+        // ------------------------------------------------------------------
+        if (targetCluster === 'gcp') {
+            const cpBase = `apps/${appName}/crossplane`;
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(), configRepoToken);
+
+            const argoApp = tplCrossplaneArgocdApplication(appName, configRepoUrl);
+            const argoAppYaml = yaml.dump(argoApp, { lineWidth: -1, noRefs: true });
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/application.yaml`, argoAppYaml, configRepoToken);
+        }
+
+        // ------------------------------------------------------------------
         // Step 4: Create ci.yml in the app repo (GitHub App)
         // Committing this file to main automatically triggers the first CI run.
         // ------------------------------------------------------------------
@@ -602,6 +693,8 @@ function configRepoPaths(appName) {
         paths.push(`${ov}/kustomization.yaml`, `${ov}/namespace.yaml`, `${ov}/configmap.yaml`, `${ov}/ingress.yaml`);
     }
     paths.push(`argocd/overlays/${appName}/kustomization.yaml`);
+    const cp = `apps/${appName}/crossplane`;
+    paths.push(`${cp}/cloudrun-claim.yaml`, `${cp}/cloudrun-iam.yaml`, `${cp}/kustomization.yaml`, `${cp}/application.yaml`);
     return paths;
 }
 
@@ -664,7 +757,7 @@ async function offboardApp({ appName, githubRepoUrl }) {
         }
     }
 
-    // Step 3: delete ArgoCD ApplicationSets from the cluster
+    // Step 3: delete ArgoCD ApplicationSets and Application from the cluster
     try {
         await k8sClient.deleteApplicationSet(`${appName}-dev`);
         await k8sClient.deleteApplicationSet(`${appName}-prod`);

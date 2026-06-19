@@ -258,9 +258,63 @@ async function deleteApplicationSet(name) {
   }
 }
 
+// Apply or replace an ArgoCD Application in the argocd namespace.
+async function applyArgocdApplication(manifest) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  const group = 'argoproj.io';
+  const version = 'v1alpha1';
+  const plural = 'applications';
+  const namespace = 'argocd';
+  const name = manifest.metadata.name;
+
+  try {
+    try {
+      const { body: existing } = await customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+      manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
+      await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, manifest);
+    } catch (e) {
+      if (e.response && (e.response.statusCode === 404 || e.statusCode === 404)) {
+        await customApi.createNamespacedCustomObject(group, version, namespace, plural, manifest);
+      } else {
+        throw e;
+      }
+    }
+  } catch (err) {
+    handleError(err, `applyArgocdApplication(${name})`);
+  }
+}
+
+// Delete an ArgoCD Application from the argocd namespace (idempotent).
+async function deleteArgocdApplication(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    await customApi.deleteNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name);
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return;
+    handleError(err, `deleteArgocdApplication(${name})`);
+  }
+}
+
+async function getV2ServiceUrl(appName) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body } = await customApi.getNamespacedCustomObject(
+      'cloudrun.gcp.upbound.io', 'v1beta2', 'crossplane-system', 'v2services', appName,
+    );
+    return body.status?.atProvider?.uri || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 module.exports = {
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
+  applyArgocdApplication, deleteArgocdApplication,
+  getV2ServiceUrl,
 };

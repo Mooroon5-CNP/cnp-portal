@@ -168,6 +168,14 @@
                     </div>
                     <% } %>
 
+                    <div class="form-group">
+                      <label for="targetCluster">Cloud cible</label>
+                      <select name="targetCluster" id="targetCluster">
+                        <option value="gcp" selected>GCP — Google Cloud Platform (Cloud Run)</option>
+                      </select>
+                      <div class="form-hint">Plateforme de déploiement. AWS disponible en V2.</div>
+                    </div>
+
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
