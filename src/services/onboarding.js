@@ -4,6 +4,7 @@ const yaml = require('js-yaml');
 const { config } = require('../config/env');
 const githubClient = require('../clients/github');
 const githubService = require('./github');
+const k8sClient = require('../clients/kubernetes');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -258,6 +259,114 @@ spec:
 `;
 }
 
+function tplArgocdOverlayKustomization(appName, teamOwner) {
+    return `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../bases/applicationset
+
+patches:
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: ApplicationSet
+      name: APP_NAME-dev
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: ${appName}-dev
+      - op: replace
+        path: /spec/template/metadata/name
+        value: "${appName}-dev-{{cluster}}"
+      - op: replace
+        path: /spec/template/spec/source/path
+        value: apps/${appName}/overlays/dev
+      - op: replace
+        path: /spec/template/spec/destination/namespace
+        value: ${appName}-dev
+      - op: replace
+        path: /spec/template/spec/project
+        value: ${teamOwner}
+
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: ApplicationSet
+      name: APP_NAME-prod
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: ${appName}-prod
+      - op: replace
+        path: /spec/template/metadata/name
+        value: "${appName}-prod-{{cluster}}"
+      - op: replace
+        path: /spec/template/spec/source/path
+        value: apps/${appName}/overlays/prod
+      - op: replace
+        path: /spec/template/spec/destination/namespace
+        value: ${appName}-prod
+      - op: replace
+        path: /spec/template/spec/project
+        value: ${teamOwner}
+
+labels:
+  - pairs:
+      app: ${appName}
+      team: ${teamOwner}
+    includeSelectors: false
+`;
+}
+
+// Returns the in-memory ApplicationSet manifests (dev + prod) so they can be
+// applied directly to the cluster without needing to run kustomize CLI.
+function buildApplicationSetManifests(appName, teamOwner, configRepoUrl) {
+    const repoURL = `${configRepoUrl}.git`;
+    const dev = {
+        apiVersion: 'argoproj.io/v1alpha1',
+        kind: 'ApplicationSet',
+        metadata: { name: `${appName}-dev`, namespace: 'argocd' },
+        spec: {
+            generators: [{ list: { elements: [{ cluster: 'local', url: 'https://kubernetes.default.svc', env: 'dev' }] } }],
+            template: {
+                metadata: { name: `${appName}-dev-{{cluster}}` },
+                spec: {
+                    project: teamOwner,
+                    source: { repoURL, targetRevision: 'main', path: `apps/${appName}/overlays/dev` },
+                    destination: { server: '{{url}}', namespace: `${appName}-dev` },
+                    syncPolicy: {
+                        automated: { selfHeal: true, prune: true },
+                        syncOptions: ['CreateNamespace=true'],
+                        retry: { limit: 3, backoff: { duration: '10s', factor: 2, maxDuration: '3m' } },
+                    },
+                },
+            },
+        },
+    };
+    const prod = {
+        apiVersion: 'argoproj.io/v1alpha1',
+        kind: 'ApplicationSet',
+        metadata: { name: `${appName}-prod`, namespace: 'argocd' },
+        spec: {
+            generators: [{ list: { elements: [{ cluster: 'local', url: 'https://kubernetes.default.svc', env: 'prod' }] } }],
+            template: {
+                metadata: { name: `${appName}-prod-{{cluster}}` },
+                spec: {
+                    project: teamOwner,
+                    source: { repoURL, targetRevision: 'main', path: `apps/${appName}/overlays/prod` },
+                    destination: { server: '{{url}}', namespace: `${appName}-prod` },
+                    syncPolicy: {
+                        syncOptions: ['CreateNamespace=true'],
+                        retry: { limit: 3, backoff: { duration: '10s', factor: 2, maxDuration: '3m' } },
+                    },
+                },
+            },
+        },
+    };
+    return { dev, prod };
+}
+
 function tplCiWorkflow(appName, appPort, configRepoUrl) {
     return `name: CI
 
@@ -412,6 +521,28 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-c
         await updateRegistry(crOwner, crRepo, appName, appPort, githubRepoUrl, teamOwner, configRepoToken);
 
         // ------------------------------------------------------------------
+        // Step 3.5: Create ArgoCD ApplicationSet overlay in config-repo and
+        // apply the ApplicationSets to the cluster so ArgoCD knows to watch
+        // the app's overlays. Without this step ArgoCD never syncs the app
+        // even though all manifests are present in config-repo.
+        // ------------------------------------------------------------------
+        await writeConfigRepoFile(
+            crOwner, crRepo,
+            `argocd/overlays/${appName}/kustomization.yaml`,
+            tplArgocdOverlayKustomization(appName, teamOwner),
+            configRepoToken,
+        );
+
+        const { dev: devAppSet, prod: prodAppSet } = buildApplicationSetManifests(appName, teamOwner, configRepoUrl);
+        try {
+            await k8sClient.applyApplicationSet(devAppSet);
+            await k8sClient.applyApplicationSet(prodAppSet);
+        } catch (e) {
+            // K8s may be unavailable in local dev — log but don't fail onboarding.
+            console.warn(`[onboarding] Could not apply ApplicationSets to cluster: ${e.message}`);
+        }
+
+        // ------------------------------------------------------------------
         // Step 4: Create ci.yml in the app repo (GitHub App)
         // Committing this file to main automatically triggers the first CI run.
         // ------------------------------------------------------------------
@@ -470,6 +601,7 @@ function configRepoPaths(appName) {
         const ov = `apps/${appName}/overlays/${env}`;
         paths.push(`${ov}/kustomization.yaml`, `${ov}/namespace.yaml`, `${ov}/configmap.yaml`, `${ov}/ingress.yaml`);
     }
+    paths.push(`argocd/overlays/${appName}/kustomization.yaml`);
     return paths;
 }
 
@@ -495,10 +627,11 @@ async function removeFromRegistry(owner, repo, appName, token) {
 
 /**
  * Removes everything the platform created for an app:
- *   1. Deletes all K8s manifests from config-repo.
+ *   1. Deletes all K8s manifests from config-repo (including argocd overlay).
  *   2. Removes the app from registry.yaml.
- *   3. Deletes .github/workflows/ci.yml from the app repo (GitHub App).
- *   4. Deletes CONFIG_REPO_TOKEN secret from the app repo (GitHub App).
+ *   3. Deletes ArgoCD ApplicationSets from the cluster.
+ *   4. Deletes .github/workflows/ci.yml from the app repo (GitHub App).
+ *   5. Deletes CONFIG_REPO_TOKEN secret from the app repo (GitHub App).
  */
 async function offboardApp({ appName, githubRepoUrl }) {
     const configRepoToken = config.github.configRepoToken;
@@ -531,7 +664,15 @@ async function offboardApp({ appName, githubRepoUrl }) {
         }
     }
 
-    // Step 3 & 4: app repo cleanup via GitHub App
+    // Step 3: delete ArgoCD ApplicationSets from the cluster
+    try {
+        await k8sClient.deleteApplicationSet(`${appName}-dev`);
+        await k8sClient.deleteApplicationSet(`${appName}-prod`);
+    } catch (e) {
+        errors.push(`applicationsets: ${e.message}`);
+    }
+
+    // Step 4 & 5: app repo cleanup via GitHub App
     if (parsed) {
         const { owner: appOwner, repo: appRepo } = parsed;
         try {

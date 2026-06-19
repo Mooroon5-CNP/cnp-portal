@@ -218,8 +218,49 @@ async function checkConnectivity() {
   }
 }
 
+// Apply or replace an ArgoCD ApplicationSet in the argocd namespace.
+async function applyApplicationSet(manifest) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  const group = 'argoproj.io';
+  const version = 'v1alpha1';
+  const plural = 'applicationsets';
+  const namespace = 'argocd';
+  const name = manifest.metadata.name;
+
+  try {
+    // Try to update first; if 404, create instead.
+    try {
+      const { body: existing } = await customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+      manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
+      await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, manifest);
+    } catch (e) {
+      if (e.response && (e.response.statusCode === 404 || e.statusCode === 404)) {
+        await customApi.createNamespacedCustomObject(group, version, namespace, plural, manifest);
+      } else {
+        throw e;
+      }
+    }
+  } catch (err) {
+    handleError(err, `applyApplicationSet(${name})`);
+  }
+}
+
+// Delete an ArgoCD ApplicationSet from the argocd namespace (idempotent).
+async function deleteApplicationSet(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    await customApi.deleteNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name);
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return;
+    handleError(err, `deleteApplicationSet(${name})`);
+  }
+}
+
 module.exports = {
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
+  applyApplicationSet, deleteApplicationSet,
 };
