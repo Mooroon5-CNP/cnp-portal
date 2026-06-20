@@ -54,6 +54,9 @@ const config = {
     serverUrl: process.env.ARGOCD_SERVER_URL,
     token: process.env.ARGOCD_TOKEN,
     insecure: process.env.ARGOCD_INSECURE === 'true',
+    // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
+    // Falls back to serverUrl if not set.
+    uiUrl: process.env.ARGOCD_UI_URL || process.env.ARGOCD_SERVER_URL || null,
   },
   datadog: {
     apiKey: process.env.DD_API_KEY,
@@ -68,6 +71,9 @@ const config = {
   },
   crossplane: {
     namespace: process.env.CROSSPLANE_NAMESPACE || 'crossplane-system',
+  },
+  cluster: {
+    baseDomain: process.env.CLUSTER_BASE_DOMAIN || 'cnp.example.com',
   },
 };
 

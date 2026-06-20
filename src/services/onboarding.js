@@ -231,21 +231,33 @@ data:
 `;
 }
 
-function tplOverlayIngress(appName, env, appPort) {
-    const host = `${appName}-${env}.cnp.example.com`;
+async function tplOverlayIngress(appName, env) {
+    // Resolve base domain: explicit config wins, then auto-detect from cluster.
+    let baseDomain = config.cluster?.baseDomain || null;
+    if (!baseDomain || baseDomain === 'cnp.example.com') {
+        const ip = await k8sClient.getIngressControllerIp().catch(() => null);
+        baseDomain = ip ? `${ip}.nip.io` : 'cnp.example.com';
+    }
+    const host = `${appName}-${env}.${baseDomain}`;
+    // Only add TLS if cert-manager is available on the cluster.
+    const certManagerAvailable = await k8sClient.isCertManagerAvailable().catch(() => false);
+    const tlsBlock = certManagerAvailable ? `  tls:
+    - hosts:
+        - ${host}
+      secretName: ${appName}-${env}-tls
+` : '';
+    const certAnnotation = certManagerAvailable
+        ? '    cert-manager.io/cluster-issuer: letsencrypt-prod\n'
+        : '';
     return `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ${appName}
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+${certAnnotation}    nginx.ingress.kubernetes.io/ssl-redirect: "${certManagerAvailable}"
 spec:
   ingressClassName: nginx
-  tls:
-    - hosts:
-        - ${host}
-      secretName: ${appName}-${env}-tls
-  rules:
+${tlsBlock}  rules:
     - host: ${host}
       http:
         paths:
@@ -536,7 +548,7 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
  * @param {string} [opts.teamOwner]    - Team slug (default: team-cnp).
  * @param {Function} opts.updateStatus - Callback(status, error?) to persist progress.
  */
-async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-cnp', targetCluster = 'gcp', updateStatus }) {
+async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platform', targetCluster = 'gcp', updateStatus }) {
     const configRepoToken = config.github.configRepoToken;
     if (!configRepoToken) {
         await updateStatus('failed', 'GITHUB_CONFIG_REPO_TOKEN is not configured on the platform.');
@@ -588,7 +600,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'team-c
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/namespace.yaml`, tplOverlayNamespace(appName, env), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/configmap.yaml`, tplOverlayConfigMap(appName, env), configRepoToken);
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/ingress.yaml`, tplOverlayIngress(appName, env, appPort), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/ingress.yaml`, await tplOverlayIngress(appName, env), configRepoToken);
         }
 
         // ------------------------------------------------------------------
@@ -791,4 +803,33 @@ async function offboardApp({ appName, githubRepoUrl }) {
     }
 }
 
-module.exports = { onboardApp, offboardApp };
+/**
+ * Rewrite ingress.yaml in config-repo for an already-onboarded app so that the
+ * hostname uses the real ingress controller IP instead of the placeholder domain.
+ * Called automatically when the detail page detects a placeholder URL.
+ */
+async function healIngressHostname(appName) {
+    const configRepoToken = config.github.configRepoToken;
+    if (!configRepoToken) return;
+
+    let baseDomain = config.cluster?.baseDomain || null;
+    if (!baseDomain || baseDomain === 'cnp.example.com') {
+        const ip = await k8sClient.getIngressControllerIp().catch(() => null);
+        if (!ip) return;
+        baseDomain = `${ip}.nip.io`;
+    }
+
+    const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
+
+    for (const env of ['dev', 'prod']) {
+        const ingressYaml = await tplOverlayIngress(appName, env);
+        const path = `apps/${appName}/overlays/${env}/ingress.yaml`;
+        try {
+            await writeConfigRepoFile(crOwner, crRepo, path, ingressYaml, configRepoToken);
+        } catch (e) {
+            console.warn(`[healIngress] Could not update ${path}: ${e.message}`);
+        }
+    }
+}
+
+module.exports = { onboardApp, offboardApp, healIngressHostname };

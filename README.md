@@ -19,6 +19,8 @@ A user submits a GitHub repo URL through the UI. The portal then automatically:
 
 After that the CI pipeline is self-contained: on each push to `main` it builds the image, pushes to GCP Artifact Registry, updates `newTag` in config-repo, and ArgoCD syncs automatically.
 
+The app becomes accessible at `https://{appName}-dev.{CLUSTER_INGRESS_IP}.nip.io` — the portal detects the ingress controller IP automatically from the cluster.
+
 ---
 
 ## Stack
@@ -43,6 +45,7 @@ src/
 │   ├── user.js                 User CRUD (SQLite)
 │   ├── deployment.js           Deployment records + team-access junction table
 │   ├── deletion_request.js     Pending deletion requests (dev/devops → manager approval)
+│   ├── argocd_access_request.js ArgoCD access requests (dev/devops → manager approval → auto-provisioning)
 │   └── tokenStore.js           OAuth state token storage
 ├── middleware/
 │   ├── auth.js                 populateUser (session → req.user), requireAuth, requirePending
@@ -51,23 +54,28 @@ src/
 ├── clients/
 │   ├── github.js               GitHub App client — createOrUpdateFile, setRepoSecret, createBranch, getRef, getLatestRun, getRuns, getRunJobs
 │   ├── argocd.js               ArgoCD REST client — listApplications, syncApplication
-│   ├── kubernetes.js           k8s API client — pods, namespaces, events, quotas, Crossplane XRDs, applyApplicationSet, deleteApplicationSet
+│   ├── kubernetes.js           k8s API client — pods, namespaces, events, quotas, Crossplane XRDs,
+│   │                           applyApplicationSet, deleteApplicationSet,
+│   │                           getIngressControllerIp, isCertManagerAvailable, getIngressUrl,
+│   │                           provisionArgoCDLocalUser (patches argocd-cm + argocd-secret)
 │   └── datadog.js              Datadog metrics/logs/alerts client
 ├── services/
-│   ├── onboarding.js           ★ Core logic — all config-repo writes + ApplicationSet apply/delete; contains all tpl* template functions
+│   ├── onboarding.js           ★ Core logic — all config-repo writes + ApplicationSet apply/delete + ingress heal
+│   │                           Contains all tpl* template functions. tplOverlayIngress() auto-detects cluster IP.
 │   ├── github.js               GitHub PAT helpers for config-repo reads/writes + CI run/job queries
-│   ├── argocd.js               ArgoCD service layer (listApps, syncApp, access requests)
+│   ├── argocd.js               ArgoCD service layer (listApps, syncApp, requestAccess, approveAccess → auto-provisions ArgoCD local user)
 │   ├── k8s.js                  K8s service layer (wraps kubernetes client for routes)
 │   ├── teams.js                Team management (persists to SQLite)
 │   ├── gitlab.js               Legacy GitLab client (not used in main flow)
 │   └── datadog.js              Datadog service layer
 ├── routes/
 │   ├── deployments.js          ★ Deployment CRUD — onboarding trigger, status polling, deletion workflow, team access
+│   │                           Detail page auto-heals ingress hostname if still placeholder
 │   ├── auth.js                 Login/logout, GitHub OAuth callback
 │   ├── dashboard.js            Home page
 │   ├── admin.js                User management (manager only)
 │   ├── teams.js                Team management routes
-│   ├── argocd.js               ArgoCD app listing and sync
+│   ├── argocd.js               ArgoCD — app listing, sync, access-request workflow (request / approve / reject)
 │   ├── k8s.js                  Pod/namespace/event views
 │   ├── observability.js        Datadog metrics, logs, alerts
 │   ├── profile.js              User profile
@@ -109,8 +117,67 @@ push to main (app repo)
        ├─ scan-image (Trivy image) — deletes image and fails if CRITICAL CVE
        └─ update-config-dev
             └─ sed newTag in config-repo apps/{app}/overlays/dev/kustomization.yaml
-                 └─ ArgoCD webhook detects change → syncs dev namespace automatically
+                 └─ ArgoCD detects change → syncs dev namespace automatically
+                      └─ App accessible at https://{app}-dev.{INGRESS_IP}.nip.io
 ```
+
+---
+
+## Ingress URL — automatic detection
+
+The portal queries the cluster at onboarding time to find the ingress controller's external IP:
+- Looks for `ingress-nginx-controller` service in `ingress-nginx` namespace
+- Falls back to label search (`app.kubernetes.io/component=controller`) if name differs
+- Builds hostname: `{appName}-{env}.{IP}.nip.io`
+- If cert-manager is absent (detected via cluster query), generates HTTP-only Ingress (no TLS block)
+- If cert-manager is present, adds `cert-manager.io/cluster-issuer: letsencrypt-prod` and TLS
+
+If an existing app's Ingress still uses the `cnp.example.com` placeholder, the portal **automatically rewrites it** the next time someone opens the deployment detail page (fire-and-forget, no user action needed).
+
+---
+
+## ArgoCD access workflow
+
+Managers have ArgoCD access by default. DevOps and dev users must request it through the portal.
+
+```
+DevOps visits /argocd
+  └─ clicks "Demander un accès" (fills in reason + optional app name)
+       └─ request saved to SQLite (argocd_access_requests table)
+
+Manager visits /argocd
+  └─ sees all pending requests in an alert card
+       └─ clicks "Approuver"
+            └─ services/argocd.js → approveAccess()
+                 ├─ generates ArgoCD username (sanitised portal username)
+                 ├─ generates random 16-char password
+                 ├─ bcrypt-hashes the password
+                 ├─ patches argocd-cm  (accounts.<username>: login)        via k8s API
+                 ├─ patches argocd-secret (accounts.<username>.password)   via k8s API
+                 └─ saves credentials to SQLite
+
+DevOps revisits /argocd
+  └─ sees their credentials (username + cleartext password + ArgoCD URL)
+  └─ sees the live list of ArgoCD applications they have access to
+```
+
+**Kubernetes RBAC requirement** — the portal's service account (`KUBE_TOKEN`) must be able
+to `get` and `patch` the following resources in the `argocd` namespace:
+
+```yaml
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["argocd-cm"]
+  verbs: ["get", "patch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["argocd-secret"]
+  verbs: ["get", "patch"]
+```
+
+If the RBAC permission is missing the provisioning step is logged as an error but the
+request is still marked approved and the portal shows the generated credentials —
+a manager can then create the ArgoCD account manually using those same credentials.
 
 ---
 
@@ -132,28 +199,60 @@ Default admin: username `admin`, password `admin`, role `manager`. Change the pa
 
 All read via `src/config/env.js`. Run `node src/config/env.js` to validate.
 
-| Variable | Purpose |
-|---|---|
-| `GITHUB_APP_ID` | GitHub App ID — used for app-repo operations (ci.yml, secrets, branches) |
-| `GITHUB_APP_PRIVATE_KEY` | GitHub App private key (PEM; `\n`-escaped single-line is accepted) |
-| `GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID on the org |
-| `GITHUB_CONFIG_REPO_NAME` | `owner/repo` of the GitOps config-repo (default: `Mooroon5-CNP/config-repo`) |
-| `GITHUB_CONFIG_REPO_TOKEN` | Fine-grained PAT with Contents:write on config-repo |
-| `ARGOCD_SERVER_URL` | ArgoCD API base URL |
-| `ARGOCD_TOKEN` | ArgoCD bearer token |
-| `ARGOCD_INSECURE` | `true` to skip TLS verification |
-| `KUBE_API_URL` | GKE API server URL |
-| `KUBE_TOKEN` | Service account token with permissions to manage ApplicationSets in `argocd` namespace |
-| `KUBE_CA_CERT` | Base64-encoded cluster CA certificate |
-| `KUBE_NAMESPACE_PREFIX` | Filter namespaces shown in the portal (optional) |
-| `DD_API_KEY` | Datadog API key |
-| `DD_APP_KEY` | Datadog application key |
-| `DD_SITE` | Datadog site (default: `datadoghq.com`) |
-| `SESSION_SECRET` | Express session secret |
-| `DB_PATH` | SQLite file path (default: `data/cnp-portal.sqlite`) |
-| `PORT` | HTTP port (default: 3000) |
+| Variable | Required | Purpose |
+|---|---|---|
+| `GITHUB_APP_ID` | ✅ | GitHub App ID — used for app-repo operations (ci.yml, secrets, branches) |
+| `GITHUB_APP_PRIVATE_KEY` | ✅ | GitHub App private key (PEM; `\n`-escaped single-line is accepted) |
+| `GITHUB_APP_INSTALLATION_ID` | ✅ | GitHub App installation ID on the org |
+| `GITHUB_CONFIG_REPO_NAME` | ✅ | `owner/repo` of the GitOps config-repo (default: `Mooroon5-CNP/config-repo`) |
+| `GITHUB_CONFIG_REPO_TOKEN` | ✅ | Fine-grained PAT with Contents:write on config-repo |
+| `ARGOCD_SERVER_URL` | ✅ | ArgoCD API base URL |
+| `ARGOCD_TOKEN` | ✅ | ArgoCD bearer token |
+| `ARGOCD_INSECURE` | — | `true` to skip TLS verification |
+| `KUBE_API_URL` | ✅ | GKE API server URL |
+| `KUBE_TOKEN` | ✅ | Service account token with permissions to manage ApplicationSets in `argocd` namespace |
+| `KUBE_CA_CERT` | ✅ | Base64-encoded cluster CA certificate |
+| `KUBE_NAMESPACE_PREFIX` | — | Filter namespaces shown in the portal (optional) |
+| `DD_API_KEY` | ✅ | Datadog API key |
+| `DD_APP_KEY` | ✅ | Datadog application key |
+| `DD_SITE` | — | Datadog site (default: `datadoghq.com`) |
+| `CLUSTER_BASE_DOMAIN` | — | Override ingress base domain (e.g. `mydomain.com`). Auto-detected via cluster if not set. |
+| `SESSION_SECRET` | — | Express session secret |
+| `DB_PATH` | — | SQLite file path (default: `data/cnp-portal.sqlite`) |
+| `PORT` | — | HTTP port (default: 3000) |
 
 Copy `.env.example` to `.env` to get started locally.
+
+---
+
+## Cluster bootstrap (one-time per cluster)
+
+These 3 commands must be run after a new GKE cluster is created. They are normally automated in Terraform via `local-exec`. Without them, no app can deploy or be accessed.
+
+```bash
+# 1. Create the ArgoCD AppProject (required by all ApplicationSets)
+kubectl apply -f config-repo/argocd/projects/default-project.yaml
+
+# 2. Install ingress-nginx (gives apps an external IP via GCP LoadBalancer)
+kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
+
+# 3. Install Crossplane (required for GCP Cloud Run provisioning)
+kubectl apply -f config-repo/infra/crossplane/application.yaml
+```
+
+After step 2, ArgoCD installs nginx-ingress and GCP assigns a LoadBalancer IP. The portal detects this IP automatically.
+
+---
+
+## GCP IAM requirements (Terraform)
+
+| Service Account | Role needed | Why |
+|---|---|---|
+| GKE nodes default SA (`{project_number}-compute@developer.gserviceaccount.com`) | `roles/artifactregistry.reader` | Nodes must pull app images from GCP Artifact Registry |
+| `github-ci-sa` | `roles/artifactregistry.writer` | CI pipeline pushes built images (already configured) |
+| `crossplane-gcp-sa` | `roles/run.admin` + `roles/iam.serviceAccountUser` | Crossplane manages Cloud Run services |
+
+**Without `artifactregistry.reader` on the node SA, all app pods stay in `ImagePullBackOff` and never start.**
 
 ---
 
@@ -185,14 +284,19 @@ apps/{appName}/overlays/dev/
   kustomization.yaml            newTag: "placeholder" — CI replaces this on every push to main
   namespace.yaml
   configmap.yaml                LOG_LEVEL, DD_ENV, DD_SERVICE, DD_VERSION
-  ingress.yaml                  cert-manager TLS, host: {app}-dev.cnp.example.com
+  ingress.yaml                  host: {app}-dev.{INGRESS_IP}.nip.io — auto-detected at onboarding time
 apps/{appName}/overlays/prod/
   (same four files, 3 replicas in prod patch)
+apps/{appName}/crossplane/
+  cloudrun-claim.yaml           Crossplane V2Service for Cloud Run (GCP only)
+  cloudrun-iam.yaml             Public IAM binding for Cloud Run
+  kustomization.yaml
+  application.yaml              ArgoCD Application pointing to this crossplane/ dir
 argocd/overlays/{appName}/
-  kustomization.yaml            Kustomize overlay → patches base ApplicationSet templates with app name + team
+  kustomization.yaml            Kustomize overlay → patches base ApplicationSet templates
 ```
 
-Image registry for all apps: `europe-west9-docker.pkg.dev/cnp-terraform/cnp-registry/{appName}`
+ArgoCD project used for all apps: `platform` (defined in `config-repo/argocd/projects/default-project.yaml`).
 
 ---
 

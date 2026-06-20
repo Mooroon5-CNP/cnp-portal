@@ -310,11 +310,117 @@ async function getV2ServiceUrl(appName) {
   }
 }
 
+// Cache the ingress IP for the lifetime of the process — it almost never changes.
+let _ingressIpCache = null;
+
+async function getIngressControllerIp() {
+  if (_ingressIpCache) return _ingressIpCache;
+
+  const kc = getKubeConfig();
+  const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+
+  // Try the most common name first, then fall back to label search.
+  const candidates = [
+    { namespace: 'ingress-nginx', name: 'ingress-nginx-controller' },
+    { namespace: 'ingress-nginx', name: 'nginx-ingress-controller' },
+    { namespace: 'kube-system',   name: 'ingress-nginx-controller' },
+  ];
+
+  for (const { namespace, name } of candidates) {
+    try {
+      const { body } = await coreApi.readNamespacedService(name, namespace);
+      const ip = body.status?.loadBalancer?.ingress?.[0]?.ip
+               || body.status?.loadBalancer?.ingress?.[0]?.hostname
+               || null;
+      if (ip) {
+        _ingressIpCache = ip;
+        return ip;
+      }
+    } catch (_) {}
+  }
+
+  // Last resort: scan all services for one with a LoadBalancer IP and an ingress-related name.
+  try {
+    const { body } = await coreApi.listServiceForAllNamespaces(
+      undefined, undefined, undefined, 'app.kubernetes.io/component=controller',
+    );
+    for (const svc of body.items || []) {
+      const ip = svc.status?.loadBalancer?.ingress?.[0]?.ip
+               || svc.status?.loadBalancer?.ingress?.[0]?.hostname
+               || null;
+      if (ip) {
+        _ingressIpCache = ip;
+        return ip;
+      }
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+async function isCertManagerAvailable() {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    await customApi.listClusterCustomObject('cert-manager.io', 'v1', 'clusterissuers');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function getIngressUrl(appName, env) {
+  const kc = getKubeConfig();
+  const networkingApi = kc.makeApiClient(k8s.NetworkingV1Api);
+  const namespace = `${appName}-${env}`;
+  try {
+    const { body } = await networkingApi.readNamespacedIngress(appName, namespace);
+    const host = body.spec?.rules?.[0]?.host;
+    if (!host) return null;
+    return `https://${host}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Provision an ArgoCD local user account:
+//   - patches argocd-cm to enable the account (accounts.<username>: login)
+//   - patches argocd-secret to store the bcrypt password hash
+// bcryptHash must already be a bcrypt string (e.g. from bcryptjs.hashSync).
+async function provisionArgoCDLocalUser(username, bcryptHash) {
+  const kc  = getKubeConfig();
+  const api = kc.makeApiClient(k8s.CoreV1Api);
+  const ns  = 'argocd';
+  const mergeHeader = { headers: { 'Content-Type': 'application/merge-patch+json' } };
+
+  try {
+    // 1. Enable the account in argocd-cm
+    await api.patchNamespacedConfigMap(
+      'argocd-cm', ns,
+      { data: { [`accounts.${username}`]: 'login' } },
+      undefined, undefined, undefined, undefined,
+      mergeHeader,
+    );
+
+    // 2. Store the bcrypt password hash in argocd-secret (value must be base64-encoded)
+    const hashB64 = Buffer.from(bcryptHash).toString('base64');
+    await api.patchNamespacedSecret(
+      'argocd-secret', ns,
+      { data: { [`accounts.${username}.password`]: hashB64 } },
+      undefined, undefined, undefined, undefined,
+      mergeHeader,
+    );
+  } catch (err) {
+    handleError(err, `provisionArgoCDLocalUser(${username})`);
+  }
+}
+
 module.exports = {
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
   applyArgocdApplication, deleteArgocdApplication,
-  getV2ServiceUrl,
+  getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  provisionArgoCDLocalUser,
 };

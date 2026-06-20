@@ -297,6 +297,25 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
 
     const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+    let ingressUrl = null;
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready') {
+        // Try reading the actual Ingress host from the cluster.
+        ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
+
+        // If URL is missing or still the placeholder, auto-heal in background.
+        const isPlaceholder = !ingressUrl || ingressUrl.includes('cnp.example.com');
+        if (isPlaceholder) {
+            const ip = await k8sClient.getIngressControllerIp().catch(() => null);
+            if (ip) {
+                ingressUrl = `https://${dep.appName}-dev.${ip}.nip.io`;
+                // Fire-and-forget: rewrite ingress in config-repo + re-apply ApplicationSets.
+                onboardingService.healIngressHostname(dep.appName).catch(e =>
+                    console.warn(`[detail] healIngressHostname(${dep.appName}): ${e.message}`)
+                );
+            }
+        }
+    }
+    const appUrl = cloudRunUrl || ingressUrl;
 
     const safeDeployment = {
         id: dep.id,
@@ -330,7 +349,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         jobs,
         failureHint,
         githubActionsUrl,
-        cloudRunUrl,
+        cloudRunUrl: appUrl,
         pendingDeletion,
         ownerTeam,
         accessTeams,

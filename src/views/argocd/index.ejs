@@ -13,88 +13,43 @@
           <div class="page-title">ArgoCD</div>
           <div class="page-subtitle">Déploiements GitOps — suivi des applications</div>
         </div>
-        <div style="display:flex;gap:10px;">
-          <% if (can('argocd:access:request')) { %>
-          <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès</button>
-          <% } %>
-          <!-- TODO: replace with real ArgoCD URL -->
-          <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" class="btn btn-primary">Ouvrir ArgoCD ↗</a>
-        </div>
+        <% if (argoCDUiUrl) { %>
+        <a href="<%= argoCDUiUrl %>" target="_blank" rel="noopener" class="btn btn-primary">Ouvrir ArgoCD ↗</a>
+        <% } %>
       </div>
 
-      <div class="card mb-6">
-        <div class="card-header"><span class="card-title">Accéder à ArgoCD</span></div>
-        <div class="card-body" style="line-height:1.8;">
-          <p style="margin-bottom:16px;">L'accès à ArgoCD est géré par l'équipe infra. Suivez les étapes ci-dessous pour obtenir un accès.</p>
-
-          <ol style="margin-left:20px;margin-bottom:0;">
-            <li style="margin-bottom:12px;">
-              <strong>Demander un accès</strong> — Contactez votre manager ou l'équipe CNP (canal Slack <code>#cnp-infra</code>) en indiquant votre nom, votre rôle et les applications sur lesquelles vous avez besoin de visibilité.
-            </li>
-            <li style="margin-bottom:12px;">
-              <strong>Réception des credentials</strong> — Un compte sera créé et les identifiants vous seront transmis par votre manager. L'authentification se fait via SSO GitLab ou avec un compte local selon la configuration en place.
-            </li>
-            <li style="margin-bottom:12px;">
-              <strong>Se connecter</strong> — Rendez-vous sur
-              <!-- TODO: replace with real ArgoCD URL -->
-              <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" style="color:var(--primary);">argocd.fake-cnp.example.com</a>
-              et authentifiez-vous.
-            </li>
-          </ol>
-        </div>
-      </div>
-
-      <div class="card mb-6">
-        <div class="card-header"><span class="card-title">Retrouver votre projet CNP</span></div>
-        <div class="card-body" style="line-height:1.8;">
-          <p style="margin-bottom:12px;">Une fois connecté, retrouvez les applications CNP de la façon suivante :</p>
-          <ol style="margin-left:20px;margin-bottom:0;">
-            <li style="margin-bottom:12px;">
-              Sur la page d'accueil d'ArgoCD (<strong>Applications</strong>), utilisez le filtre <code>Project: cnp</code> pour afficher uniquement les applications du projet CNP.
-            </li>
-            <li style="margin-bottom:12px;">
-              Chaque application correspond à un service déployé. Cliquez sur une application pour voir son état de synchronisation, sa santé, et l'historique des déploiements.
-            </li>
-            <li style="margin-bottom:12px;">
-              Pour forcer une synchronisation, cliquez sur <strong>Sync</strong> dans la vue de l'application (nécessite le rôle <code>developer</code> ou supérieur).
-            </li>
-            <li style="margin-bottom:0;">
-              Les logs des pods sont accessibles via l'onglet <strong>Pods</strong> dans la vue d'une application.
-            </li>
-          </ol>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:20px;">
-          <!-- TODO: update with real ArgoCD URL once configured -->
-          Lien direct vers ArgoCD CNP :
-          <a href="https://argocd.fake-cnp.example.com" target="_blank" rel="noopener" style="color:var(--primary);margin-left:6px;">https://argocd.fake-cnp.example.com</a>
-        </div>
-      </div>
-
-      <!-- Pending access requests — managers only -->
+      <!-- ── MANAGER : demandes en attente ─────────────────────────────── -->
       <% if (can('argocd:access:approve') && accessRequests.length > 0) { %>
-      <div class="card mt-6">
-        <div class="card-header"><span class="card-title">Demandes d'accès ArgoCD en attente</span></div>
+      <div class="card mb-6" style="border-left:4px solid var(--warning,#f59e0b);">
+        <div class="card-header">
+          <span class="card-title">Demandes d'accès ArgoCD en attente</span>
+          <span class="badge badge-warning"><%= accessRequests.length %></span>
+        </div>
         <div class="table-container">
           <table>
-            <thead><tr><th>Utilisateur</th><th>Application</th><th>Raison</th><th>Date</th><th>Action</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Utilisateur</th>
+                <th>Application</th>
+                <th>Raison</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
             <tbody>
-              <% accessRequests.forEach((r, idx) => { %>
+              <% accessRequests.forEach(r => { %>
               <tr>
                 <td class="font-mono"><%= r.userId %></td>
                 <td><%= r.appName || '—' %></td>
                 <td><%= r.reason %></td>
-                <td class="text-muted"><%= new Date(r.requestedAt).toLocaleString('fr-FR') %></td>
-                <td>
-                  <% if (!r.approved) { %>
-                  <form action="/argocd/access-request/<%= idx %>/approve" method="POST" class="inline-form">
+                <td class="text-muted"><%= new Date(r.createdAt).toLocaleString('fr-FR') %></td>
+                <td style="display:flex;gap:8px;">
+                  <form action="/argocd/access-request/<%= r.id %>/approve" method="POST" class="inline-form">
                     <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
                   </form>
-                  <% } else { %>
-                  <span class="badge badge-success">Approuvé</span>
-                  <% } %>
+                  <form action="/argocd/access-request/<%= r.id %>/reject" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
+                  </form>
                 </td>
               </tr>
               <% }) %>
@@ -104,8 +59,148 @@
       </div>
       <% } %>
 
-      <!-- Access request modal -->
-      <% if (can('argocd:access:request')) { %>
+      <!-- ── DEV / DEVOPS : statut de la demande ───────────────────────── -->
+      <% if (myRequest === null && can('argocd:access:request')) { %>
+      <!-- Pas encore de demande -->
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Accès ArgoCD</span></div>
+        <div class="card-body">
+          <p style="margin-bottom:16px;color:var(--text-muted);">
+            Vous n'avez pas encore accès à ArgoCD. Envoyez une demande à votre manager — il recevra une notification et pourra l'approuver directement depuis ce portail.
+          </p>
+          <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-primary">
+            Demander un accès
+          </button>
+        </div>
+      </div>
+
+      <% } else if (myRequest && myRequest.status === 'pending') { %>
+      <!-- Demande en attente -->
+      <div class="card mb-6" style="border-left:4px solid var(--warning,#f59e0b);">
+        <div class="card-header">
+          <span class="card-title">Accès ArgoCD</span>
+          <span class="badge badge-warning">En attente d'approbation</span>
+        </div>
+        <div class="card-body" style="color:var(--text-muted);">
+          <p>Votre demande a été envoyée à votre manager le <strong><%= new Date(myRequest.createdAt).toLocaleString('fr-FR') %></strong>.</p>
+          <p style="margin-top:8px;">Raison transmise : <em><%= myRequest.reason %></em></p>
+        </div>
+      </div>
+
+      <% } else if (myRequest && myRequest.status === 'approved') { %>
+      <!-- Accès approuvé + credentials -->
+      <div class="card mb-6" style="border-left:4px solid var(--success,#10b981);">
+        <div class="card-header">
+          <span class="card-title">Vos identifiants ArgoCD</span>
+          <span class="badge badge-success">Accès accordé</span>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">
+            Votre compte a été créé automatiquement. Utilisez les identifiants ci-dessous pour vous connecter à ArgoCD.
+            Changez votre mot de passe lors de la première connexion (Settings → Account → Update Password).
+          </p>
+
+          <div style="background:var(--bg-secondary,#f9fafb);border-radius:8px;padding:16px 20px;margin-bottom:16px;">
+
+            <% if (argoCDUiUrl) { %>
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#e5e7eb);">
+              <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">1. Ouvrir</span>
+              <a href="<%= argoCDUiUrl %>" target="_blank" rel="noopener" style="color:var(--primary);font-family:monospace;font-size:13px;word-break:break-all;"><%= argoCDUiUrl %></a>
+            </div>
+            <% } %>
+
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#e5e7eb);">
+              <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">2. Username</span>
+              <code style="font-size:14px;flex:1;"><%= myRequest.argoCDUsername %></code>
+              <button onclick="navigator.clipboard.writeText('<%= myRequest.argoCDUsername %>').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 0;">
+              <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">3. Password</span>
+              <code id="argocd-pwd" style="font-size:14px;flex:1;letter-spacing:0.05em;"><%= myRequest.argoCDPassword %></code>
+              <button onclick="navigator.clipboard.writeText('<%= myRequest.argoCDPassword %>').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
+            </div>
+          </div>
+
+          <p style="font-size:12px;color:var(--text-muted);">
+            Accès approuvé le <%= new Date(myRequest.updatedAt).toLocaleString('fr-FR') %>.
+          </p>
+        </div>
+      </div>
+
+      <% } else if (myRequest && myRequest.status === 'rejected') { %>
+      <!-- Demande refusée -->
+      <div class="card mb-6" style="border-left:4px solid var(--danger,#ef4444);">
+        <div class="card-header">
+          <span class="card-title">Accès ArgoCD</span>
+          <span class="badge badge-danger">Refusée</span>
+        </div>
+        <div class="card-body">
+          <p style="color:var(--text-muted);">Votre demande a été refusée. Contactez votre manager pour plus d'informations.</p>
+          <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary" style="margin-top:12px;">
+            Faire une nouvelle demande
+          </button>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- ── Applications ArgoCD (si accès) ────────────────────────────── -->
+      <% if (hasAccess) { %>
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Applications</span></div>
+        <% if (apps.length === 0) { %>
+        <div class="card-body" style="color:var(--text-muted);text-align:center;padding:32px;">
+          Aucune application ArgoCD trouvée ou le serveur est inaccessible.
+        </div>
+        <% } else { %>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Nom</th>
+                <th>Namespace</th>
+                <th>Sync</th>
+                <th>Santé</th>
+                <th>Dernière synchro</th>
+                <% if (can('argocd:sync')) { %><th>Actions</th><% } %>
+              </tr>
+            </thead>
+            <tbody>
+              <% apps.forEach(app => { %>
+              <tr>
+                <td class="font-mono"><%= app.name %></td>
+                <td class="text-muted"><%= app.namespace || '—' %></td>
+                <td>
+                  <span class="badge <%= app.status === 'Synced' ? 'badge-success' : app.status === 'OutOfSync' ? 'badge-warning' : 'badge-secondary' %>">
+                    <%= app.status %>
+                  </span>
+                </td>
+                <td>
+                  <span class="badge <%= app.health === 'Healthy' ? 'badge-success' : app.health === 'Degraded' ? 'badge-danger' : 'badge-secondary' %>">
+                    <%= app.health %>
+                  </span>
+                </td>
+                <td class="text-muted" style="font-size:12px;">
+                  <%= app.syncedAt ? new Date(app.syncedAt).toLocaleString('fr-FR') : '—' %>
+                </td>
+                <% if (can('argocd:sync')) { %>
+                <td>
+                  <form action="/argocd/sync/<%= app.name %>" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-secondary btn-sm">Sync</button>
+                  </form>
+                </td>
+                <% } %>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+        <% } %>
+      </div>
+      <% } %>
+
+      <!-- ── Modal demande d'accès ──────────────────────────────────────── -->
+      <% if (can('argocd:access:request') && (!myRequest || myRequest.status === 'rejected')) { %>
       <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
         <div class="card" style="width:460px;">
           <div class="card-header">
@@ -113,7 +208,9 @@
             <button onclick="document.getElementById('access-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);">×</button>
           </div>
           <div class="card-body">
-            <p style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">Votre demande sera transmise aux managers. Ils vous fourniront un compte ArgoCD par retour.</p>
+            <p style="margin-bottom:16px;color:var(--text-muted);font-size:13px;">
+              Votre manager recevra une notification ici et pourra créer votre compte ArgoCD directement depuis ce portail.
+            </p>
             <form action="/argocd/access-request" method="POST">
               <div class="form-group">
                 <label>Application cible (optionnel)</label>
