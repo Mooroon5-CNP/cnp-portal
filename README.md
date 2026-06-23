@@ -17,6 +17,10 @@ A user submits a GitHub repo URL through the UI. The portal then automatically:
 7. Creates the `prod` branch in the app repo
 8. Commits a trigger file (`.cnp-platform`) to fire the first CI run
 
+If **DB persistante** is checked at onboarding, the portal also writes a `pvc.yaml` (1Gi ReadWriteOnce) into each overlay and mounts it at `/data` inside the container. The volume survives pod restarts.
+
+When an app is deleted, the portal removes all config-repo files, deletes the ArgoCD `Application` objects for dev and prod, and deletes the corresponding Kubernetes namespaces — so a re-onboard of the same app starts from a clean state.
+
 After that the CI pipeline is self-contained: on each push to `main` it builds the image, pushes to GCP Artifact Registry, updates `newTag` in config-repo, and ArgoCD syncs automatically.
 
 The app becomes accessible at `https://{appName}-dev.{CLUSTER_INGRESS_IP}.nip.io` — the portal detects the ingress controller IP automatically from the cluster.
@@ -161,8 +165,7 @@ DevOps revisits /argocd
   └─ sees the live list of ArgoCD applications they have access to
 ```
 
-**Kubernetes RBAC requirement** — the portal's service account (`KUBE_TOKEN`) must be able
-to `get` and `patch` the following resources in the `argocd` namespace:
+**Kubernetes RBAC requirement** — the portal's service account (`KUBE_TOKEN`) must be able to `get` and `patch` the following resources in the `argocd` namespace:
 
 ```yaml
 - apiGroups: [""]
@@ -178,6 +181,17 @@ to `get` and `patch` the following resources in the `argocd` namespace:
 If the RBAC permission is missing the provisioning step is logged as an error but the
 request is still marked approved and the portal shows the generated credentials —
 a manager can then create the ArgoCD account manually using those same credentials.
+
+**ApplicationSet RBAC requirement** — for the portal to apply `ApplicationSet` objects during app onboarding (step 4 above), the service account also needs:
+
+```yaml
+# Role in the argocd namespace
+- apiGroups: ["argoproj.io"]
+  resources: ["applicationsets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+```
+
+Apply the Role + RoleBinding from bootstrap step 4 below. Without it, ApplicationSets are not applied and ArgoCD will never watch the app — CI runs will build the image but nothing will deploy. The portal logs a warning in that case but still completes onboarding.
 
 ---
 
@@ -227,7 +241,7 @@ Copy `.env.example` to `.env` to get started locally.
 
 ## Cluster bootstrap (one-time per cluster)
 
-These 3 commands must be run after a new GKE cluster is created. They are normally automated in Terraform via `local-exec`. Without them, no app can deploy or be accessed.
+These steps must be run once after a new GKE cluster is created. They are normally automated in Terraform via `local-exec`. Without them, no app can deploy or be accessed.
 
 ```bash
 # 1. Create the ArgoCD AppProject (required by all ApplicationSets)
@@ -238,9 +252,36 @@ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
 
 # 3. Install Crossplane (required for GCP Cloud Run provisioning)
 kubectl apply -f config-repo/infra/crossplane/application.yaml
+
+# 4. Grant the portal's service account permission to manage ApplicationSets
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cnp-portal-applicationsets
+  namespace: argocd
+rules:
+- apiGroups: ["argoproj.io"]
+  resources: ["applicationsets"]
+  verbs: ["get","list","create","update","patch","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cnp-portal-applicationsets
+  namespace: argocd
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: Role
+  name: cnp-portal-applicationsets
+  apiGroup: rbac.authorization.k8s.io
+EOF
 ```
 
-After step 2, ArgoCD installs nginx-ingress and GCP assigns a LoadBalancer IP. The portal detects this IP automatically.
+After step 2, ArgoCD installs nginx-ingress and GCP assigns a LoadBalancer IP. The portal detects this IP automatically. Step 4 is required for app onboarding to apply ApplicationSets — without it the portal logs a warning and ArgoCD never watches the app.
 
 ---
 
@@ -285,8 +326,9 @@ apps/{appName}/overlays/dev/
   namespace.yaml
   configmap.yaml                LOG_LEVEL, DD_ENV, DD_SERVICE, DD_VERSION
   ingress.yaml                  host: {app}-dev.{INGRESS_IP}.nip.io — auto-detected at onboarding time
+  pvc.yaml                      (only when "DB persistante" is checked) 1Gi ReadWriteOnce PVC mounted at /data
 apps/{appName}/overlays/prod/
-  (same four files, 3 replicas in prod patch)
+  (same files as dev; prod overlay uses 3 replicas patch)
 apps/{appName}/crossplane/
   cloudrun-claim.yaml           Crossplane V2Service for Cloud Run (GCP only)
   cloudrun-iam.yaml             Public IAM binding for Cloud Run
