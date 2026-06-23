@@ -297,6 +297,18 @@ async function deleteArgocdApplication(name) {
   }
 }
 
+// Delete a K8s namespace (and all resources inside it). Idempotent.
+async function deleteNamespace(name) {
+  const kc = getKubeConfig();
+  const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+  try {
+    await coreApi.deleteNamespace(name);
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return;
+    handleError(err, `deleteNamespace(${name})`);
+  }
+}
+
 async function getV2ServiceUrl(appName) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -421,6 +433,7 @@ module.exports = {
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
   applyArgocdApplication, deleteArgocdApplication,
+  deleteNamespace,
   getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

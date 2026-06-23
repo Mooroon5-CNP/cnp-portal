@@ -154,7 +154,8 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // ---------------------------------------------------------------------------
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster } = req.body;
+    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage } = req.body;
+    const hasPersistentStorage = persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true;
 
     if (!appName || !githubRepoUrl) {
         req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
@@ -185,6 +186,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             configRepoToken: null,
             ownerUserId: req.user.id,
             ownerTeamId: resolvedTeamId,
+            persistentStorage: hasPersistentStorage,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
@@ -196,8 +198,9 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         appName,
         githubRepoUrl,
         appPort: parseInt(appPort, 10) || 8080,
-        teamOwner: 'team-cnp',
+        teamOwner: 'platform',
         targetCluster: targetCluster || 'gcp',
+        persistentStorage: hasPersistentStorage,
         updateStatus: async (status, error) => {
             deploymentModel.updateOnboardingStatus(dep.id, status, error);
         },

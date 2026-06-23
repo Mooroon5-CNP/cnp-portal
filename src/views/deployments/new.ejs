@@ -77,7 +77,15 @@
                           </div>
                           <% } %>
 
-                            <div style="display:flex;gap:10px;margin-top:24px;">
+                            <div class="form-group">
+                          <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:500;">
+                            <input type="checkbox" name="persistentStorage" id="persistentStorage" style="width:18px;height:18px;accent-color:#6366f1;">
+                            DB persistante (PVC 1Gi)
+                          </label>
+                          <div class="form-hint">Crée un volume persistant monté sur <code>/data</code> dans le container. Nécessaire si l'app utilise SQLite ou tout fichier de données qui doit survivre aux redémarrages.</div>
+                        </div>
+
+                        <div style="display:flex;gap:10px;margin-top:24px;">
                               <button type="submit" class="btn btn-primary">Déclencher le déploiement</button>
                               <a href="/deployments" class="btn btn-secondary">Annuler</a>
                             </div>

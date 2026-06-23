@@ -24,7 +24,13 @@ function parseConfigRepoName() {
 
 const IMAGE_REGISTRY = config.gcp.imageRegistry;
 
-function tplBaseDeployment(appName, appPort) {
+function tplBaseDeployment(appName, appPort, persistentStorage = false) {
+    const dataVolumeMount = persistentStorage
+        ? `\n            - name: data\n              mountPath: /data` : '';
+    const dataVolume = persistentStorage
+        ? `\n        - name: data\n          persistentVolumeClaim:\n            claimName: ${appName}-data` : '';
+    const dataEnv = persistentStorage
+        ? `\n          env:\n            - name: DATA_DIR\n              value: /data` : '';
     return `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,7 +58,7 @@ spec:
         - name: ${appName}
           image: ${IMAGE_REGISTRY}/${appName}:latest
           ports:
-            - containerPort: ${appPort}
+            - containerPort: ${appPort}${dataEnv}
           resources:
             limits:
               cpu: 500m
@@ -65,7 +71,7 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - name: tmp
-              mountPath: /tmp
+              mountPath: /tmp${dataVolumeMount}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -80,7 +86,21 @@ spec:
             periodSeconds: 10
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir: {}${dataVolume}
+`;
+}
+
+function tplOverlayPvc(appName, env) {
+    return `apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${appName}-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 `;
 }
 
@@ -175,16 +195,15 @@ spec:
 `;
 }
 
-function tplOverlayKustomization(appName, env, teamOwner, appPort) {
+function tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage = false) {
     const ns = `${appName}-${env}`;
     const configMapName = `${appName}-${env}-config`;
     const patch = env === 'prod'
         ? `\npatches:\n  - target:\n      kind: Deployment\n      name: ${appName}\n    patch: |-\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata:\n        name: ${appName}\n      spec:\n        replicas: 3\n        template:\n          spec:\n            containers:\n              - name: ${appName}\n                envFrom:\n                  - configMapRef:\n                      name: ${configMapName}\n`
         : `\npatches:\n  - target:\n      kind: Deployment\n      name: ${appName}\n    patch: |-\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata:\n        name: ${appName}\n      spec:\n        template:\n          spec:\n            containers:\n              - name: ${appName}\n                envFrom:\n                  - configMapRef:\n                      name: ${configMapName}\n`;
 
-    const resources = env === 'dev'
-        ? `  - ../../base\n  - namespace.yaml\n  - configmap.yaml\n  - ingress.yaml`
-        : `  - ../../base\n  - namespace.yaml\n  - configmap.yaml\n  - ingress.yaml`;
+    const pvcLine = persistentStorage ? `\n  - pvc.yaml` : '';
+    const resources = `  - ../../base\n  - namespace.yaml\n  - configmap.yaml\n  - ingress.yaml${pvcLine}`;
 
     return `apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -455,7 +474,7 @@ function buildApplicationSetManifests(appName, teamOwner, configRepoUrl) {
     return { dev, prod };
 }
 
-function tplCiWorkflow(appName, appPort, configRepoUrl) {
+function tplCiWorkflow(appName, appPort, configRepoUrl, targetCluster = 'gcp') {
     return `name: CI
 
 on:
@@ -473,6 +492,7 @@ jobs:
       app_name: "${appName}"
       app_port: "${appPort}"
       config_repo_url: "${configRepoUrl}"
+      target_cloud: "${targetCluster === 'aws' ? 'aws' : 'gcp'}"
     secrets:
       CONFIG_REPO_TOKEN: \${{ secrets.CONFIG_REPO_TOKEN }}
 `;
@@ -548,7 +568,7 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
  * @param {string} [opts.teamOwner]    - Team slug (default: team-cnp).
  * @param {Function} opts.updateStatus - Callback(status, error?) to persist progress.
  */
-async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platform', targetCluster = 'gcp', updateStatus }) {
+async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platform', targetCluster = 'gcp', persistentStorage = false, updateStatus }) {
     const configRepoToken = config.github.configRepoToken;
     if (!configRepoToken) {
         await updateStatus('failed', 'GITHUB_CONFIG_REPO_TOKEN is not configured on the platform.');
@@ -585,7 +605,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // Step 1: Create config-repo base manifests
         // ------------------------------------------------------------------
         const base = `apps/${appName}/base`;
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/deployment.yaml`, tplBaseDeployment(appName, appPort), configRepoToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/deployment.yaml`, tplBaseDeployment(appName, appPort, persistentStorage), configRepoToken);
         await writeConfigRepoFile(crOwner, crRepo, `${base}/kustomization.yaml`, tplBaseKustomization(), configRepoToken);
         await writeConfigRepoFile(crOwner, crRepo, `${base}/service.yaml`, tplBaseService(appName, appPort), configRepoToken);
         await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-default-deny.yaml`, tplNetpolDefaultDeny(appName), configRepoToken);
@@ -597,7 +617,10 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // ------------------------------------------------------------------
         for (const env of ['dev', 'prod']) {
             const overlay = `apps/${appName}/overlays/${env}`;
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage), configRepoToken);
+            if (persistentStorage) {
+                await writeConfigRepoFile(crOwner, crRepo, `${overlay}/pvc.yaml`, tplOverlayPvc(appName, env), configRepoToken);
+            }
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/namespace.yaml`, tplOverlayNamespace(appName, env), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/configmap.yaml`, tplOverlayConfigMap(appName, env), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${overlay}/ingress.yaml`, await tplOverlayIngress(appName, env), configRepoToken);
@@ -626,8 +649,10 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
             await k8sClient.applyApplicationSet(devAppSet);
             await k8sClient.applyApplicationSet(prodAppSet);
         } catch (e) {
-            // K8s may be unavailable in local dev — log but don't fail onboarding.
+            // Not fatal (K8s may be unreachable in local dev) but surface it so the user knows ArgoCD won't sync.
             console.warn(`[onboarding] Could not apply ApplicationSets to cluster: ${e.message}`);
+            await updateStatus('ready', `⚠️ Manifests créés mais ApplicationSets non appliqués au cluster : ${e.message}. L'app n'apparaîtra pas dans ArgoCD tant que ce n'est pas corrigé.`);
+            return;
         }
 
         // ------------------------------------------------------------------
@@ -649,7 +674,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // Step 4: Create ci.yml in the app repo (GitHub App)
         // Committing this file to main automatically triggers the first CI run.
         // ------------------------------------------------------------------
-        const ciContent = tplCiWorkflow(appName, appPort, configRepoUrl);
+        const ciContent = tplCiWorkflow(appName, appPort, configRepoUrl, targetCluster);
         const ciPath = '.github/workflows/ci.yml';
         const ciSha = await githubClient.getFileSha(appOwner, appRepo, ciPath);
         await githubClient.createOrUpdateFile(
@@ -661,7 +686,15 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // ------------------------------------------------------------------
         // Step 5: Inject CONFIG_REPO_TOKEN secret into app repo (GitHub App)
         // ------------------------------------------------------------------
-        await githubClient.setRepoSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN', configRepoToken);
+        try {
+            await githubClient.setRepoSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN', configRepoToken);
+        } catch (e) {
+            // Surface clearly — CI will fail without this secret
+            throw new Error(
+                `Impossible d'injecter CONFIG_REPO_TOKEN sur ${appOwner}/${appRepo}: ${e.message}. ` +
+                `Vérifiez que le GitHub App a la permission "secrets: write" sur ce dépôt.`
+            );
+        }
 
         // ------------------------------------------------------------------
         // Step 6: Create prod branch if it doesn't already exist (GitHub App)
@@ -702,7 +735,7 @@ function configRepoPaths(appName) {
     ];
     for (const env of ['dev', 'prod']) {
         const ov = `apps/${appName}/overlays/${env}`;
-        paths.push(`${ov}/kustomization.yaml`, `${ov}/namespace.yaml`, `${ov}/configmap.yaml`, `${ov}/ingress.yaml`);
+        paths.push(`${ov}/kustomization.yaml`, `${ov}/namespace.yaml`, `${ov}/configmap.yaml`, `${ov}/ingress.yaml`, `${ov}/pvc.yaml`);
     }
     paths.push(`argocd/overlays/${appName}/kustomization.yaml`);
     const cp = `apps/${appName}/crossplane`;
@@ -769,12 +802,27 @@ async function offboardApp({ appName, githubRepoUrl }) {
         }
     }
 
-    // Step 3: delete ArgoCD ApplicationSets and Application from the cluster
-    try {
-        await k8sClient.deleteApplicationSet(`${appName}-dev`);
-        await k8sClient.deleteApplicationSet(`${appName}-prod`);
-    } catch (e) {
-        errors.push(`applicationsets: ${e.message}`);
+    // Step 3: delete ArgoCD ApplicationSets and Applications from the cluster
+    for (const env of ['dev', 'prod']) {
+        try {
+            await k8sClient.deleteApplicationSet(`${appName}-${env}`);
+        } catch (e) {
+            errors.push(`applicationset ${appName}-${env}: ${e.message}`);
+        }
+        try {
+            await k8sClient.deleteArgocdApplication(`${appName}-${env}`);
+        } catch (e) {
+            errors.push(`argocd application ${appName}-${env}: ${e.message}`);
+        }
+    }
+
+    // Step 3.5: delete K8s namespaces (removes all pods, services, ingresses, configmaps)
+    for (const env of ['dev', 'prod']) {
+        try {
+            await k8sClient.deleteNamespace(`${appName}-${env}`);
+        } catch (e) {
+            errors.push(`namespace ${appName}-${env}: ${e.message}`);
+        }
     }
 
     // Step 4 & 5: app repo cleanup via GitHub App
