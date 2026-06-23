@@ -75,6 +75,15 @@ const config = {
   cluster: {
     baseDomain: process.env.CLUSTER_BASE_DOMAIN || 'cnp.example.com',
   },
+  gcp: {
+    project:       process.env.GCP_PROJECT        || 'cnp-terraform-500015',
+    region:        process.env.GCP_REGION         || 'europe-west9',
+    // Full Artifact Registry prefix: europe-west9-docker.pkg.dev/<project>/cnp-registry
+    imageRegistry: process.env.GCP_IMAGE_REGISTRY
+      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015'}/cnp-registry`,
+    cloudRunSa:    process.env.GCP_CLOUD_RUN_SA
+      || `cloud-run-sa@${process.env.GCP_PROJECT || 'cnp-terraform-500015'}.iam.gserviceaccount.com`,
+  },
 };
 
 module.exports = { config, getMissingVars };

@@ -22,7 +22,7 @@ function parseConfigRepoName() {
 // Image registry matches what pipeline.yml actually builds and pushes to.
 // ---------------------------------------------------------------------------
 
-const IMAGE_REGISTRY = 'europe-west9-docker.pkg.dev/cnp-terraform/cnp-registry';
+const IMAGE_REGISTRY = config.gcp.imageRegistry;
 
 function tplBaseDeployment(appName, appPort) {
     return `apiVersion: apps/v1
@@ -271,9 +271,9 @@ ${tlsBlock}  rules:
 `;
 }
 
-const GCP_PROJECT = 'cnp-terraform';
-const GCP_REGION = 'europe-west9';
-const CLOUD_RUN_SA = `cloud-run-sa@${GCP_PROJECT}.iam.gserviceaccount.com`;
+const GCP_PROJECT  = config.gcp.project;
+const GCP_REGION   = config.gcp.region;
+const CLOUD_RUN_SA = config.gcp.cloudRunSa;
 
 function tplCrossplaneV2Service(appName) {
     return `apiVersion: cloudrun.gcp.upbound.io/v1beta2

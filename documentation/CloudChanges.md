@@ -2,7 +2,18 @@
 
 Ce document liste **uniquement** les éléments propres à l'application **test-app-cnp** (CNP Portal) à modifier lors d'un changement de compte ou de projet GCP.
 
-> Pour les opérations cluster/ArgoCD générales (ingress, service accounts, etc.), voir [argocd-gcp-setup.md](./argocd-gcp-setup.md).
+> Pour les opérations cluster/ArgoCD générales (ingress, ArgoCD insecure, token), voir [argocd-gcp-setup.md](./argocd-gcp-setup.md).
+
+---
+
+## Valeurs actuelles (projet `cnp-terraform-500015`)
+
+| Variable `.env` | Valeur actuelle |
+|---|---|
+| `GCP_PROJECT` | `cnp-terraform-500015` |
+| `KUBE_API_URL` | `https://34.163.86.239` |
+| `ARGOCD_SERVER_URL` | `http://argocd.34.155.213.145.nip.io` |
+| `ARGOCD_UI_URL` | `http://argocd.34.155.213.145.nip.io` |
 
 ---
 
@@ -12,12 +23,13 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 
 | Variable | Dépend de | Comment obtenir la nouvelle valeur |
 |---|---|---|
-| `ARGOCD_SERVER_URL` | IP LoadBalancer du cluster | `kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'` → `http://argocd.<IP>.nip.io` |
-| `ARGOCD_UI_URL` | Même IP | Idem, même valeur que `ARGOCD_SERVER_URL` |
-| `ARGOCD_TOKEN` | Instance ArgoCD du cluster | Voir [argocd-gcp-setup.md §6](./argocd-gcp-setup.md#6-générer-le-token-api-permanent) |
+| `GCP_PROJECT` | ID du projet GCP | Valeur textuelle du projet (ex: `cnp-terraform-500015`) |
 | `KUBE_API_URL` | Endpoint du cluster GKE | `gcloud container clusters describe <NOM_CLUSTER> --zone <ZONE> --format="value(endpoint)"` → `https://<IP>` |
-| `KUBE_TOKEN` | Service account du portail | Voir ci-dessous — [§ Obtenir KUBE_TOKEN](#obtenir-kube_token) |
-| `KUBE_CA_CERT` | CA du cluster GKE | Voir ci-dessous — [§ Obtenir KUBE_CA_CERT](#obtenir-kube_ca_cert) |
+| `KUBE_TOKEN` | Service account du portail sur le cluster | Voir [§ Obtenir KUBE_TOKEN](#obtenir-kube_token) |
+| `KUBE_CA_CERT` | CA du cluster GKE | Voir [§ Obtenir KUBE_CA_CERT](#obtenir-kube_ca_cert) |
+| `ARGOCD_SERVER_URL` | IP LoadBalancer ingress-nginx | `kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'` → `http://argocd.<IP>.nip.io` |
+| `ARGOCD_UI_URL` | Même IP | Identique à `ARGOCD_SERVER_URL` |
+| `ARGOCD_TOKEN` | Instance ArgoCD du cluster | Voir [argocd-gcp-setup.md §6](./argocd-gcp-setup.md#étape-6--token-api-permanent) |
 
 ### Variables indépendantes de GCP (ne pas toucher)
 
@@ -29,20 +41,25 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 | `GITHUB_CONFIG_REPO_NAME` | Idem |
 | `GITHUB_CONFIG_REPO_TOKEN` | Idem |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth GitHub, pas GCP |
-| `GITLAB_*` | OAuth GitLab, pas GCP |
 | `DD_API_KEY` / `DD_APP_KEY` | Compte Datadog, pas GCP |
 | `SESSION_SECRET` | Généré localement |
-| `DEPLOYMENTS_SECRET` | Généré localement |
 
 ---
 
 ## 2. Comment obtenir les nouvelles valeurs GCP
 
+### Obtenir `GCP_PROJECT`
+
+```bash
+gcloud projects list
+# Utiliser la valeur de la colonne PROJECT_ID
+# Exemple : cnp-terraform-500015
+```
+
 ### Obtenir `KUBE_API_URL`
 
 ```bash
 gcloud container clusters list
-# Repérer le cluster, puis :
 gcloud container clusters describe <NOM_CLUSTER> \
   --zone <ZONE> \
   --format="value(endpoint)"
@@ -51,13 +68,12 @@ gcloud container clusters describe <NOM_CLUSTER> \
 
 ### Obtenir `KUBE_TOKEN`
 
-Le portail doit utiliser un service account Kubernetes dédié. Si le cluster a changé, recréer le service account et extraire son token :
-
 ```bash
-# Créer le service account (si pas encore fait)
+# Créer le namespace et service account si besoin
+kubectl create namespace cnp-portal --dry-run=client -o yaml | kubectl apply -f -
 kubectl create serviceaccount cnp-portal -n cnp-portal --dry-run=client -o yaml | kubectl apply -f -
 
-# Créer un Secret de type token (k8s >= 1.24 ne génère plus de token automatiquement)
+# Créer un Secret de type token (k8s >= 1.24)
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
@@ -69,7 +85,6 @@ metadata:
 type: kubernetes.io/service-account-token
 EOF
 
-# Attendre que le token soit injecté puis l'extraire
 sleep 5
 kubectl get secret cnp-portal-token -n cnp-portal \
   -o jsonpath='{.data.token}' | base64 -d
@@ -84,29 +99,63 @@ kubectl get secret cnp-portal-token -n cnp-portal \
 # Résultat déjà en base64 → KUBE_CA_CERT=<valeur>
 ```
 
-### Obtenir `ARGOCD_SERVER_URL` et `ARGOCD_UI_URL`
+### Obtenir `ARGOCD_SERVER_URL`, `ARGOCD_UI_URL` et `ARGOCD_TOKEN`
 
 ```bash
 INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-
 echo "ARGOCD_SERVER_URL=http://argocd.${INGRESS_IP}.nip.io"
 echo "ARGOCD_UI_URL=http://argocd.${INGRESS_IP}.nip.io"
 ```
 
-### Obtenir `ARGOCD_TOKEN`
-
-Voir [argocd-gcp-setup.md](./argocd-gcp-setup.md) — la procédure complète (mode insecure, ingress, compte service, token) doit être rejouée sur le nouveau cluster.
+Pour `ARGOCD_TOKEN` → voir [argocd-gcp-setup.md](./argocd-gcp-setup.md) étape 6.
 
 ---
 
-## 3. Manifests Kubernetes du portail lui-même (`k8s/`)
+## 3. Fichiers de code à mettre à jour
 
-Si le portail est déployé **sur le cluster GKE** (pas seulement en local), deux éléments changent.
+### `ci-templates/.github/workflows/pipeline.yml` et `build-push-artifact-registry.yml`
 
-### 3a. Image Docker — Artifact Registry
+Ces fichiers contiennent le project ID, project number et SA GCP en dur. À mettre à jour :
 
-Le portail est buildé et poussé vers l'Artifact Registry GCP. L'image contient le nom du projet :
+| Valeur | Ancienne | Nouvelle |
+|---|---|---|
+| Project ID | `cnp-terraform` | `cnp-terraform-500015` |
+| Project Number | `199851303237` | `688655933459` |
+| GitHub CI SA | `github-ci-sa@cnp-terraform.iam.gserviceaccount.com` | `github-ci-sa@cnp-terraform-500015.iam.gserviceaccount.com` |
+| AR Registry | `europe-west9-docker.pkg.dev/cnp-terraform/cnp-registry` | `europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry` |
+| WIF provider | `projects/199851303237/locations/...` | `projects/688655933459/locations/...` |
+
+Commande rapide pour tout remplacer :
+```bash
+OLD_PROJECT="cnp-terraform"
+NEW_PROJECT="cnp-terraform-500015"
+OLD_NUMBER="199851303237"
+NEW_NUMBER="688655933459"
+
+for FILE in ci-templates/.github/workflows/pipeline.yml \
+            ci-templates/.github/workflows/build-push-artifact-registry.yml; do
+  sed -i \
+    -e "s|projects/${OLD_NUMBER}/|projects/${NEW_NUMBER}/|g" \
+    -e "s|github-ci-sa@${OLD_PROJECT}\.iam|github-ci-sa@${NEW_PROJECT}.iam|g" \
+    -e "s|europe-west9-docker\.pkg\.dev/${OLD_PROJECT}/|europe-west9-docker.pkg.dev/${NEW_PROJECT}/|g" \
+    "$FILE"
+done
+```
+
+### `test-app-cnp/src/config/env.js`
+
+Le default de `GCP_PROJECT` est lu depuis l'env var. Mettre à jour la valeur par défaut si le projet change durablement :
+```javascript
+project: process.env.GCP_PROJECT || 'cnp-terraform-500015',
+```
+En production : toujours passer `GCP_PROJECT` en variable d'environnement plutôt que de modifier le code.
+
+---
+
+## 4. Manifests Kubernetes du portail (`k8s/`)
+
+Si le portail est déployé **sur le cluster GKE**, l'image Docker contient le nom du projet :
 
 ```
 europe-west9-docker.pkg.dev/<NOM_PROJET_GCP>/cnp-registry/cnp-portal:<tag>
@@ -114,76 +163,62 @@ europe-west9-docker.pkg.dev/<NOM_PROJET_GCP>/cnp-registry/cnp-portal:<tag>
 
 Fichiers à mettre à jour :
 
-| Fichier | Champ | Exemple de nouvelle valeur |
-|---|---|---|
-| `k8s/base/deployment.yaml` | `image:` | `europe-west9-docker.pkg.dev/<NOUVEAU_PROJET>/cnp-registry/cnp-portal:1.0.0` |
-| `k8s/overlays/dev/kustomization.yaml` | `images[].newName` | `europe-west9-docker.pkg.dev/<NOUVEAU_PROJET>/cnp-registry/cnp-portal` |
-| `k8s/overlays/prod/kustomization.yaml` | `images[].newName` | idem |
-
-### 3b. Hostname de l'ingress du portail
-
-L'ingress du portail utilise l'IP du LoadBalancer. Si l'IP change :
-
-```bash
-INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-# Nouveau hostname → cnp-portal.<INGRESS_IP>.nip.io
-```
-
-Fichiers à mettre à jour :
-
 | Fichier | Champ |
 |---|---|
-| `k8s/overlays/dev/kustomization.yaml` | `patches` sur `Ingress` → `spec.rules[0].host` et `spec.tls[0].hosts[0]` |
-| `k8s/overlays/prod/kustomization.yaml` | idem |
+| `k8s/base/deployment.yaml` | `image:` |
+| `k8s/overlays/dev/kustomization.yaml` | `images[].newName` |
+| `k8s/overlays/prod/kustomization.yaml` | `images[].newName` |
 
-### 3c. Secrets Kubernetes du portail
-
-Les secrets référencés dans `k8s/base/deployment.yaml` doivent être recréés sur le nouveau cluster :
-
+Commande :
 ```bash
-# Session secret
-kubectl create secret generic cnp-portal-dev-session-secret \
-  -n cnp-portal \
-  --from-literal=SESSION_SECRET=$(openssl rand -hex 32)
-
-# GitLab OAuth (récupérer les valeurs depuis .env)
-kubectl create secret generic cnp-portal-dev-gitlab-oauth \
-  -n cnp-portal \
-  --from-literal=GITLAB_CLIENT_ID=<valeur> \
-  --from-literal=GITLAB_CLIENT_SECRET=<valeur> \
-  --from-literal=GITLAB_REDIRECT_URI=<valeur>
-
-# Datadog (optionnel)
-kubectl create secret generic cnp-portal-dev-datadog-api-key \
-  -n cnp-portal \
-  --from-literal=DATADOG_API_KEY=<valeur>
+find k8s/ -name "*.yaml" -exec sed -i \
+  "s|europe-west9-docker.pkg.dev/cnp-terraform/|europe-west9-docker.pkg.dev/cnp-terraform-500015/|g" {} \;
 ```
 
 ---
 
-## 4. Checklist de migration — résumé
+## 5. IAM GCP requis (Terraform)
+
+Ces permissions doivent exister sur le nouveau projet — vérifier avec `gcloud projects get-iam-policy <PROJECT>` :
+
+| Service Account | Rôle | Pourquoi |
+|---|---|---|
+| `gke-nodes-sa@<PROJECT>.iam.gserviceaccount.com` | `roles/artifactregistry.reader` | Les nœuds GKE doivent pouvoir pull les images |
+| `github-ci-sa@<PROJECT>.iam.gserviceaccount.com` | `roles/artifactregistry.writer` | CI pipeline push les images buildées |
+| `crossplane-gcp-sa@<PROJECT>.iam.gserviceaccount.com` | `roles/run.admin` + `roles/iam.serviceAccountUser` | Crossplane gère Cloud Run |
+
+Sur `cnp-terraform-500015`, `gke-nodes-sa` a déjà `artifactregistry.reader` ✅
+
+---
+
+## 6. Checklist de migration — résumé
 
 ```
-□ Nouveau cluster GKE provisionné avec ArgoCD + nginx-ingress installés
+□ Nouveau cluster GKE provisionné (Terraform)
 
-□ ArgoCD configuré pour le portail (voir argocd-gcp-setup.md) :
+□ Bootstrap cluster (une fois, kubectl) :
+    □ kubectl apply -f config-repo/argocd/projects/default-project.yaml
+    □ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
+    □ kubectl apply -f config-repo/infra/crossplane/application.yaml
+
+□ ArgoCD configuré (voir argocd-gcp-setup.md) :
     □ Mode insecure activé
     □ Ingress créé  →  http://argocd.<IP>.nip.io
     □ Compte cnp-portal créé + RBAC configuré
     □ Token API généré
 
 □ .env mis à jour :
+    □ GCP_PROJECT=<nouveau-project-id>
+    □ KUBE_API_URL=https://<endpoint-cluster>
+    □ KUBE_TOKEN=<token SA cnp-portal>
+    □ KUBE_CA_CERT=<base64 CA>
     □ ARGOCD_SERVER_URL=http://argocd.<IP>.nip.io
     □ ARGOCD_UI_URL=http://argocd.<IP>.nip.io
     □ ARGOCD_TOKEN=<token généré>
-    □ KUBE_API_URL=https://<endpoint cluster>
-    □ KUBE_TOKEN=<token SA cnp-portal>
-    □ KUBE_CA_CERT=<base64 CA>
 
-□ Si portail déployé sur le cluster :
-    □ Image registry mise à jour (nouveau projet GCP)
-    □ Hostname ingress mis à jour (nouvelle IP)
-    □ Secrets Kubernetes recréés
-    □ CI/CD mis à jour avec les nouvelles valeurs
+□ ci-templates mis à jour (project ID, number, SA, registry)
+
+□ IAM vérifié :
+    □ gke-nodes-sa a roles/artifactregistry.reader
+    □ github-ci-sa a roles/artifactregistry.writer
 ```
