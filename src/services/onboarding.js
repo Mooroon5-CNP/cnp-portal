@@ -477,11 +477,37 @@ function buildApplicationSetManifests(appName, teamOwner, configRepoUrl) {
 }
 
 function tplCiWorkflow(appName, appPort, configRepoUrl, targetCluster = 'gcp') {
+    // GCP apps deploy via Crossplane Cloud Run — update cloudrun-claim.yaml on every main push
+    // so ArgoCD picks up the new image and Crossplane reconciles the Cloud Run service.
+    const cloudRunJob = targetCluster === 'gcp' ? `
+  update-cloudrun-claim:
+    needs: pipeline
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mooroon5-CNP/config-repo
+          token: \${{ secrets.CONFIG_REPO_TOKEN }}
+      - name: Update Cloud Run image tag
+        run: |
+          sed -i "s|image: ${IMAGE_REGISTRY}/${appName}:.*|image: ${IMAGE_REGISTRY}/${appName}:\${{ github.sha }}|" \\
+            apps/${appName}/crossplane/cloudrun-claim.yaml
+          git config user.email "ci-bot@cnp"
+          git config user.name "CI Bot"
+          git add apps/${appName}/crossplane/cloudrun-claim.yaml
+          git diff --staged --quiet && exit 0
+          git commit -m "ci(${appName}): cloud run → \${{ github.sha }}"
+          for i in 1 2 3; do
+            git pull --rebase && git push && break || sleep 5
+          done
+` : '';
+
     return `name: CI
 
 on:
   push:
-    branches: [main, prod]
+    branches: [main]
 
 permissions:
   contents: read
@@ -497,7 +523,7 @@ jobs:
       target_cloud: "${targetCluster === 'aws' ? 'aws' : 'gcp'}"
     secrets:
       CONFIG_REPO_TOKEN: \${{ secrets.CONFIG_REPO_TOKEN }}
-`;
+${cloudRunJob}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -636,25 +662,25 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
 
         // ------------------------------------------------------------------
         // Step 3.5: Create ArgoCD ApplicationSet overlay in config-repo and
-        // apply the ApplicationSets to the cluster so ArgoCD knows to watch
-        // the app's overlays. Without this step ArgoCD never syncs the app
-        // even though all manifests are present in config-repo.
+        // apply the ApplicationSets to the cluster (AWS/non-GCP only).
+        // GCP apps deploy via Crossplane Cloud Run — no GKE ApplicationSets needed.
         // ------------------------------------------------------------------
-        await writeConfigRepoFile(
-            crOwner, crRepo,
-            `argocd/overlays/${appName}/kustomization.yaml`,
-            tplArgocdOverlayKustomization(appName, teamOwner),
-            configRepoToken,
-        );
+        if (targetCluster !== 'gcp') {
+            await writeConfigRepoFile(
+                crOwner, crRepo,
+                `argocd/overlays/${appName}/kustomization.yaml`,
+                tplArgocdOverlayKustomization(appName, teamOwner),
+                configRepoToken,
+            );
 
-        const { dev: devAppSet, prod: prodAppSet } = buildApplicationSetManifests(appName, teamOwner, configRepoUrl);
-        try {
-            await k8sClient.applyApplicationSet(devAppSet);
-            await k8sClient.applyApplicationSet(prodAppSet);
-        } catch (e) {
-            // Not fatal — CI and secrets must still be set up. Store warning, continue.
-            console.warn(`[onboarding] Could not apply ApplicationSets to cluster: ${e.message}`);
-            appSetWarning = `⚠️ ApplicationSets non appliqués : ${e.message}`;
+            const { dev: devAppSet, prod: prodAppSet } = buildApplicationSetManifests(appName, teamOwner, configRepoUrl);
+            try {
+                await k8sClient.applyApplicationSet(devAppSet);
+                await k8sClient.applyApplicationSet(prodAppSet);
+            } catch (e) {
+                console.warn(`[onboarding] Could not apply ApplicationSets to cluster: ${e.message}`);
+                appSetWarning = `⚠️ ApplicationSets non appliqués : ${e.message}`;
+            }
         }
 
         // ------------------------------------------------------------------
@@ -812,10 +838,16 @@ async function offboardApp({ appName, githubRepoUrl }) {
             errors.push(`applicationset ${appName}-${env}: ${e.message}`);
         }
         try {
-            await k8sClient.deleteArgocdApplication(`${appName}-${env}`);
+            await k8sClient.deleteArgocdApplication(`${appName}-${env}-local`);
         } catch (e) {
-            errors.push(`argocd application ${appName}-${env}: ${e.message}`);
+            errors.push(`argocd application ${appName}-${env}-local: ${e.message}`);
         }
+    }
+    // Delete Cloud Run ArgoCD Application (GCP apps using Crossplane).
+    try {
+        await k8sClient.deleteArgocdApplication(`${appName}-cloudrun`);
+    } catch (e) {
+        errors.push(`argocd application ${appName}-cloudrun: ${e.message}`);
     }
 
     // Step 3.5: delete K8s namespaces (removes all pods, services, ingresses, configmaps)
