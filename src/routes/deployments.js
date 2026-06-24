@@ -343,8 +343,11 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     const allTeams = teamService.listTeams();
     const teamById = Object.fromEntries(allTeams.map(t => [t.id, t]));
     const ownerTeam = dep.ownerTeamId ? (teamById[dep.ownerTeamId] || null) : null;
-    const accessTeamIds = deploymentModel.getAccessibleTeamIds(dep.id);
-    const accessTeams = accessTeamIds.map(id => teamById[id]).filter(Boolean);
+    const teamAccess = deploymentModel.getTeamAccess(dep.id); // [{ teamId, permissionLevel }]
+    const accessTeamIds = teamAccess.map(a => a.teamId);
+    const accessTeams = teamAccess
+      .map(a => ({ ...(teamById[a.teamId] || {}), permissionLevel: a.permissionLevel }))
+      .filter(t => t.id);
     // Teams not yet granted access (for the add selector).
     const otherTeams = allTeams.filter(t => !accessTeamIds.includes(t.id));
 
@@ -492,8 +495,10 @@ router.post('/:id/team-access', requireAuth, requirePermission('deployments:mana
         return res.redirect(`/deployments/${dep.id}`);
     }
 
-    deploymentModel.grantTeamAccess(dep.id, team.id);
-    req.flash('success', `Équipe "${team.name}" peut maintenant voir ce déploiement.`);
+    const permissionLevel = req.body.permissionLevel === 'write' ? 'write' : 'read';
+    deploymentModel.grantTeamAccess(dep.id, team.id, permissionLevel);
+    const label = permissionLevel === 'write' ? 'écriture (YAML K8s)' : 'lecture';
+    req.flash('success', `Équipe "${team.name}" — accès ${label} accordé.`);
     return res.redirect(`/deployments/${dep.id}`);
 });
 

@@ -16,35 +16,61 @@ function configRepo() {
   return { owner: parts[0] || '', repo: parts[1] || '', token: config.github.configRepoToken };
 }
 
-// Returns the Set of app names that belong to the current user's teams.
-function getUserAppNames(user) {
+// Returns { visible: Set<appName>, editable: Set<appName> }
+// visible = user can see pods/quotas for these apps
+// editable = user's team has WRITE access (or ownership) → Edit YAML button
+function getUserAppSets(user) {
   const teams = teamService.getTeamsForUser(user.id);
   const teamIds = new Set(teams.map(t => t.id));
   const rows = deploymentModel.listForUser(user);
   const isManager = user.role === 'manager';
-  const mine = isManager
-    ? rows
-    : rows.filter(d =>
-        d.owner_user_id === user.id ||
-        (d.owner_team_id && teamIds.has(d.owner_team_id))
-      );
-  return new Set(mine.map(d => d.app_name));
+
+  if (isManager) {
+    const all = new Set(rows.map(d => d.app_name));
+    return { visible: all, editable: all };
+  }
+
+  const visible  = new Set();
+  const editable = new Set();
+
+  for (const d of rows) {
+    const isOwner = d.owner_user_id === user.id ||
+                    (d.owner_team_id && teamIds.has(d.owner_team_id));
+
+    // Determine if user's team has been granted write access.
+    const writeTeamIds = deploymentModel.getTeamIdsWithWriteAccess(d.id);
+    const hasWriteGrant = writeTeamIds.some(tid => teamIds.has(tid));
+
+    if (isOwner || hasWriteGrant) {
+      visible.add(d.app_name);
+      editable.add(d.app_name);
+    } else {
+      // Check read-only granted access.
+      const accessTeamIds = deploymentModel.getAccessibleTeamIds(d.id);
+      if (accessTeamIds.some(tid => teamIds.has(tid))) {
+        visible.add(d.app_name);
+        // No write → not in editable
+      }
+    }
+  }
+
+  return { visible, editable };
 }
 
 // ── Pods / quotas / events ────────────────────────────────────────────────────
 
 router.get('/pods', requireAuth, requirePermission('k8s:pods:view-own'), async (req, res) => {
   const isManager = req.user.role === 'manager';
-  const userAppNames = getUserAppNames(req.user);
+  const { visible, editable } = getUserAppSets(req.user);
 
   function podInScope(pod) {
     if (isManager) return true;
-    return userAppNames.has(pod.app) ||
-           userAppNames.has((pod.namespace || '').replace(/-dev$|-prod$/, ''));
+    return visible.has(pod.app) ||
+           visible.has((pod.namespace || '').replace(/-dev$|-prod$/, ''));
   }
   function quotaInScope(q) {
     if (isManager) return true;
-    return [...userAppNames].some(n => (q.namespace || '').startsWith(n));
+    return [...visible].some(n => (q.namespace || '').startsWith(n));
   }
 
   const [allPods, allQuotas, events] = await Promise.all([
@@ -63,7 +89,8 @@ router.get('/pods', requireAuth, requirePermission('k8s:pods:view-own'), async (
     quotas,
     events,
     user: req.user,
-    userAppNames: [...userAppNames],
+    userAppNames:    [...visible],
+    editableAppNames: [...editable],
     can: (p) => can(req.user, p),
   });
 });
@@ -104,9 +131,9 @@ router.post('/deployments/:name/scale', requireAuth, requirePermission('k8s:pods
 // GET /k8s/apps/:appName/edit — show file tree + editor
 router.get('/apps/:appName/edit', requireAuth, requirePermission('k8s:manifest:edit'), async (req, res) => {
   const { appName } = req.params;
-  const userAppNames = getUserAppNames(req.user);
-  if (!userAppNames.has(appName)) {
-    req.flash('error', 'Accès refusé à cette application.');
+  const { editable } = getUserAppSets(req.user);
+  if (!editable.has(appName)) {
+    req.flash('error', 'Accès refusé : votre équipe n\'a pas l\'accès en écriture sur cette application.');
     return res.redirect('/k8s/pods');
   }
 
@@ -146,8 +173,8 @@ router.get('/apps/:appName/file', requireAuth, requirePermission('k8s:manifest:e
   if (!filePath || !filePath.startsWith(`apps/${appName}/`)) {
     return res.status(400).json({ error: 'Chemin invalide.' });
   }
-  const userAppNames = getUserAppNames(req.user);
-  if (!userAppNames.has(appName)) {
+  const { editable } = getUserAppSets(req.user);
+  if (!editable.has(appName)) {
     return res.status(403).json({ error: 'Accès refusé.' });
   }
 
@@ -171,8 +198,8 @@ router.post('/apps/:appName/file', requireAuth, requirePermission('k8s:manifest:
   if (!content || content.trim() === '') {
     return res.status(400).json({ error: 'Contenu vide.' });
   }
-  const userAppNames = getUserAppNames(req.user);
-  if (!userAppNames.has(appName)) {
+  const { editable } = getUserAppSets(req.user);
+  if (!editable.has(appName)) {
     return res.status(403).json({ error: 'Accès refusé.' });
   }
 

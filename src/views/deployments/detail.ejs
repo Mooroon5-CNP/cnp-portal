@@ -106,6 +106,9 @@
                   <% if (latest.conclusion === 'success') { %>
                     <div class="flash flash-success" style="margin-bottom:16px;">
                       <strong>Votre application a été déployée avec succès.</strong>
+                      <% if (cloudRunUrl) { %>
+                        &nbsp;—&nbsp;<a href="<%= cloudRunUrl %>" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:underline;font-weight:600;"><%= cloudRunUrl %> ↗</a>
+                      <% } %>
                     </div>
                   <% } else if (latest.conclusion === 'failure') { %>
                     <div class="flash flash-error" style="margin-bottom:16px;">
@@ -216,6 +219,8 @@
                           <td style="padding:6px 8px;">
                             <% if (ownerTeam && t.id === ownerTeam.id) { %>
                               <span class="badge badge-success">Propriétaire</span>
+                            <% } else if (t.permissionLevel === 'write') { %>
+                              <span class="badge badge-warning" title="Peut éditer les fichiers YAML K8s">Écriture</span>
                             <% } else { %>
                               <span class="badge badge-gray">Lecture</span>
                             <% } %>
@@ -234,11 +239,15 @@
                   <% } %>
 
                   <% if (otherTeams.length > 0) { %>
-                  <form action="/deployments/<%= deployment.id %>/team-access" method="POST" style="display:flex;gap:10px;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
-                    <select name="teamId" style="flex:1;max-width:260px;">
+                  <form action="/deployments/<%= deployment.id %>/team-access" method="POST" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+                    <select name="teamId" style="flex:1;min-width:160px;max-width:240px;">
                       <% otherTeams.forEach(t => { %>
                       <option value="<%= t.id %>"><%= t.name %></option>
                       <% }) %>
+                    </select>
+                    <select name="permissionLevel" style="width:160px;" title="Niveau d'accès">
+                      <option value="read">👁 Lecture seule</option>
+                      <option value="write">✏️ Écriture (YAML K8s)</option>
                     </select>
                     <button type="submit" class="btn btn-primary btn-sm">Donner accès</button>
                   </form>

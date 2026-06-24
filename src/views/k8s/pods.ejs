@@ -58,7 +58,7 @@
                       <button type="submit" class="btn btn-secondary btn-sm">Scale</button>
                     </form>
                     <% } %>
-                    <% if (can('k8s:manifest:edit') && userAppNames.includes(pod.app)) { %>
+                    <% if (can('k8s:manifest:edit') && editableAppNames.includes(pod.app)) { %>
                     <a href="/k8s/apps/<%= pod.app %>/edit" class="btn btn-secondary btn-sm">Edit YAML</a>
                     <% } %>
                     <% if (can('k8s:pods:delete')) { %>

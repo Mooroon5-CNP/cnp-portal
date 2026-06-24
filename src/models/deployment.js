@@ -58,6 +58,7 @@ db.exec(`
     PRIMARY KEY (deployment_id, team_id)
   )
 `);
+try { db.exec(`ALTER TABLE deployment_team_access ADD COLUMN permission_level TEXT NOT NULL DEFAULT 'read'`); } catch (_) {}
 
 // Migrate existing tables that predate the onboarding columns.
 try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'configuring'`); } catch (_) {}
@@ -136,8 +137,26 @@ module.exports = {
             .all(deploymentId).map(r => r.team_id);
     },
 
-    grantTeamAccess: (deploymentId, teamId) => {
-        try { db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id) VALUES (?, ?)').run(deploymentId, teamId); } catch (_) {}
+    // Returns [{ teamId, permissionLevel }] for all teams with access.
+    getTeamAccess: (deploymentId) => {
+        return db.prepare('SELECT team_id, permission_level FROM deployment_team_access WHERE deployment_id = ?')
+            .all(deploymentId).map(r => ({ teamId: r.team_id, permissionLevel: r.permission_level || 'read' }));
+    },
+
+    // Returns team IDs that have write (or owner) access.
+    getTeamIdsWithWriteAccess: (deploymentId) => {
+        return db.prepare("SELECT team_id FROM deployment_team_access WHERE deployment_id = ? AND permission_level = 'write'")
+            .all(deploymentId).map(r => r.team_id);
+    },
+
+    grantTeamAccess: (deploymentId, teamId, permissionLevel = 'read') => {
+        const level = permissionLevel === 'write' ? 'write' : 'read';
+        try {
+            db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id, permission_level) VALUES (?, ?, ?)').run(deploymentId, teamId, level);
+        } catch (_) {
+            // Already exists — update the permission level.
+            db.prepare('UPDATE deployment_team_access SET permission_level = ? WHERE deployment_id = ? AND team_id = ?').run(level, deploymentId, teamId);
+        }
     },
 
     revokeTeamAccess: (deploymentId, teamId) => {
