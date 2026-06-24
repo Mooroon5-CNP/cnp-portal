@@ -302,19 +302,24 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
     let ingressUrl = null;
     if (!cloudRunUrl && dep.onboardingStatus === 'ready') {
-        // Try reading the actual Ingress host from the cluster.
+        // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
-        // If URL is missing or still the placeholder, auto-heal in background.
         const isPlaceholder = !ingressUrl || ingressUrl.includes('cnp.example.com');
         if (isPlaceholder) {
-            const ip = await k8sClient.getIngressControllerIp().catch(() => null);
-            if (ip) {
-                ingressUrl = `https://${dep.appName}-dev.${ip}.nip.io`;
-                // Fire-and-forget: rewrite ingress in config-repo + re-apply ApplicationSets.
-                onboardingService.healIngressHostname(dep.appName).catch(e =>
-                    console.warn(`[detail] healIngressHostname(${dep.appName}): ${e.message}`)
-                );
+            // 2. Fallback: build URL from known baseDomain config or cluster IP.
+            const baseDomain = config.cluster?.baseDomain;
+            if (baseDomain && baseDomain !== 'cnp.example.com') {
+                ingressUrl = `http://${dep.appName}-dev.${baseDomain}`;
+            } else {
+                const ip = await k8sClient.getIngressControllerIp().catch(() => null);
+                if (ip) {
+                    ingressUrl = `http://${dep.appName}-dev.${ip}.nip.io`;
+                    // Fire-and-forget: rewrite ingress host in config-repo.
+                    onboardingService.healIngressHostname(dep.appName).catch(e =>
+                        console.warn(`[detail] healIngressHostname(${dep.appName}): ${e.message}`)
+                    );
+                }
             }
         }
     }

@@ -389,7 +389,8 @@ async function getIngressUrl(appName, env) {
     const { body } = await networkingApi.readNamespacedIngress(appName, namespace);
     const host = body.spec?.rules?.[0]?.host;
     if (!host) return null;
-    return `https://${host}`;
+    const hasTls = (body.spec?.tls?.length || 0) > 0;
+    return `${hasTls ? 'https' : 'http'}://${host}`;
   } catch (_) {
     return null;
   }
