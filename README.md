@@ -230,12 +230,123 @@ All read via `src/config/env.js`. Run `node src/config/env.js` to validate.
 | `DD_API_KEY` | ✅ | Datadog API key |
 | `DD_APP_KEY` | ✅ | Datadog application key |
 | `DD_SITE` | — | Datadog site (default: `datadoghq.com`) |
-| `CLUSTER_BASE_DOMAIN` | — | Override ingress base domain (e.g. `mydomain.com`). Auto-detected via cluster if not set. |
+| `CLUSTER_BASE_DOMAIN` | ⚠️ | Ingress base domain — **must be set when changing GCP account/cluster** (see below). Auto-detected via K8s API if absent but unreliable after restarts. |
 | `SESSION_SECRET` | — | Express session secret |
 | `DB_PATH` | — | SQLite file path (default: `data/cnp-portal.sqlite`) |
 | `PORT` | — | HTTP port (default: 3000) |
 
 Copy `.env.example` to `.env` to get started locally.
+
+---
+
+## Changing GCP account or cluster — what to update
+
+When you create a new GKE cluster (new GCP project, new account, Terraform re-apply), several values change. Run these commands against the **new** cluster to retrieve them, then update `.env` and the portal's K8s ConfigMap/Deployment.
+
+### 1. Find `CLUSTER_BASE_DOMAIN`
+
+`CLUSTER_BASE_DOMAIN` is the nip.io domain derived from the ingress controller's external IP. It controls every app URL the portal generates.
+
+```bash
+# Get the LoadBalancer IP assigned to ingress-nginx
+kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# Expected output: 34.155.213.145  (example — yours will differ)
+# → CLUSTER_BASE_DOMAIN=<IP>.nip.io
+# Example: CLUSTER_BASE_DOMAIN=34.155.213.145.nip.io
+```
+
+> If ingress-nginx isn't installed yet, run cluster bootstrap step 2 first and wait ~2 minutes for GCP to assign the IP.
+
+Once you have the value, update **three places**:
+
+```bash
+# 1. Local .env
+echo "CLUSTER_BASE_DOMAIN=<IP>.nip.io" >> .env
+
+# 2. Portal K8s deployment (so the running portal uses it without restart)
+kubectl set env deployment/cnp-portal -n cnp-portal \
+  CLUSTER_BASE_DOMAIN=<IP>.nip.io
+
+# 3. k8s/base/deployment.yaml (committed value for future deploys)
+#    Edit the CLUSTER_BASE_DOMAIN env entry in k8s/base/deployment.yaml
+#    and commit the change.
+```
+
+### 2. Find `KUBE_API_URL`
+
+```bash
+kubectl cluster-info | grep "Kubernetes control plane"
+# → https://34.163.86.239  (example)
+# → KUBE_API_URL=https://<IP>
+```
+
+### 3. Find `KUBE_CA_CERT`
+
+```bash
+kubectl config view --raw -o jsonpath=\
+'{.clusters[?(@.name=="<YOUR_CLUSTER_CONTEXT_NAME>")].cluster.certificate-authority-data}'
+# → base64-encoded CA cert string
+# → KUBE_CA_CERT=<value>
+```
+
+Or via gcloud:
+```bash
+gcloud container clusters describe <CLUSTER_NAME> \
+  --region <REGION> --project <PROJECT_ID> \
+  --format="value(masterAuth.clusterCaCertificate)"
+```
+
+### 4. Find `KUBE_TOKEN` (portal service account token)
+
+```bash
+# The SA token is stored in a Secret named cnp-portal-token
+kubectl get secret cnp-portal-token -n cnp-portal \
+  -o jsonpath='{.data.token}' | base64 -d
+# → KUBE_TOKEN=<value>
+```
+
+### 5. Find `ARGOCD_SERVER_URL` and `ARGOCD_UI_URL`
+
+ArgoCD is exposed via ingress at `argocd.<IP>.nip.io`:
+
+```bash
+IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "ARGOCD_SERVER_URL=http://argocd.${IP}.nip.io"
+echo "ARGOCD_UI_URL=http://argocd.${IP}.nip.io"
+```
+
+### 6. Find GCP-specific vars (`GCP_PROJECT`, `GCP_IMAGE_REGISTRY`)
+
+```bash
+# Current project
+gcloud config get-value project
+# → GCP_PROJECT=cnp-terraform-500015
+
+# Artifact Registry URL (pattern: <region>-docker.pkg.dev/<project>/<repo>)
+gcloud artifacts repositories list --project=<PROJECT_ID>
+# → GCP_IMAGE_REGISTRY=europe-west9-docker.pkg.dev/<PROJECT_ID>/cnp-registry
+```
+
+### 7. Update existing app ingress hosts in config-repo
+
+After getting the new IP, every app already onboarded has stale ingress hosts pointing to the old IP. Fix them in one command:
+
+```bash
+OLD_IP="34.155.213.145"   # replace with old IP
+NEW_IP="<NEW_IP>"
+
+find config-repo/apps -name "ingress.yaml" | xargs \
+  sed -i "s/${OLD_IP}/${NEW_IP}/g"
+
+git -C config-repo add -A
+git -C config-repo commit -m "chore: update ingress hosts to new cluster IP ${NEW_IP}"
+git -C config-repo push origin main
+```
+
+ArgoCD will auto-sync and nginx will start routing on the new IP within ~1 minute.
 
 ---
 
