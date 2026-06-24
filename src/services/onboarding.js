@@ -25,12 +25,13 @@ function parseConfigRepoName() {
 const IMAGE_REGISTRY = config.gcp.imageRegistry;
 
 function tplBaseDeployment(appName, appPort, persistentStorage = false) {
-    const dataVolumeMount = persistentStorage
-        ? `\n            - name: data\n              mountPath: /data` : '';
+    // Always mount /data so apps using DATA_DIR start correctly even without a PVC.
+    // persistentStorage=true swaps the emptyDir for a PVC (data survives restarts).
+    const dataVolumeMount = `\n            - name: data\n              mountPath: /data`;
     const dataVolume = persistentStorage
-        ? `\n        - name: data\n          persistentVolumeClaim:\n            claimName: ${appName}-data` : '';
-    const dataEnv = persistentStorage
-        ? `\n          env:\n            - name: DATA_DIR\n              value: /data` : '';
+        ? `\n        - name: data\n          persistentVolumeClaim:\n            claimName: ${appName}-data`
+        : `\n        - name: data\n          emptyDir: {}`;
+    const dataEnv = `\n          env:\n            - name: DATA_DIR\n              value: /data`;
     return `apiVersion: apps/v1
 kind: Deployment
 metadata:
