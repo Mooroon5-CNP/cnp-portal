@@ -68,6 +68,7 @@ spec:
               memory: 128Mi
           securityContext:
             runAsNonRoot: true
+            runAsUser: 1000
             readOnlyRootFilesystem: true
           volumeMounts:
             - name: tmp
@@ -585,6 +586,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
     }
     const { owner: appOwner, repo: appRepo } = parsed;
 
+    let appSetWarning = null;
     try {
         // ------------------------------------------------------------------
         // Pre-check: verify GitHub App can access Actions secrets on app repo.
@@ -649,10 +651,9 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
             await k8sClient.applyApplicationSet(devAppSet);
             await k8sClient.applyApplicationSet(prodAppSet);
         } catch (e) {
-            // Not fatal (K8s may be unreachable in local dev) but surface it so the user knows ArgoCD won't sync.
+            // Not fatal — CI and secrets must still be set up. Store warning, continue.
             console.warn(`[onboarding] Could not apply ApplicationSets to cluster: ${e.message}`);
-            await updateStatus('ready', `⚠️ Manifests créés mais ApplicationSets non appliqués au cluster : ${e.message}. L'app n'apparaîtra pas dans ArgoCD tant que ce n'est pas corrigé.`);
-            return;
+            appSetWarning = `⚠️ ApplicationSets non appliqués : ${e.message}`;
         }
 
         // ------------------------------------------------------------------
@@ -716,7 +717,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
             triggerSha,
         );
 
-        await updateStatus('ready', null);
+        await updateStatus('ready', appSetWarning);
     } catch (err) {
         await updateStatus('failed', err.message);
     }
