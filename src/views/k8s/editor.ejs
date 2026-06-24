@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<style>
+  .editor-layout {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 16px;
+    height: calc(100vh - 160px);
+  }
+  .file-tree {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-y: auto;
+    padding: 12px 0;
+  }
+  .file-tree-section { margin-bottom: 4px; }
+  .file-tree-label {
+    display: block;
+    padding: 4px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-muted);
+    margin-top: 8px;
+  }
+  .file-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 0;
+    color: var(--text);
+    transition: background .15s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+  .file-tree-item:hover { background: var(--hover-bg); }
+  .file-tree-item.active {
+    background: var(--primary);
+    color: #fff;
+  }
+  .editor-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .editor-filename {
+    font-family: monospace;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .editor-filename.loaded { color: var(--text); font-weight: 600; }
+  #editor-textarea {
+    flex: 1;
+    font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    resize: none;
+    padding: 16px;
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    min-height: 340px;
+  }
+  #editor-textarea:focus { border-color: var(--primary); }
+  .editor-footer {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .editor-footer input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+  #editor-status {
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: none;
+  }
+  #editor-status.success { display:block; background: var(--success-bg, #d1fae5); color: #065f46; }
+  #editor-status.error   { display:block; background: var(--danger-bg, #fee2e2);   color: #991b1b; }
+</style>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper" style="display:flex;flex-direction:column;height:100%;">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header" style="margin-bottom:12px;">
+        <div>
+          <div class="page-title">Éditeur YAML — <span style="color:var(--primary);"><%= appName %></span></div>
+          <div class="page-subtitle">Modifiez les manifests Kubernetes de votre application et commitez directement dans le config-repo.</div>
+        </div>
+        <a href="/k8s/pods" class="btn btn-ghost">← Retour</a>
+      </div>
+
+      <div class="editor-layout">
+        <!-- File tree -->
+        <div class="file-tree">
+          <% fileTree.forEach(section => { %>
+            <% if (section.files.length > 0) { %>
+            <div class="file-tree-section">
+              <span class="file-tree-label"><%= section.label %></span>
+              <% section.files.forEach(f => { %>
+                <button class="file-tree-item" data-path="<%= f.path %>" onclick="loadFile(this)">
+                  📄 <%= f.name %>
+                </button>
+              <% }) %>
+            </div>
+            <% } %>
+          <% }) %>
+          <% if (fileTree.every(s => s.files.length === 0)) { %>
+            <div style="padding:20px;color:var(--text-muted);font-size:13px;text-align:center;">Aucun fichier YAML trouvé dans le config-repo pour cette application.</div>
+          <% } %>
+        </div>
+
+        <!-- Editor panel -->
+        <div class="editor-panel">
+          <div class="editor-header">
+            <span class="editor-filename" id="editor-filename">Sélectionnez un fichier dans l'arborescence</span>
+            <span id="editor-status"></span>
+          </div>
+          <textarea id="editor-textarea" placeholder="Le contenu du fichier s'affichera ici..." disabled spellcheck="false"></textarea>
+          <div class="editor-footer">
+            <input type="text" id="commit-message" placeholder="Message de commit (optionnel)" />
+            <button class="btn btn-primary" onclick="saveFile()" id="save-btn" disabled>Commit &amp; Push</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+const appName = '<%= appName %>';
+let currentPath = null;
+let currentSha  = null;
+let loading     = false;
+
+function setStatus(msg, type) {
+  const el = document.getElementById('editor-status');
+  el.textContent = msg;
+  el.className = type; // 'success' | 'error' | ''
+  if (type) setTimeout(() => { el.className = ''; el.textContent = ''; }, 4000);
+}
+
+async function loadFile(btn) {
+  if (loading) return;
+  const path = btn.dataset.path;
+
+  // Highlight active file
+  document.querySelectorAll('.file-tree-item').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const filenameEl = document.getElementById('editor-filename');
+  const textarea   = document.getElementById('editor-textarea');
+  const saveBtn    = document.getElementById('save-btn');
+
+  filenameEl.textContent = path;
+  filenameEl.className   = 'editor-filename';
+  textarea.value         = '…chargement…';
+  textarea.disabled      = true;
+  saveBtn.disabled       = true;
+  loading = true;
+
+  try {
+    const res  = await fetch(`/k8s/apps/${appName}/file?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur inconnue');
+    currentPath           = path;
+    currentSha            = data.sha;
+    textarea.value        = data.content;
+    textarea.disabled     = false;
+    saveBtn.disabled      = false;
+    filenameEl.className  = 'editor-filename loaded';
+  } catch (err) {
+    textarea.value    = '';
+    textarea.disabled = true;
+    setStatus('Erreur : ' + err.message, 'error');
+    currentPath = null;
+    currentSha  = null;
+  } finally {
+    loading = false;
+  }
+}
+
+async function saveFile() {
+  if (!currentPath || loading) return;
+  const content = document.getElementById('editor-textarea').value;
+  const message = document.getElementById('commit-message').value.trim();
+  const saveBtn = document.getElementById('save-btn');
+
+  if (!content.trim()) { setStatus('Le contenu ne peut pas être vide.', 'error'); return; }
+
+  saveBtn.disabled  = true;
+  saveBtn.textContent = 'Envoi…';
+  loading = true;
+
+  try {
+    const res  = await fetch(`/k8s/apps/${appName}/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath, content, sha: currentSha, message }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur inconnue');
+    currentSha = null; // sha changes after commit — next load will refresh it
+    setStatus('✓ Commité : ' + (data.message || 'OK'), 'success');
+    document.getElementById('commit-message').value = '';
+    // Reload SHA for next save
+    const r2   = await fetch(`/k8s/apps/${appName}/file?path=${encodeURIComponent(currentPath)}`);
+    const d2   = await r2.json();
+    if (r2.ok) currentSha = d2.sha;
+  } catch (err) {
+    setStatus('Erreur : ' + err.message, 'error');
+  } finally {
+    saveBtn.disabled    = false;
+    saveBtn.textContent = 'Commit & Push';
+    loading = false;
+  }
+}
+
+// Keyboard shortcut: Ctrl+S / Cmd+S to save
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveFile();
+  }
+});
+</script>
+</body>
+</html>

@@ -12,7 +12,7 @@
               <div class="page-header">
                 <div>
                   <div class="page-title">Dashboard</div>
-                  <div class="page-subtitle">Bienvenue, <%= user.gitlabUsername %> — vue d'ensemble de la plateforme
+                  <div class="page-subtitle">Bienvenue, <%= user.gitlabUsername %> — vue d'ensemble de votre équipe
                   </div>
                 </div>
               </div>
@@ -55,35 +55,49 @@
               </div>
 
               <div class="grid-2">
+                <!-- Mes Applications -->
                 <div class="card">
                   <div class="card-header">
-                    <span class="card-title">Clouds gérés</span>
-                    <span class="badge badge-success">3 connectés</span>
+                    <span class="card-title">Mes Applications</span>
+                    <a href="/deployments" class="btn btn-ghost btn-sm">Voir tout</a>
                   </div>
                   <div class="card-body">
-                    <div class="cloud-grid" style="grid-template-columns:1fr;">
-                      <div class="cloud-card">
-                        <div class="cloud-icon">☁</div>
-                        <div>
-                          <div class="cloud-name">GCP</div>
-                          <div class="cloud-status">Google Cloud Platform · <span
-                              class="text-success">Opérationnel</span></div>
-                        </div>
-                        <span class="badge badge-success" style="margin-left:auto;">OK</span>
+                    <% if (myAppsList.length === 0) { %>
+                      <div style="text-align:center;padding:20px;color:var(--text-muted);">
+                        <div style="font-size:24px;margin-bottom:8px;">📦</div>
+                        Aucune application déployée
                       </div>
-                      <div class="cloud-card">
-                        <div class="cloud-icon">⬡</div>
-                        <div>
-                          <div class="cloud-name">AWS</div>
-                          <div class="cloud-status">Amazon Web Services · <span class="text-success">Opérationnel</span>
+                    <% } else { %>
+                      <% myAppsList.forEach(app => { %>
+                        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
+                          <% if (app.status === 'ready') { %>
+                            <span class="badge badge-success" title="Opérationnel">●</span>
+                          <% } else if (app.status === 'configuring') { %>
+                            <span class="badge badge-warning" title="En cours">●</span>
+                          <% } else { %>
+                            <span class="badge badge-danger" title="Erreur">●</span>
+                          <% } %>
+                          <div style="flex:1;min-width:0;">
+                            <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                              <%= app.name %>
+                            </div>
+                            <div style="font-size:12px;color:var(--text-muted);">
+                              <%= app.running %>/<%= app.pods %> pods running
+                            </div>
+                          </div>
+                          <div style="display:flex;gap:6px;flex-shrink:0;">
+                            <% if (app.url) { %>
+                              <a href="<%= app.url %>" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm" style="font-size:11px;">↗</a>
+                            <% } %>
+                            <a href="/k8s/pods" class="btn btn-ghost btn-sm" style="font-size:11px;">K8s</a>
                           </div>
                         </div>
-                        <span class="badge badge-success" style="margin-left:auto;">OK</span>
-                      </div>
-                    </div>
+                      <% }) %>
+                    <% } %>
                   </div>
                 </div>
 
+                <!-- Alertes récentes -->
                 <div class="card">
                   <div class="card-header">
                     <span class="card-title">Alertes récentes</span>

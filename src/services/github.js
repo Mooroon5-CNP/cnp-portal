@@ -80,6 +80,32 @@ async function getFileContent(owner, repo, path, token, ref = 'main') {
     return null;
 }
 
+// Returns { content, sha } in one API call (avoids double round-trip).
+async function getFileWithSha(owner, repo, path, token, ref = 'main') {
+    const res = await axios.get(`${GH_API_BASE}/repos/${owner}/${repo}/contents/${path}`, {
+        headers: defaultHeaders(token),
+        params: { ref },
+    });
+    return {
+        content: res.data.content ? Buffer.from(res.data.content, 'base64').toString('utf8') : '',
+        sha: res.data.sha || null,
+    };
+}
+
+// Lists files in a directory. Returns [{ name, path, type, sha }].
+async function listDirectory(owner, repo, path, token, ref = 'main') {
+    try {
+        const res = await axios.get(`${GH_API_BASE}/repos/${owner}/${repo}/contents/${path}`, {
+            headers: defaultHeaders(token),
+            params: { ref },
+        });
+        if (!Array.isArray(res.data)) return [];
+        return res.data.map(f => ({ name: f.name, path: f.path, type: f.type, sha: f.sha }));
+    } catch (_) {
+        return [];
+    }
+}
+
 async function pathExists(owner, repo, path, token, ref = 'main') {
     try {
         await axios.get(`${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
@@ -139,6 +165,8 @@ module.exports = {
     getRuns,
     getRunJobs,
     getFileContent,
+    getFileWithSha,
+    listDirectory,
     pathExists,
     createOrUpdateFileWithToken,
     getFileSha,

@@ -29,6 +29,7 @@ const PERMISSIONS = {
   'k8s:quotas:view':         ['manager', 'devops', 'dev'],
   'k8s:quotas:modify':       ['manager', 'devops'],
   'k8s:events:view':         ['manager', 'devops'],
+  'k8s:manifest:edit':       ['devops'],
 
   'observability:logs:own':  ['manager', 'devops', 'dev'],
   'observability:logs:all':  ['manager', 'devops'],
