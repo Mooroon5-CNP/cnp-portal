@@ -330,7 +330,23 @@ const CLOUDRUN_AUTODISCOVERY_APPSET = {
     },
 };
 
-function tplCrossplaneV2Service(appName) {
+function tplCrossplaneV2Service(appName, persistentStorage = false) {
+    // GCS volume block — only included when persistentStorage is requested.
+    // Bucket must be pre-created: gs://cnp-${appName}-data with objectAdmin for CLOUD_RUN_SA.
+    const volumeBlock = persistentStorage ? `
+      volumes:
+        - name: data
+          gcs:
+            - bucket: cnp-${appName}-data
+              readOnly: false` : '';
+    const volumeMount = persistentStorage ? `
+          volumeMounts:
+            - name: data
+              mountPath: /data` : '';
+    const dataDir = persistentStorage
+        ? `\n          env:\n            - name: DATA_DIR\n              value: /data`
+        : `\n          env:\n            - name: DATA_DIR\n              value: /tmp`;
+
     return `apiVersion: cloudrun.gcp.upbound.io/v1beta2
 kind: V2Service
 metadata:
@@ -342,9 +358,9 @@ spec:
     project: ${GCP_PROJECT}
     location: ${GCP_REGION}
     template:
-      serviceAccount: ${CLOUD_RUN_SA}
+      serviceAccount: ${CLOUD_RUN_SA}${volumeBlock}
       containers:
-        - image: ${IMAGE_REGISTRY}/${appName}:placeholder
+        - image: ${IMAGE_REGISTRY}/${appName}:placeholder${dataDir}${volumeMount}
   providerConfigRef:
     name: default
 `;
@@ -729,7 +745,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 console.warn(`[onboarding] Could not apply cloudrun-autodiscovery AppSet: ${e.message}`);
             }
             const cpBase = `apps/${appName}/crossplane`;
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, persistentStorage), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(), configRepoToken);
 
