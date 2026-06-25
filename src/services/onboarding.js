@@ -337,8 +337,8 @@ function tplCrossplaneV2Service(appName, persistentStorage = false) {
       volumes:
         - name: data
           gcs:
-            - bucket: cnp-${appName}-data
-              readOnly: false` : '';
+            bucket: cnp-${appName}-data
+            readOnly: false` : '';
     const volumeMount = persistentStorage ? `
           volumeMounts:
             - name: data
