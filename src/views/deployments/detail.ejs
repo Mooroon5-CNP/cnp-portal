@@ -93,11 +93,18 @@
               <!-- ── Ready: show pipeline runs ──────────────────────────── -->
               <% } else { %>
                 <% if (cloudRunUrl) { %>
-                  <div class="card" style="margin-bottom:16px;">
+                  <div class="card" style="margin-bottom:16px;" id="url-card">
                     <div class="card-header"><span class="card-title">Application disponible</span></div>
                     <div class="card-body" style="display:flex;align-items:center;gap:12px;">
                       <a href="<%= cloudRunUrl %>" target="_blank" rel="noreferrer" class="btn btn-primary">Ouvrir l'application ↗</a>
                       <span style="font-family:monospace;font-size:13px;color:var(--text-muted);"><%= cloudRunUrl %></span>
+                    </div>
+                  </div>
+                <% } else if (deployment.targetCluster === 'gcp') { %>
+                  <div class="card" style="margin-bottom:16px;" id="url-card">
+                    <div class="card-header"><span class="card-title">Application</span></div>
+                    <div class="card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
+                      <span>⏳ URL Cloud Run en cours de provisionnement — disponible dans ~2 min après le premier pipeline réussi.</span>
                     </div>
                   </div>
                 <% } %>
@@ -378,14 +385,18 @@
       (function () {
         const depId = '<%= deployment.id %>';
         const initialStatus = '<%= deployment.onboardingStatus %>';
+        const targetCluster = '<%= deployment.targetCluster || "gcp" %>';
+        const hasCloudRunUrl = !!('<%= cloudRunUrl %>');
 
-        // Only poll if the pipeline is not yet in a terminal state.
+        // Only poll if the pipeline is not yet in a terminal state,
+        // OR if it's a GCP app still waiting for its Cloud Run URL.
         const latestConclusion = '<%= latest ? (latest.conclusion || "") : "" %>';
         const latestStatus = '<%= latest ? latest.status : "" %>';
         const isTerminal = (latestConclusion === 'success' || latestConclusion === 'failure' || latestConclusion === 'cancelled');
         const isConfiguring = initialStatus === 'configuring';
+        const waitingForCloudRunUrl = targetCluster === 'gcp' && !hasCloudRunUrl && isTerminal && latestConclusion === 'success';
 
-        if (!isTerminal || isConfiguring) {
+        if (!isTerminal || isConfiguring || waitingForCloudRunUrl) {
           const pollInterval = setInterval(async () => {
             try {
               const resp = await fetch(`/deployments/${depId}/status`);
@@ -393,6 +404,16 @@
               const data = await resp.json();
 
               if (data.phase === 'configuring') return; // still setting up
+
+              // For GCP apps: once CI succeeds, keep polling until Cloud Run URL is available.
+              if (waitingForCloudRunUrl || (targetCluster === 'gcp' && data.phase === 'success' && data.cloudRunUrl)) {
+                if (data.cloudRunUrl) {
+                  clearInterval(pollInterval);
+                  window.location.reload();
+                  return;
+                }
+                return; // keep polling
+              }
 
               if (data.phase === 'success' || data.phase === 'failed') {
                 clearInterval(pollInterval);
@@ -405,12 +426,6 @@
                 clearInterval(pollInterval);
                 window.location.reload();
                 return;
-              }
-
-              // If run is now completed, reload.
-              if (data.phase === 'success' || data.phase === 'failed') {
-                clearInterval(pollInterval);
-                window.location.reload();
               }
             } catch (_) {}
           }, 4000);

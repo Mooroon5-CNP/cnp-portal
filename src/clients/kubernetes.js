@@ -313,8 +313,9 @@ async function getV2ServiceUrl(appName) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
   try {
-    const { body } = await customApi.getNamespacedCustomObject(
-      'cloudrun.gcp.upbound.io', 'v1beta2', 'crossplane-system', 'v2services', appName,
+    // V2Service is cluster-scoped (not namespaced) — use getClusterCustomObject.
+    const { body } = await customApi.getClusterCustomObject(
+      'cloudrun.gcp.upbound.io', 'v1beta2', 'v2services', appName,
     );
     return body.status?.atProvider?.uri || null;
   } catch (_) {

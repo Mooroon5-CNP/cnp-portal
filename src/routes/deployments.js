@@ -210,6 +210,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             ownerUserId: req.user.id,
             ownerTeamId: resolvedTeamId,
             persistentStorage: hasPersistentStorage,
+            targetCluster: targetCluster || 'gcp',
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
@@ -324,7 +325,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
 
     const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
     let ingressUrl = null;
-    if (!cloudRunUrl && dep.onboardingStatus === 'ready') {
+    // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp') {
         // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
@@ -356,6 +358,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         onboardingStatus: dep.onboardingStatus,
         onboardingError: dep.onboardingError,
         ownerUserId: dep.ownerUserId,
+        targetCluster: dep.targetCluster || 'gcp',
         createdAt: dep.createdAt,
         updatedAt: dep.updatedAt,
     };
