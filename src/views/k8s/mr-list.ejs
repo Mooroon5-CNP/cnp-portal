@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Mes Pull Requests de manifestes</div>
+          <div class="page-subtitle">Modifications K8s en attente de validation manager</div>
+        </div>
+        <a href="/k8s/pods" class="btn btn-secondary">← Ressources K8s</a>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Pull Requests</span>
+          <span class="badge badge-gray"><%= mrs.length %> MR(s)</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Application</th>
+                <th>Fichier</th>
+                <th>Message</th>
+                <th>Statut</th>
+                <th>GitHub PR</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% mrs.forEach(mr => { %>
+              <tr>
+                <td><strong><%= mr.appName %></strong></td>
+                <td class="font-mono" style="font-size:12px;"><%= mr.filePath.split('/').pop() %></td>
+                <td style="max-width:240px;font-size:12px;color:var(--text-muted);"><%= mr.commitMessage || '—' %></td>
+                <td>
+                  <% if (mr.status === 'pending') { %>
+                    <span class="badge badge-warning">En attente</span>
+                  <% } else if (mr.status === 'approved') { %>
+                    <span class="badge badge-success">Approuvée</span>
+                  <% } else if (mr.status === 'rejected') { %>
+                    <span class="badge badge-danger">Rejetée</span>
+                    <% if (mr.reviewComment) { %>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:4px;max-width:200px;"><%= mr.reviewComment %></div>
+                    <% } %>
+                  <% } %>
+                </td>
+                <td>
+                  <% if (mr.prUrl) { %>
+                    <a href="<%= mr.prUrl %>" target="_blank" class="badge badge-info" style="text-decoration:none;">#<%= mr.prNumber %></a>
+                  <% } else { %>—<% } %>
+                </td>
+                <td class="text-muted" style="font-size:12px;"><%= new Date(mr.createdAt).toLocaleDateString('fr-FR') %></td>
+                <td>
+                  <% if (mr.status === 'rejected') { %>
+                  <a href="/k8s/manifest-prs/<%= mr.id %>/edit" class="btn btn-secondary btn-sm">Modifier</a>
+                  <% } %>
+                </td>
+              </tr>
+              <% }) %>
+              <% if (mrs.length === 0) { %>
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Aucune pull request soumise</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

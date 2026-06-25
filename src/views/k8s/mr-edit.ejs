@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+<style>
+  #editor-textarea {
+    width: 100%;
+    font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    resize: vertical;
+    padding: 16px;
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    min-height: 420px;
+    box-sizing: border-box;
+  }
+  #editor-textarea:focus { border-color: var(--primary); }
+  #editor-status { font-size:13px; padding:8px 14px; border-radius:6px; display:none; margin-top:8px; }
+  #editor-status.success { display:block; background:var(--success-bg,#d1fae5); color:#065f46; }
+  #editor-status.error   { display:block; background:var(--danger-bg,#fee2e2);   color:#991b1b; }
+</style>
+<body>
+<div class="layout">
+  <%- include('../partials/sidebar') %>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <%- include('../partials/flash') %>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">Modifier la MR — <span style="color:var(--primary);"><%= mr.appName %></span></div>
+          <div class="page-subtitle" class="font-mono"><%= mr.filePath %></div>
+        </div>
+        <a href="/k8s/manifest-prs" class="btn btn-ghost">← Mes MRs</a>
+      </div>
+
+      <!-- Reject reason -->
+      <% if (mr.reviewComment) { %>
+      <div class="card mb-4" style="border-left:3px solid var(--danger,#ef4444);">
+        <div class="card-header"><span class="card-title">Motif de rejet</span></div>
+        <div style="padding:12px 20px;color:var(--text-muted);font-size:13px;"><%= mr.reviewComment %></div>
+      </div>
+      <% } %>
+
+      <!-- PR link -->
+      <% if (mr.prUrl) { %>
+      <div style="margin-bottom:12px;font-size:13px;">
+        PR GitHub : <a href="<%= mr.prUrl %>" target="_blank" style="color:var(--primary);">#<%= mr.prNumber %> ↗</a>
+        — le nouveau commit sera ajouté à cette PR ouverte.
+      </div>
+      <% } %>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title editor-filename font-mono"><%= mr.filePath.split('/').pop() %></span>
+        </div>
+        <div style="padding:16px;">
+          <textarea id="editor-textarea" spellcheck="false"><%= fileContent %></textarea>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:12px;">
+            <input type="text" id="commit-message" placeholder="Message de modification (optionnel)"
+              style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--card-bg);color:var(--text);font-size:13px;" />
+            <button class="btn btn-primary" id="submit-btn" onclick="resubmit()">Resoumettre pour validation</button>
+          </div>
+          <div id="editor-status"></div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+const mrId  = '<%= mr.id %>';
+const fileSha = <%- JSON.stringify(fileSha) %>;
+let loading = false;
+
+function setStatus(msg, type) {
+  const el = document.getElementById('editor-status');
+  el.textContent = msg;
+  el.className = type;
+}
+
+async function resubmit() {
+  if (loading) return;
+  const content = document.getElementById('editor-textarea').value;
+  const message = document.getElementById('commit-message').value.trim();
+  if (!content.trim()) { setStatus('Le contenu ne peut pas être vide.', 'error'); return; }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled    = true;
+  btn.textContent = 'Envoi…';
+  loading = true;
+
+  try {
+    const res  = await fetch(`/k8s/manifest-prs/${mrId}/resubmit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, sha: fileSha, message }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur inconnue');
+    setStatus('✓ MR resoumise — en attente de validation manager.', 'success');
+    btn.textContent = 'Resoumise ✓';
+    setTimeout(() => { window.location.href = '/k8s/manifest-prs'; }, 1500);
+  } catch (err) {
+    setStatus('Erreur : ' + err.message, 'error');
+    btn.disabled    = false;
+    btn.textContent = 'Resoumettre pour validation';
+  } finally {
+    loading = false;
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); resubmit(); }
+});
+</script>
+</body>
+</html>

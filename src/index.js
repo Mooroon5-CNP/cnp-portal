@@ -35,10 +35,23 @@ app.use(flash());
 app.use(requestMiddleware(logger));
 app.use(populateUser);
 
+const manifestMrModel = require('./models/manifest_mr');
+
 app.use((req, res, next) => {
   res.locals.user = req.user || null;
   res.locals.flash = req.flash();
   res.locals.can = req.user ? (p) => can(req.user, p) : () => false;
+  res.locals.pendingMrCount   = 0;
+  res.locals.rejectedMrCount  = 0;
+  if (req.user) {
+    try {
+      if (req.user.role === 'manager') {
+        res.locals.pendingMrCount = manifestMrModel.countAllPending();
+      } else if (req.user.role === 'devops') {
+        res.locals.rejectedMrCount = manifestMrModel.countRejectedForUser(req.user.id);
+      }
+    } catch (_) {}
+  }
   next();
 });
 

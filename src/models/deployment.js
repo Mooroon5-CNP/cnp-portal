@@ -115,7 +115,7 @@ module.exports = {
     listForUser: (user) => {
         const rows = listStmt.all();
         if (!user) return rows;
-        if (user.role === 'manager' || user.role === 'devops') return rows;
+        if (user.role === 'manager') return rows;
         // dev: show deployments where user's team has access (owner or granted).
         const userTeamIds = new Set(
             db.prepare('SELECT team_id FROM team_members WHERE user_id = ?').all(user.id).map(r => r.team_id)

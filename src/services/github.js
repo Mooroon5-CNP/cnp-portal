@@ -146,6 +146,102 @@ async function getFileSha(owner, repo, path, token) {
     }
 }
 
+// Get the SHA of a branch HEAD via PAT token.
+async function getRefWithToken(owner, repo, branch, token) {
+    const res = await axios.get(
+        `${GH_API_BASE}/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+        { headers: defaultHeaders(token) }
+    );
+    return res.data.object.sha;
+}
+
+// Create a branch from baseBranch HEAD via PAT token. Silently succeeds if branch exists (422).
+async function createBranchWithToken(owner, repo, branchName, token, baseBranch = 'main') {
+    const sha = await getRefWithToken(owner, repo, baseBranch, token);
+    try {
+        await axios.post(
+            `${GH_API_BASE}/repos/${owner}/${repo}/git/refs`,
+            { ref: `refs/heads/${branchName}`, sha },
+            { headers: defaultHeaders(token) }
+        );
+    } catch (e) {
+        if (e.response && e.response.status === 422) return; // already exists
+        throw e;
+    }
+}
+
+// Commit a file to a specific branch via PAT token. sha required if the file already exists on that branch.
+async function createOrUpdateFileOnBranch(owner, repo, path, content, message, token, branch, sha) {
+    const body = {
+        message,
+        content: Buffer.from(content, 'utf8').toString('base64'),
+        branch,
+    };
+    if (sha) body.sha = sha;
+    await axios.put(
+        `${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+        body,
+        { headers: defaultHeaders(token) }
+    );
+}
+
+// Get file content + sha on a specific branch via PAT token.
+async function getFileOnBranch(owner, repo, path, token, branch) {
+    try {
+        const res = await axios.get(
+            `${GH_API_BASE}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+            { headers: defaultHeaders(token), params: { ref: branch } }
+        );
+        return {
+            content: res.data.content ? Buffer.from(res.data.content, 'base64').toString('utf8') : '',
+            sha: res.data.sha || null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+// Create a pull request via PAT token. Returns { number, html_url }.
+async function createPullRequest(owner, repo, title, body, head, base, token) {
+    const res = await axios.post(
+        `${GH_API_BASE}/repos/${owner}/${repo}/pulls`,
+        { title, body, head, base },
+        { headers: defaultHeaders(token) }
+    );
+    return { number: res.data.number, html_url: res.data.html_url };
+}
+
+// Merge a pull request via PAT token. merge_method: 'merge' | 'squash' | 'rebase'.
+async function mergePullRequest(owner, repo, prNumber, token, commitMessage) {
+    await axios.put(
+        `${GH_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
+        { commit_message: commitMessage || '', merge_method: 'squash' },
+        { headers: defaultHeaders(token) }
+    );
+}
+
+// Get the current state of a PR. Returns { state: 'open'|'closed', merged: bool }.
+async function getPullRequestStatus(owner, repo, prNumber, token) {
+    try {
+        const res = await axios.get(
+            `${GH_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`,
+            { headers: defaultHeaders(token) }
+        );
+        return { state: res.data.state, merged: !!res.data.merged_at };
+    } catch (e) {
+        return null;
+    }
+}
+
+// Add a review comment to a PR via PAT token.
+async function addPullRequestComment(owner, repo, prNumber, body, token) {
+    await axios.post(
+        `${GH_API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+        { body },
+        { headers: defaultHeaders(token) }
+    );
+}
+
 async function deleteFileWithToken(owner, repo, path, sha, message, token) {
     try {
         await axios.delete(
@@ -171,4 +267,12 @@ module.exports = {
     createOrUpdateFileWithToken,
     getFileSha,
     deleteFileWithToken,
+    getRefWithToken,
+    createBranchWithToken,
+    createOrUpdateFileOnBranch,
+    getFileOnBranch,
+    createPullRequest,
+    mergePullRequest,
+    addPullRequestComment,
+    getPullRequestStatus,
 };

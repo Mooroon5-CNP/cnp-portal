@@ -13,6 +13,29 @@ const teamService = require('../services/teams');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const k8sClient = require('../clients/kubernetes');
+const manifestMrModel = require('../models/manifest_mr');
+
+// ---------------------------------------------------------------------------
+// GitHub PR status sync
+// ---------------------------------------------------------------------------
+
+async function syncMrsFromGitHub(mrs) {
+    if (!mrs.length) return;
+    const { owner, repo } = parseConfigRepo();
+    const token = config.github.configRepoToken;
+    await Promise.all(mrs.map(async (mr) => {
+        if (!mr.prNumber) return;
+        try {
+            const status = await githubService.getPullRequestStatus(owner, repo, mr.prNumber, token);
+            if (!status) return;
+            if (status.merged) {
+                manifestMrModel.approve(mr.id, 'github');
+            } else if (status.state === 'closed' && !status.merged) {
+                manifestMrModel.reject(mr.id, 'github', 'PR fermée directement sur GitHub');
+            }
+        } catch (_) {}
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -351,6 +374,24 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     // Teams not yet granted access (for the add selector).
     const otherTeams = allTeams.filter(t => !accessTeamIds.includes(t.id));
 
+    // Sync pending MR statuses against GitHub before rendering (catches direct GitHub actions).
+    if (can(req.user, 'k8s:manifest:approve')) {
+        const rawPending = manifestMrModel.listPendingForDeployment(dep.id);
+        await syncMrsFromGitHub(rawPending);
+    }
+
+    const pendingMrs = can(req.user, 'k8s:manifest:approve')
+        ? manifestMrModel.listPendingForDeployment(dep.id)
+        : [];
+
+    const userModel = require('../models/user');
+    const mrUsers = {};
+    for (const mr of pendingMrs) {
+        if (mr.requestedBy && !mrUsers[mr.requestedBy]) {
+            mrUsers[mr.requestedBy] = userModel.findById(mr.requestedBy);
+        }
+    }
+
     res.render('deployments/detail', {
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
@@ -365,6 +406,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         ownerTeam,
         accessTeams,
         otherTeams,
+        pendingMrs,
+        mrUsers,
         user: req.user,
         can: (p) => can(req.user, p),
     });
@@ -527,6 +570,71 @@ router.post('/:id/team-access/:teamId/revoke', requireAuth, requirePermission('d
 
     deploymentModel.revokeTeamAccess(dep.id, req.params.teamId);
     req.flash('success', 'Accès révoqué.');
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// POST /deployments/:id/manifest-prs/:mrId/approve — manager merges the PR
+// ---------------------------------------------------------------------------
+
+router.post('/:id/manifest-prs/:mrId/approve', requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    const mr  = manifestMrModel.get(req.params.mrId);
+
+    if (!dep || !mr || mr.deploymentId !== dep.id) {
+        req.flash('error', 'MR introuvable.');
+        return res.redirect('/deployments');
+    }
+    if (mr.status !== 'pending') {
+        req.flash('error', 'Cette MR n\'est plus en attente.');
+        return res.redirect(`/deployments/${dep.id}`);
+    }
+
+    const { owner, repo } = parseConfigRepo();
+    const token = config.github.configRepoToken;
+
+    try {
+        await githubService.mergePullRequest(owner, repo, mr.prNumber, token,
+            `Approuvé par ${req.user.username} via CNP Portal`);
+        manifestMrModel.approve(mr.id, req.user.id);
+        req.flash('success', `Modification de ${mr.filePath.split('/').pop()} approuvée et mergée.`);
+    } catch (e) {
+        req.flash('error', `Erreur lors du merge : ${e.message}`);
+    }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// POST /deployments/:id/manifest-prs/:mrId/reject — manager rejects the PR
+// ---------------------------------------------------------------------------
+
+router.post('/:id/manifest-prs/:mrId/reject', requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    const mr  = manifestMrModel.get(req.params.mrId);
+
+    if (!dep || !mr || mr.deploymentId !== dep.id) {
+        req.flash('error', 'MR introuvable.');
+        return res.redirect('/deployments');
+    }
+    if (mr.status !== 'pending') {
+        req.flash('error', 'Cette MR n\'est plus en attente.');
+        return res.redirect(`/deployments/${dep.id}`);
+    }
+
+    const comment = (req.body.comment || '').trim();
+    const { owner, repo } = parseConfigRepo();
+    const token = config.github.configRepoToken;
+
+    try {
+        const rejectBody = comment
+            ? `❌ **Rejeté par ${req.user.username}** :\n\n${comment}`
+            : `❌ **Rejeté par ${req.user.username}**`;
+        await githubService.addPullRequestComment(owner, repo, mr.prNumber, rejectBody, token);
+        manifestMrModel.reject(mr.id, req.user.id, comment || null);
+        req.flash('success', 'MR rejetée. Le DevOps peut modifier et resoumettre.');
+    } catch (e) {
+        req.flash('error', `Erreur lors du rejet : ${e.message}`);
+    }
     return res.redirect(`/deployments/${dep.id}`);
 });
 

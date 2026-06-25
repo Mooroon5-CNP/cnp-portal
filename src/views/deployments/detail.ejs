@@ -256,9 +256,70 @@
               </div>
               <% } %>
 
+              <!-- ── Pending manifest MRs (manager only) ────────────────── -->
+              <% if (can('k8s:manifest:approve') && pendingMrs && pendingMrs.length > 0) { %>
+              <div class="card mb-6">
+                <div class="card-header">
+                  <span class="card-title">Modifications de manifestes en attente</span>
+                  <span class="badge badge-warning"><%= pendingMrs.length %> en attente</span>
+                </div>
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr><th>Fichier</th><th>Demandé par</th><th>Message</th><th>GitHub PR</th><th>Date</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      <% pendingMrs.forEach(mr => { %>
+                      <tr>
+                        <td class="font-mono" style="font-size:12px;"><%= mr.filePath.split('/').pop() %></td>
+                        <td><%= (mrUsers[mr.requestedBy] || {}).username || mr.requestedBy %></td>
+                        <td style="max-width:200px;font-size:12px;color:var(--text-muted);"><%= mr.commitMessage || '—' %></td>
+                        <td>
+                          <% if (mr.prUrl) { %>
+                          <a href="<%= mr.prUrl %>" target="_blank" class="badge badge-info" style="text-decoration:none;">#<%= mr.prNumber %> ↗</a>
+                          <% } else { %>—<% } %>
+                        </td>
+                        <td class="text-muted" style="font-size:12px;"><%= new Date(mr.createdAt).toLocaleDateString('fr-FR') %></td>
+                        <td>
+                          <div class="actions-cell">
+                            <form action="/deployments/<%= deployment.id %>/manifest-prs/<%= mr.id %>/approve" method="POST" class="inline-form"
+                                  onsubmit="return confirm('Approuver et merger cette modification ?')">
+                              <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
+                            </form>
+                            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('rejectModal-<%= mr.id %>').style.display='flex'">Rejeter</button>
+                          </div>
+                        </td>
+                      </tr>
+                      <% }) %>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <% } %>
+
           </div>
         </main>
     </div>
+
+    <!-- ── Reject MR modals (manager) ───────────────────────────────────── -->
+    <% if (can('k8s:manifest:approve') && pendingMrs) { pendingMrs.forEach(mr => { %>
+    <div id="rejectModal-<%= mr.id %>" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+        <h3 style="margin:0 0 8px;">Rejeter la modification</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;">Fichier : <code><%= mr.filePath.split('/').pop() %></code></p>
+        <form action="/deployments/<%= deployment.id %>/manifest-prs/<%= mr.id %>/reject" method="POST">
+          <div class="form-group">
+            <label>Motif du rejet (optionnel)</label>
+            <textarea name="comment" rows="3" style="width:100%;resize:vertical;" placeholder="Expliquez pourquoi cette modification est rejetée..."></textarea>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:12px;">
+            <button type="submit" class="btn btn-danger">Confirmer le rejet</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('rejectModal-<%= mr.id %>').style.display='none'">Annuler</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <% }) } %>
 
     <!-- ── Delete modal (manager) ──────────────────────────────────────── -->
     <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">

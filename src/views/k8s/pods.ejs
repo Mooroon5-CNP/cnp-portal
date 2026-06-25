@@ -15,6 +15,23 @@
         </div>
       </div>
 
+      <!-- Editable apps shortcut (devops with write access) -->
+      <% if (editableAppNames && editableAppNames.length > 0) { %>
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title">Applications — accès écriture</span>
+          <span class="badge badge-success"><%= editableAppNames.length %> app(s)</span>
+        </div>
+        <div style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px;">
+          <% editableAppNames.forEach(function(appName) { %>
+          <a href="/k8s/apps/<%= appName %>/edit" class="btn btn-secondary">
+            ✏ <%= appName %>
+          </a>
+          <% }) %>
+        </div>
+      </div>
+      <% } %>
+
       <!-- Pods -->
       <div class="card mb-6">
         <div class="card-header">
@@ -35,7 +52,15 @@
               </tr>
             </thead>
             <tbody>
-              <% pods.forEach(pod => { %>
+              <% pods.forEach(pod => {
+                // Resolve the DB app name for this pod: direct label match OR namespace-based fallback.
+                const resolvedApp = (editableAppNames || []).find(n =>
+                  n === pod.app || pod.namespace === n + '-dev' || pod.namespace === n + '-prod'
+                ) || (userAppNames || []).find(n =>
+                  n === pod.app || pod.namespace === n + '-dev' || pod.namespace === n + '-prod'
+                ) || pod.app;
+                const isEditable = (editableAppNames || []).includes(resolvedApp);
+              %>
               <tr>
                 <td class="font-mono"><%= pod.name %></td>
                 <td><span class="badge badge-gray"><%= pod.namespace %></span></td>
@@ -51,17 +76,17 @@
                 <% if (can('k8s:pods:scale') || can('k8s:pods:delete') || can('k8s:manifest:edit')) { %>
                 <td>
                   <div class="actions-cell">
-                    <% if (can('k8s:pods:scale')) { %>
-                    <form action="/k8s/deployments/<%= pod.app %>/scale" method="POST" class="scale-form">
+                    <% if (can('k8s:pods:scale') && (user.role === 'manager' || isEditable)) { %>
+                    <form action="/k8s/deployments/<%= resolvedApp %>/scale" method="POST" class="scale-form">
                       <input type="hidden" name="namespace" value="<%= pod.namespace %>">
                       <input type="number" name="replicas" value="1" min="0" max="20" title="Réplicas">
                       <button type="submit" class="btn btn-secondary btn-sm">Scale</button>
                     </form>
                     <% } %>
-                    <% if (can('k8s:manifest:edit') && editableAppNames.includes(pod.app)) { %>
-                    <a href="/k8s/apps/<%= pod.app %>/edit" class="btn btn-secondary btn-sm">Edit YAML</a>
+                    <% if (can('k8s:manifest:edit') && isEditable) { %>
+                    <a href="/k8s/apps/<%= resolvedApp %>/edit" class="btn btn-secondary btn-sm">Edit YAML</a>
                     <% } %>
-                    <% if (can('k8s:pods:delete')) { %>
+                    <% if (can('k8s:pods:delete') && (user.role === 'manager' || isEditable)) { %>
                     <form action="/k8s/pods/<%= pod.name %>/delete" method="POST" class="inline-form"
                           onsubmit="return confirm('Supprimer le pod <%= pod.name %> ?')">
                       <input type="hidden" name="namespace" value="<%= pod.namespace %>">

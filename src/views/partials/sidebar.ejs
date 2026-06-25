@@ -13,11 +13,26 @@
         <a href="/"><span class="nav-icon">◈</span> Dashboard</a>
       </li>
       <li class="<%= locals.currentPage === 'deployments' ? 'active' : '' %>">
-        <a href="/deployments"><span class="nav-icon">⬆</span> Déploiements</a>
+        <a href="/deployments" style="display:flex;align-items:center;justify-content:space-between;">
+          <span><span class="nav-icon">⬆</span> Déploiements</span>
+          <% if (locals.pendingMrCount > 0) { %>
+          <span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= locals.pendingMrCount %></span>
+          <% } %>
+        </a>
       </li>
+      <% if (locals.user && user.role === 'devops') { %>
       <li class="<%= locals.currentPage === 'k8s' ? 'active' : '' %>">
         <a href="/k8s/pods"><span class="nav-icon">☸</span> Ressources K8s</a>
       </li>
+      <li class="<%= locals.currentPage === 'manifest-prs' ? 'active' : '' %>">
+        <a href="/k8s/manifest-prs" style="display:flex;align-items:center;justify-content:space-between;">
+          <span><span class="nav-icon">⎇</span> Mes MRs</span>
+          <% if (locals.rejectedMrCount > 0) { %>
+          <span style="background:#ef4444;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= locals.rejectedMrCount %></span>
+          <% } %>
+        </a>
+      </li>
+      <% } %>
     </ul>
   </div>
 

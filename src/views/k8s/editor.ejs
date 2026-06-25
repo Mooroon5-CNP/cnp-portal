@@ -147,8 +147,13 @@
           </div>
           <textarea id="editor-textarea" placeholder="Le contenu du fichier s'affichera ici..." disabled spellcheck="false"></textarea>
           <div class="editor-footer">
-            <input type="text" id="commit-message" placeholder="Message de commit (optionnel)" />
-            <button class="btn btn-primary" onclick="saveFile()" id="save-btn" disabled>Commit &amp; Push</button>
+            <input type="text" id="commit-message" placeholder="Message de modification (optionnel)" />
+            <button class="btn btn-primary" onclick="saveFile()" id="save-btn" disabled>Envoyer pour validation</button>
+          </div>
+          <div id="pr-info" style="display:none;padding:10px 14px;background:var(--success-bg,#d1fae5);border-radius:8px;font-size:13px;color:#065f46;">
+            ✓ Pull Request créée — en attente de validation manager.
+            <a id="pr-link" href="#" target="_blank" style="margin-left:8px;color:#065f46;font-weight:600;">Voir sur GitHub ↗</a>
+            &nbsp;|&nbsp; <a href="/k8s/manifest-prs" style="color:#065f46;font-weight:600;">Mes MRs</a>
           </div>
         </div>
       </div>
@@ -218,9 +223,10 @@ async function saveFile() {
 
   if (!content.trim()) { setStatus('Le contenu ne peut pas être vide.', 'error'); return; }
 
-  saveBtn.disabled  = true;
-  saveBtn.textContent = 'Envoi…';
+  saveBtn.disabled    = true;
+  saveBtn.textContent = 'Création de la PR…';
   loading = true;
+  document.getElementById('pr-info').style.display = 'none';
 
   try {
     const res  = await fetch(`/k8s/apps/${appName}/file`, {
@@ -230,18 +236,21 @@ async function saveFile() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Erreur inconnue');
-    currentSha = null; // sha changes after commit — next load will refresh it
-    setStatus('✓ Commité : ' + (data.message || 'OK'), 'success');
+
+    // Show PR confirmation banner
+    if (data.prUrl) {
+      document.getElementById('pr-link').href = data.prUrl;
+      document.getElementById('pr-info').style.display = 'block';
+    } else {
+      setStatus('✓ ' + (data.message || 'OK'), 'success');
+    }
     document.getElementById('commit-message').value = '';
-    // Reload SHA for next save
-    const r2   = await fetch(`/k8s/apps/${appName}/file?path=${encodeURIComponent(currentPath)}`);
-    const d2   = await r2.json();
-    if (r2.ok) currentSha = d2.sha;
+    currentSha = null; // branch sha changes — reset so next edit starts fresh
   } catch (err) {
     setStatus('Erreur : ' + err.message, 'error');
   } finally {
     saveBtn.disabled    = false;
-    saveBtn.textContent = 'Commit & Push';
+    saveBtn.textContent = 'Envoyer pour validation';
     loading = false;
   }
 }
