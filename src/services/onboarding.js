@@ -296,6 +296,40 @@ const GCP_PROJECT  = config.gcp.project;
 const GCP_REGION   = config.gcp.region;
 const CLOUD_RUN_SA = config.gcp.cloudRunSa;
 
+// The ApplicationSet that auto-discovers apps/*/crossplane dirs and creates
+// an ArgoCD Application for each. Applied idempotently at the start of every
+// GCP onboarding so a cluster reset never silently breaks Cloud Run deploys.
+const CLOUDRUN_AUTODISCOVERY_APPSET = {
+    apiVersion: 'argoproj.io/v1alpha1',
+    kind: 'ApplicationSet',
+    metadata: { name: 'cloudrun-autodiscovery', namespace: 'argocd' },
+    spec: {
+        generators: [{
+            git: {
+                repoURL: `https://github.com/${(config.github.configRepoName || 'Mooroon5-CNP/config-repo')}.git`,
+                revision: 'main',
+                directories: [{ path: 'apps/*/crossplane' }],
+            },
+        }],
+        template: {
+            metadata: { name: '{{path[1]}}-cloudrun' },
+            spec: {
+                project: 'default',
+                source: {
+                    repoURL: `https://github.com/${(config.github.configRepoName || 'Mooroon5-CNP/config-repo')}.git`,
+                    targetRevision: 'main',
+                    path: '{{path}}',
+                },
+                destination: { server: 'https://kubernetes.default.svc', namespace: 'crossplane-system' },
+                syncPolicy: {
+                    automated: { selfHeal: true, prune: true },
+                    syncOptions: ['CreateNamespace=true'],
+                },
+            },
+        },
+    },
+};
+
 function tplCrossplaneV2Service(appName) {
     return `apiVersion: cloudrun.gcp.upbound.io/v1beta2
 kind: V2Service
@@ -685,9 +719,15 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
 
         // ------------------------------------------------------------------
         // Step 3.6: Create Crossplane Cloud Run resources in config-repo and
-        // apply the ArgoCD Application that watches them (GCP only).
+        // ensure the cloudrun-autodiscovery ApplicationSet is running (GCP only).
+        // Applying the AppSet is idempotent — safe to call on every onboarding.
         // ------------------------------------------------------------------
         if (targetCluster === 'gcp') {
+            try {
+                await k8sClient.applyApplicationSet(CLOUDRUN_AUTODISCOVERY_APPSET);
+            } catch (e) {
+                console.warn(`[onboarding] Could not apply cloudrun-autodiscovery AppSet: ${e.message}`);
+            }
             const cpBase = `apps/${appName}/crossplane`;
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
