@@ -170,6 +170,25 @@ async function deleteFile(owner, repo, path, sha, message) {
   }
 }
 
+// Create or update an Actions variable (non-secret) on a repo via GitHub App auth.
+async function setRepoVariable(owner, repo, variableName, variableValue) {
+  const octokit = await getInstallationOctokit();
+  try {
+    // Try PATCH first (update existing), fall back to POST (create new)
+    await octokit.request('PATCH /repos/{owner}/{repo}/actions/variables/{name}', {
+      owner, repo, name: variableName, value: variableValue,
+    });
+  } catch (err) {
+    if (err.status === 404) {
+      await octokit.request('POST /repos/{owner}/{repo}/actions/variables', {
+        owner, repo, name: variableName, value: variableValue,
+      });
+    } else {
+      throw new Error(`Failed to set variable ${variableName} on ${owner}/${repo}: ${err.message}`);
+    }
+  }
+}
+
 // Delete an Actions secret from a repo via GitHub App auth.
 async function deleteSecret(owner, repo, secretName) {
   const octokit = await getInstallationOctokit();
@@ -214,6 +233,7 @@ module.exports = {
   getRuns,
   getRunJobs,
   deleteFile,
+  setRepoVariable,
   deleteSecret,
   checkActionsEnabled,
   checkConnectivity,

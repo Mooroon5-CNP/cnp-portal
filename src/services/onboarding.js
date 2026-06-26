@@ -5,6 +5,7 @@ const { config } = require('../config/env');
 const githubClient = require('../clients/github');
 const githubService = require('./github');
 const k8sClient = require('../clients/kubernetes');
+const argoCDClient = require('../clients/argocd');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -292,8 +293,8 @@ ${tlsBlock}  rules:
 `;
 }
 
-const GCP_PROJECT  = config.gcp.project;
-const GCP_REGION   = config.gcp.region;
+const GCP_PROJECT = config.gcp.project;
+const GCP_REGION = config.gcp.region;
 const CLOUD_RUN_SA = config.gcp.cloudRunSa;
 
 // The ApplicationSet that auto-discovers apps/*/crossplane dirs and creates
@@ -628,7 +629,7 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
     if (sha) {
         const raw = await githubService.getFileContent(owner, repo, path, token);
         if (raw) {
-            try { doc = yaml.load(raw) || doc; } catch (_) {}
+            try { doc = yaml.load(raw) || doc; } catch (_) { }
         }
     }
     if (!Array.isArray(doc.apps)) doc.apps = [];
@@ -727,7 +728,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // ------------------------------------------------------------------
         for (const env of ['dev', 'prod']) {
             const overlay = `apps/${appName}/overlays/${env}`;
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage, targetCluster), configRepoToken);
             if (persistentStorage) {
                 await writeConfigRepoFile(crOwner, crRepo, `${overlay}/pvc.yaml`, tplOverlayPvc(appName, env), configRepoToken);
             }
@@ -802,7 +803,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         );
 
         // ------------------------------------------------------------------
-        // Step 5: Inject CONFIG_REPO_TOKEN secret into app repo (GitHub App)
+        // Step 5: Inject CONFIG_REPO_TOKEN secret + WIF_PROVIDER variable
         // ------------------------------------------------------------------
         try {
             await githubClient.setRepoSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN', configRepoToken);
@@ -812,6 +813,11 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 `Impossible d'injecter CONFIG_REPO_TOKEN sur ${appOwner}/${appRepo}: ${e.message}. ` +
                 `Vérifiez que le GitHub App a la permission "secrets: write" sur ce dépôt.`
             );
+        }
+        try {
+            await githubClient.setRepoVariable(appOwner, appRepo, 'WIF_PROVIDER', config.github.wifProvider);
+        } catch (e) {
+            console.warn(`[onboarding] Could not set WIF_PROVIDER variable on ${appOwner}/${appRepo}: ${e.message}`);
         }
 
         // ------------------------------------------------------------------
@@ -857,7 +863,7 @@ function configRepoPaths(appName) {
     }
     paths.push(`argocd/overlays/${appName}/kustomization.yaml`);
     const cp = `apps/${appName}/crossplane`;
-    paths.push(`${cp}/cloudrun-claim.yaml`, `${cp}/cloudrun-iam.yaml`, `${cp}/kustomization.yaml`, `${cp}/application.yaml`);
+    paths.push(`${cp}/cloudrun-claim.yaml`, `${cp}/cloudrun-iam.yaml`, `${cp}/gcs-bucket.yaml`, `${cp}/kustomization.yaml`, `${cp}/application.yaml`);
     return paths;
 }
 
@@ -920,24 +926,33 @@ async function offboardApp({ appName, githubRepoUrl }) {
         }
     }
 
-    // Step 3: delete ArgoCD ApplicationSets and Applications from the cluster
+    // Step 3: delete ArgoCD Applications (via ArgoCD REST API with cascade=true so
+    // Crossplane CRs are pruned first, which triggers GCP resource deletion).
+    // Delete Applications first so ArgoCD doesn't re-create resources while
+    // we're still removing ApplicationSets.
     for (const env of ['dev', 'prod']) {
         try {
-            await k8sClient.deleteApplicationSet(`${appName}-${env}`);
-        } catch (e) {
-            errors.push(`applicationset ${appName}-${env}: ${e.message}`);
-        }
-        try {
-            await k8sClient.deleteArgocdApplication(`${appName}-${env}-local`);
+            await argoCDClient.deleteApplication(`${appName}-${env}-local`, { cascade: true });
         } catch (e) {
             errors.push(`argocd application ${appName}-${env}-local: ${e.message}`);
         }
     }
-    // Delete Cloud Run ArgoCD Application (GCP apps using Crossplane).
+    // Delete Cloud Run ArgoCD Application with cascade — this prunes the Crossplane
+    // V2Service, BucketIAMMember and Bucket CRs, which makes Crossplane delete the
+    // actual Cloud Run service and GCS bucket in GCP.
     try {
-        await k8sClient.deleteArgocdApplication(`${appName}-cloudrun`);
+        await argoCDClient.deleteApplication(`${appName}-cloudrun`, { cascade: true });
     } catch (e) {
         errors.push(`argocd application ${appName}-cloudrun: ${e.message}`);
+    }
+
+    // Delete ApplicationSets via ArgoCD REST API (admin token, no RBAC issue).
+    for (const env of ['dev', 'prod']) {
+        try {
+            await argoCDClient.deleteApplicationSet(`${appName}-${env}`);
+        } catch (e) {
+            errors.push(`applicationset ${appName}-${env}: ${e.message}`);
+        }
     }
 
     // Step 3.5: delete K8s namespaces (removes all pods, services, ingresses, configmaps)

@@ -49,6 +49,8 @@ const config = {
     installationId: process.env.GITHUB_APP_INSTALLATION_ID,
     configRepoName: process.env.GITHUB_CONFIG_REPO_NAME,
     configRepoToken: process.env.GITHUB_CONFIG_REPO_TOKEN || null,
+    wifProvider: process.env.GITHUB_WIF_PROVIDER
+      || 'projects/688655933459/locations/global/workloadIdentityPools/github-pool/providers/github-provider',
   },
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,
