@@ -6,7 +6,8 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/cnp-portal.sqlite');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
+const DB_PATH  = process.env.DB_PATH  || path.join(DATA_DIR, 'cnp-portal.sqlite');
 
 const dataDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });

@@ -10,14 +10,15 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ build-base linux-h
 FROM node:20-alpine AS final
 WORKDIR /app
 
-RUN addgroup -S cnp && adduser -S cnp -G cnp
+RUN apk add --no-cache tini \
+ && addgroup -g 1000 cnp && adduser -u 1000 -S -G cnp cnp
 
 COPY --from=deps --chown=cnp:cnp /app/node_modules ./node_modules
 COPY --chown=cnp:cnp src/ ./src/
 COPY --chown=cnp:cnp public/ ./public/
 COPY --chown=cnp:cnp documentation/ ./documentation/
 
-USER cnp
+USER 1000
 
 EXPOSE 3000
 
@@ -30,4 +31,5 @@ ENV NODE_ENV=production \
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3000/healthz || exit 1
 
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "src/index.js"]
