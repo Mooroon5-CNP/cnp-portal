@@ -814,10 +814,16 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 `Vérifiez que le GitHub App a la permission "secrets: write" sur ce dépôt.`
             );
         }
-        try {
-            await githubClient.setRepoVariable(appOwner, appRepo, 'WIF_PROVIDER', config.github.wifProvider);
-        } catch (e) {
-            console.warn(`[onboarding] Could not set WIF_PROVIDER variable on ${appOwner}/${appRepo}: ${e.message}`);
+        for (const [name, value] of [
+            ['WIF_PROVIDER', config.github.wifProvider],
+            ['GCP_SA_EMAIL', config.github.gcpSaEmail],
+            ['REGISTRY_URL', config.github.registryUrl],
+        ]) {
+            try {
+                await githubClient.setRepoVariable(appOwner, appRepo, name, value);
+            } catch (e) {
+                console.warn(`[onboarding] Could not set ${name} on ${appOwner}/${appRepo}: ${e.message}`);
+            }
         }
 
         // ------------------------------------------------------------------

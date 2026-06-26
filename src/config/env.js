@@ -51,6 +51,10 @@ const config = {
     configRepoToken: process.env.GITHUB_CONFIG_REPO_TOKEN || null,
     wifProvider: process.env.GITHUB_WIF_PROVIDER
       || 'projects/688655933459/locations/global/workloadIdentityPools/github-pool/providers/github-provider',
+    gcpSaEmail: process.env.GITHUB_GCP_SA_EMAIL
+      || 'github-ci-sa@cnp-terraform-500015.iam.gserviceaccount.com',
+    registryUrl: process.env.GITHUB_REGISTRY_URL
+      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015'}/cnp-registry`,
   },
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,
