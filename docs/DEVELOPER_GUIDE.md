@@ -195,13 +195,31 @@ app.listen(PORT, () => console.log(`Listening on :${PORT}`));
 
 ## 7. Tests and linting
 
+### Running lint locally
+
+Always run lint before pushing — CI will fail if it doesn't pass locally:
+
+```bash
+npm run lint          # ESLint on src/
+```
+
+If you get `'describe' is not defined` or `'expect' is not defined`, you are missing `"jest": true` in your `.eslintrc.json` env (see below).
+
+To lint your Dockerfile locally (requires Docker):
+
+```bash
+docker run --rm -i hadolint/hadolint < Dockerfile
+```
+
+---
+
 ### ESLint
 
-A `.eslintrc.json` must exist at the repo root. Minimal config:
+A `.eslintrc.json` must exist at the repo root. **You must include `"jest": true`** in `env` — otherwise ESLint will flag `describe`, `it`, and `expect` as undefined globals and fail the CI lint step.
 
 ```json
 {
-  "env": { "node": true, "es2022": true },
+  "env": { "node": true, "es2022": true, "jest": true },
   "parserOptions": { "ecmaVersion": 2022 },
   "rules": {
     "no-unused-vars": "error",
