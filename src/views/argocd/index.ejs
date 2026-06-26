@@ -7,6 +7,13 @@
   <main class="main-content">
     <div class="content-wrapper">
       <%- include('../partials/flash') %>
+      <% if (locals.flash && flash.info && flash.info.length && myRequest && myRequest.status === 'approved') { %>
+      <div style="margin-bottom:16px;">
+        <a href="#mes-identifiants" class="btn btn-primary" onclick="document.getElementById('mes-identifiants').scrollIntoView({behavior:'smooth'});return false;">
+          Voir mes identifiants ArgoCD →
+        </a>
+      </div>
+      <% } %>
 
       <div class="page-header">
         <div>
@@ -43,8 +50,8 @@
                 <td><%= r.appName || '—' %></td>
                 <td><%= r.reason %></td>
                 <td class="text-muted"><%= new Date(r.createdAt).toLocaleString('fr-FR') %></td>
-                <td style="display:flex;gap:8px;">
-                  <form action="/argocd/access-request/<%= r.id %>/approve" method="POST" class="inline-form">
+                <td style="display:flex;gap:8px;align-items:center;">
+                  <form action="/argocd/access-request/<%= r.id %>/approve" method="POST" class="inline-form" onsubmit="argoCDApproving(this)">
                     <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
                   </form>
                   <form action="/argocd/access-request/<%= r.id %>/reject" method="POST" class="inline-form">
@@ -89,7 +96,7 @@
 
       <% } else if (myRequest && myRequest.status === 'approved') { %>
       <!-- Accès approuvé + credentials -->
-      <div class="card mb-6" style="border-left:4px solid var(--success,#10b981);">
+      <div id="mes-identifiants" class="card mb-6" style="border-left:4px solid var(--success,#10b981);">
         <div class="card-header">
           <span class="card-title">Vos identifiants ArgoCD</span>
           <span class="badge badge-success">Accès accordé</span>
@@ -117,8 +124,10 @@
 
             <div style="display:flex;align-items:center;gap:12px;padding:10px 0;">
               <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">3. Password</span>
-              <code id="argocd-pwd" style="font-size:14px;flex:1;letter-spacing:0.05em;"><%= myRequest.argoCDPassword %></code>
-              <button onclick="navigator.clipboard.writeText('<%= myRequest.argoCDPassword %>').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
+              <input type="password" id="argocd-pwd" value="<%= myRequest.argoCDPassword %>" readonly
+                style="font-family:monospace;font-size:14px;flex:1;border:none;background:transparent;outline:none;color:inherit;">
+              <button id="argocd-pwd-toggle" onclick="(function(btn){var f=document.getElementById('argocd-pwd');var shown=f.type==='text';f.type=shown?'password':'text';btn.textContent=shown?'Afficher':'Masquer';})(this)" class="btn btn-secondary btn-sm">Afficher</button>
+              <button onclick="navigator.clipboard.writeText(document.getElementById('argocd-pwd').value).then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
             </div>
           </div>
 
@@ -233,5 +242,50 @@
     </div>
   </main>
 </div>
+
+<style>
+@keyframes _spin { to { transform: rotate(360deg); } }
+._spinner {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: _spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+</style>
+
+<script>
+function argoCDApproving(form) {
+  var btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="_spinner"></span>Création en cours…';
+
+  // Disable all other approve/reject buttons on the page so the manager
+  // can't trigger a second action while the first is being processed.
+  document.querySelectorAll('.inline-form button').forEach(function(b) {
+    if (b !== btn) b.disabled = true;
+  });
+}
+
+// Auto-scroll to credentials card when redirected from a re-request attempt.
+(function() {
+  var params = new URLSearchParams(location.search);
+  if (params.get('voir') === 'identifiants') {
+    var el = document.getElementById('mes-identifiants');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Briefly highlight the card so it's obvious.
+      el.style.transition = 'box-shadow .3s';
+      el.style.boxShadow = '0 0 0 3px var(--primary, #6366f1)';
+      setTimeout(function() { el.style.boxShadow = ''; }, 2000);
+    }
+    // Clean the query param from the URL without reloading.
+    history.replaceState(null, '', location.pathname);
+  }
+})();
+</script>
 </body>
 </html>

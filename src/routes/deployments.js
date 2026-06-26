@@ -130,6 +130,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
             githubRepoUrl: d.githubRepoUrl,
             appPort: d.appPort,
             onboardingStatus: d.onboardingStatus,
+            persistentStorage: d.persistentStorage,
             status,
             branch: run ? (run.head_branch || 'main') : 'main',
             lastRunTime,
@@ -270,7 +271,12 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
 
     if (run.status === 'completed') {
         const runUrl = `https://github.com/${parsed.owner}/${parsed.repo}/actions/runs/${run.id}`;
-        const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+        // Use cached URL from DB; only query K8s on cache miss and save on find.
+        let cloudRunUrl = dep.cloudRunUrl || null;
+        if (!cloudRunUrl) {
+            cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+            if (cloudRunUrl) deploymentModel.updateCloudRunUrl(dep.id, cloudRunUrl);
+        }
         if (run.conclusion === 'success') {
             return res.json({
                 phase: 'success',
@@ -323,7 +329,19 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
-    const cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+    // Auto-heal gcs-bucket.yaml if it's missing uniformBucketLevelAccess (fire-and-forget).
+    if (dep.targetCluster === 'gcp' && dep.persistentStorage && dep.onboardingStatus === 'ready') {
+        onboardingService.healGcsBucket(dep.appName).catch(e =>
+            console.warn(`[detail] healGcsBucket(${dep.appName}): ${e.message}`)
+        );
+    }
+
+    // Use cached URL from DB first; live K8s query only on cache miss.
+    let cloudRunUrl = dep.cloudRunUrl || null;
+    if (!cloudRunUrl && dep.targetCluster === 'gcp') {
+        cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
+        if (cloudRunUrl) deploymentModel.updateCloudRunUrl(dep.id, cloudRunUrl);
+    }
     let ingressUrl = null;
     // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
     if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp') {

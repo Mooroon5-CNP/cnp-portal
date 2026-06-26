@@ -62,11 +62,16 @@ router.post('/access-request', requireAuth, requirePermission('argocd:access:req
   const { appName, reason } = req.body;
   try {
     argocdService.requestAccess(req.user.id, appName, reason);
-    req.flash('success', 'Demande d\'accès ArgoCD envoyée à votre manager.');
+    req.flash('success', 'Demande d\'accès ArgoCD envoyée. Votre manager doit l\'approuver — vous recevrez vos identifiants une fois la demande traitée.');
+    return res.redirect('/argocd');
   } catch (err) {
+    if (err.message === 'ALREADY_APPROVED') {
+      req.flash('info', 'Vous avez déjà un accès ArgoCD approuvé.');
+      return res.redirect('/argocd?voir=identifiants');
+    }
     req.flash('error', err.message);
+    res.redirect('/argocd');
   }
-  res.redirect('/argocd');
 });
 
 // ── Approve (manager) ─────────────────────────────────────────────────────────

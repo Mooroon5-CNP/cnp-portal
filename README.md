@@ -19,7 +19,13 @@ A user submits a GitHub repo URL through the UI. The portal then automatically:
 
 If **DB persistante** is checked at onboarding, the portal also writes a `pvc.yaml` (1Gi ReadWriteOnce) into each overlay and mounts it at `/data` inside the container. The volume survives pod restarts.
 
-When an app is deleted, the portal removes all config-repo files, deletes the ArgoCD `Application` objects for dev and prod, and deletes the corresponding Kubernetes namespaces — so a re-onboard of the same app starts from a clean state.
+When an app is deleted, the portal:
+1. Removes all config-repo files (manifests, overlays, crossplane dir, argocd overlay)
+2. Calls the **ArgoCD REST API** with `cascade=true` to delete each ArgoCD `Application` — this prunes all managed Kubernetes resources (including Crossplane CRs), which triggers Crossplane to delete the actual GCP resources (Cloud Run service, GCS bucket if present)
+3. Deletes ArgoCD `ApplicationSet` objects via the ArgoCD REST API
+4. Deletes the Kubernetes namespaces (`{app}-dev`, `{app}-prod`) — requires the namespace ClusterRole below
+
+A re-onboard of the same app starts from a clean state.
 
 After that the CI pipeline is self-contained: on each push to `main` it builds the image, pushes to GCP Artifact Registry, updates `newTag` in config-repo, and ArgoCD syncs automatically.
 
@@ -364,7 +370,10 @@ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
 # 3. Install Crossplane (required for GCP Cloud Run provisioning)
 kubectl apply -f config-repo/infra/crossplane/application.yaml
 
-# 4. Grant the portal's service account permission to manage ApplicationSets
+# 4. Grant the portal's service account permissions to manage ApplicationSets
+#    and delete Kubernetes namespaces (required for full app offboarding).
+#    ArgoCD Application objects are deleted via the ArgoCD REST API (ARGOCD_TOKEN),
+#    so no K8s RBAC is needed for those.
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -389,10 +398,56 @@ roleRef:
   kind: Role
   name: cnp-portal-applicationsets
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-portal-namespaces
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get","list","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-portal-namespaces
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: ClusterRole
+  name: cnp-portal-namespaces
+  apiGroup: rbac.authorization.k8s.io
+---
+# Allows the portal to read the Cloud Run URL from the Crossplane V2Service status.
+# Without this, getV2ServiceUrl() silently fails (catches 403) and the URL never appears.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-portal-crossplane-read
+rules:
+- apiGroups: ["cloudrun.gcp.upbound.io"]
+  resources: ["v2services"]
+  verbs: ["get","list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-portal-crossplane-read
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: ClusterRole
+  name: cnp-portal-crossplane-read
+  apiGroup: rbac.authorization.k8s.io
 EOF
 ```
 
-After step 2, ArgoCD installs nginx-ingress and GCP assigns a LoadBalancer IP. The portal detects this IP automatically. Step 4 is required for app onboarding to apply ApplicationSets — without it the portal logs a warning and ArgoCD never watches the app.
+After step 2, ArgoCD installs nginx-ingress and GCP assigns a LoadBalancer IP. The portal detects this IP automatically. Step 4 is required for app onboarding (ApplicationSets) and offboarding (namespace deletion). Without the namespace ClusterRole, deleted apps leave behind empty namespaces that must be cleaned up manually with `kubectl delete namespace {app}-dev {app}-prod`.
 
 ---
 

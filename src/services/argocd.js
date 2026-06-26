@@ -7,6 +7,34 @@ const k8sClient  = require('../clients/kubernetes');
 const accessReqModel = require('../models/argocd_access_request');
 const userModel  = require('../models/user');
 
+// AES-256-GCM encryption for ArgoCD passwords stored in DB.
+// Key derived from SESSION_SECRET so no extra env var is needed.
+const _encKey = crypto.createHash('sha256')
+  .update(process.env.SESSION_SECRET || 'dev-fallback-key-change-in-prod')
+  .digest();
+
+function _encrypt(plain) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', _encKey, iv);
+  const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString('base64');
+}
+
+function _decrypt(stored) {
+  try {
+    const buf = Buffer.from(stored, 'base64');
+    const iv  = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const enc = buf.subarray(28);
+    const d   = crypto.createDecipheriv('aes-256-gcm', _encKey, iv);
+    d.setAuthTag(tag);
+    return d.update(enc).toString('utf8') + d.final('utf8');
+  } catch {
+    return null;
+  }
+}
+
 // ── App listing ───────────────────────────────────────────────────────────────
 
 async function listApps() {
@@ -33,9 +61,16 @@ async function syncApp(appName) {
 
 // ── Access request workflow ───────────────────────────────────────────────────
 
+function hasApproved(userId) {
+  return accessReqModel.hasApproved(userId);
+}
+
 function requestAccess(userId, appName, reason) {
   if (accessReqModel.hasPending(userId)) {
     throw new Error('Vous avez déjà une demande d\'accès en attente.');
+  }
+  if (accessReqModel.hasApproved(userId)) {
+    throw new Error('ALREADY_APPROVED');
   }
   return accessReqModel.create({ userId, appName, reason });
 }
@@ -45,11 +80,16 @@ function getAccessRequests() {
 }
 
 function getUserAccessRequest(userId) {
-  return accessReqModel.getLatestForUser(userId);
+  const req = accessReqModel.getLatestForUser(userId);
+  if (req && req.argoCDPassword) {
+    req.argoCDPassword = _decrypt(req.argoCDPassword);
+  }
+  return req;
 }
 
 // Called by the manager when approving a request.
-// Provisions an ArgoCD local account, stores credentials in DB.
+// Provisions an ArgoCD local account, stores credentials encrypted in DB.
+// If the user already has an approved account, reuses the existing credentials.
 async function approveAccess(requestId, reviewerId) {
   const req = accessReqModel.getById(requestId);
   if (!req) throw new Error('Demande introuvable.');
@@ -57,6 +97,16 @@ async function approveAccess(requestId, reviewerId) {
 
   const user = userModel.findById(req.userId);
   if (!user) throw new Error('Utilisateur introuvable.');
+
+  // If the user already has an approved account, reuse its credentials.
+  const existing = accessReqModel.getApprovedForUser(req.userId);
+  if (existing) {
+    return accessReqModel.approve(requestId, {
+      argoCDUsername: existing.argoCDUsername,
+      argoCDPassword: existing.argoCDPassword, // already encrypted
+      reviewedBy: reviewerId,
+    });
+  }
 
   // Derive a safe ArgoCD username (lowercase alphanum + hyphens, max 32 chars).
   const argoCDUsername = user.username
@@ -84,7 +134,7 @@ async function approveAccess(requestId, reviewerId) {
 
   return accessReqModel.approve(requestId, {
     argoCDUsername,
-    argoCDPassword: password,
+    argoCDPassword: _encrypt(password),
     reviewedBy: reviewerId,
   });
 }
@@ -98,6 +148,7 @@ function rejectAccess(requestId, reviewerId) {
 
 module.exports = {
   listApps, syncApp,
+  hasApproved,
   requestAccess, getAccessRequests, getUserAccessRequest,
   approveAccess, rejectAccess,
 };

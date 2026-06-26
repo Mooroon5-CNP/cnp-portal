@@ -103,8 +103,9 @@
                 <% } else if (deployment.targetCluster === 'gcp') { %>
                   <div class="card" style="margin-bottom:16px;" id="url-card">
                     <div class="card-header"><span class="card-title">Application</span></div>
-                    <div class="card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
-                      <span>⏳ URL Cloud Run en cours de provisionnement — disponible dans ~2 min après le premier pipeline réussi.</span>
+                    <div class="card-body" id="url-card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
+                      <span id="url-card-spinner" style="font-size:18px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
+                      <span id="url-card-msg">Provisionnement Cloud Run en cours...</span>
                     </div>
                   </div>
                 <% } %>
@@ -383,53 +384,78 @@
     <!-- ── Polling script ────────────────────────────────────────────────── -->
     <script>
       (function () {
-        const depId = '<%= deployment.id %>';
-        const initialStatus = '<%= deployment.onboardingStatus %>';
-        const targetCluster = '<%= deployment.targetCluster || "gcp" %>';
-        const hasCloudRunUrl = !!('<%= cloudRunUrl %>');
+        const depId    = '<%= deployment.id %>';
+        const cluster  = '<%= deployment.targetCluster || "gcp" %>';
+        const status0  = '<%= deployment.onboardingStatus %>';
+        const hasUrl   = !!('<%= cloudRunUrl %>');
+        const concl0   = '<%= latest ? (latest.conclusion || "") : "" %>';
+        const terminal = concl0 === 'success' || concl0 === 'failure' || concl0 === 'cancelled';
 
-        // Only poll if the pipeline is not yet in a terminal state,
-        // OR if it's a GCP app still waiting for its Cloud Run URL.
-        const latestConclusion = '<%= latest ? (latest.conclusion || "") : "" %>';
-        const latestStatus = '<%= latest ? latest.status : "" %>';
-        const isTerminal = (latestConclusion === 'success' || latestConclusion === 'failure' || latestConclusion === 'cancelled');
-        const isConfiguring = initialStatus === 'configuring';
-        const waitingForCloudRunUrl = targetCluster === 'gcp' && !hasCloudRunUrl && isTerminal && latestConclusion === 'success';
+        // Nothing left to poll: URL shown and pipeline is done.
+        if (hasUrl && terminal) return;
+        // Nothing left to poll: non-GCP terminal failure.
+        if (terminal && concl0 !== 'success' && cluster !== 'gcp') return;
 
-        if (!isTerminal || isConfiguring || waitingForCloudRunUrl) {
-          const pollInterval = setInterval(async () => {
-            try {
-              const resp = await fetch(`/deployments/${depId}/status`);
-              if (!resp.ok) return;
-              const data = await resp.json();
+        function showUrl(url) {
+          const card = document.getElementById('url-card');
+          if (!card) return;
+          card.style.borderLeft = '4px solid var(--success, #10b981)';
+          card.querySelector('.card-header .card-title').textContent = 'Application disponible';
+          document.getElementById('url-card-body').innerHTML =
+            '<a href="' + url + '" target="_blank" rel="noreferrer" class="btn btn-primary">Ouvrir l\'application ↗</a>' +
+            '<span style="font-family:monospace;font-size:13px;color:var(--text-muted);">' + url + '</span>';
+        }
 
-              if (data.phase === 'configuring') return; // still setting up
+        function showTimeout() {
+          const body = document.getElementById('url-card-body');
+          if (!body) return;
+          const spinner = document.getElementById('url-card-spinner');
+          if (spinner) spinner.remove();
+          document.getElementById('url-card-msg').textContent =
+            'URL non disponible après 3 min — vérifiez le statut Crossplane sur le cluster.';
+        }
 
-              // For GCP apps: once CI succeeds, keep polling until Cloud Run URL is available.
-              if (waitingForCloudRunUrl || (targetCluster === 'gcp' && data.phase === 'success' && data.cloudRunUrl)) {
+        // GCP URL-waiting timeout: 3 minutes (180 000 ms).
+        const URL_TIMEOUT_MS = 180000;
+        const urlWaitStart = Date.now();
+
+        const timer = setInterval(async () => {
+          try {
+            const resp = await fetch('/deployments/' + depId + '/status');
+            if (!resp.ok) return;
+            const data = await resp.json();
+
+            // Still configuring platform — keep waiting.
+            if (data.phase === 'configuring') return;
+
+            // CI running or queued — keep waiting.
+            if (data.phase === 'running' || data.phase === 'waiting') {
+              // If we were showing the configuring card, reload once to get the runs UI.
+              if (status0 === 'configuring') { clearInterval(timer); window.location.reload(); }
+              return;
+            }
+
+            // CI done — check for Cloud Run URL.
+            if (data.phase === 'success' || data.phase === 'failed') {
+              if (cluster === 'gcp') {
                 if (data.cloudRunUrl) {
-                  clearInterval(pollInterval);
-                  window.location.reload();
+                  clearInterval(timer);
+                  showUrl(data.cloudRunUrl);
                   return;
                 }
-                return; // keep polling
-              }
-
-              if (data.phase === 'success' || data.phase === 'failed') {
-                clearInterval(pollInterval);
-                window.location.reload();
+                // URL not yet available — keep polling up to the timeout.
+                if (Date.now() - urlWaitStart > URL_TIMEOUT_MS) {
+                  clearInterval(timer);
+                  showTimeout();
+                }
                 return;
               }
-
-              // If we were configuring and are now running/waiting, reload to show runs UI.
-              if (isConfiguring && (data.phase === 'running' || data.phase === 'waiting')) {
-                clearInterval(pollInterval);
-                window.location.reload();
-                return;
-              }
-            } catch (_) {}
-          }, 4000);
-        }
+              // Non-GCP: reload to show final state.
+              clearInterval(timer);
+              window.location.reload();
+            }
+          } catch (_) {}
+        }, 5000);
       })();
     </script>
 
