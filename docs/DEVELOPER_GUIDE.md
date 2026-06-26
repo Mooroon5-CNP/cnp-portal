@@ -215,7 +215,7 @@ docker run --rm -i hadolint/hadolint < Dockerfile
 
 ### ESLint
 
-A `.eslintrc.json` must exist at the repo root. **You must include `"jest": true`** in `env` — otherwise ESLint will flag `describe`, `it`, and `expect` as undefined globals and fail the CI lint step.
+A `.eslintrc.json` must exist at the repo root. Add `"jest": true` to `env` so ESLint knows about `describe`, `it`, and `expect`:
 
 ```json
 {
@@ -226,6 +226,15 @@ A `.eslintrc.json` must exist at the repo root. **You must include `"jest": true
     "no-undef": "error"
   }
 }
+```
+
+**Belt-and-suspenders:** also add `/* eslint-env jest */` as the first line of every `*.test.js` file. This makes the jest globals explicit in the file itself, and will never fail regardless of the root config:
+
+```javascript
+/* eslint-env jest */
+const os = require('os');
+process.env.DATA_DIR = os.tmpdir();
+// ...
 ```
 
 ### Tests
