@@ -145,24 +145,12 @@ By default, Cloud Run containers are **ephemeral** — anything written to the l
 
 If your app needs a persistent database (SQLite, uploaded files, etc.), enable **"DB persistante"** in the portal when creating the deployment. The platform will:
 
-1. Mount a GCS bucket at `/data` inside your container via Cloud Run's native GCS volume mount (FUSE)
-2. Set the env var `DATA_DIR=/data`
+1. Automatically provision a GCS bucket `cnp-{appName}-data` via Crossplane (wave 0)
+2. Set the IAM binding so Cloud Run can read/write to it (wave 0)
+3. Mount the bucket at `/data` inside your container via Cloud Run's native GCS volume mount (wave 1)
+4. Set the env var `DATA_DIR=/data`
 
-### What you must do **before** the first deployment
-
-**Create the GCS bucket manually:**
-
-```bash
-gcloud storage buckets create gs://cnp-{appName}-data \
-  --location=europe-west9 \
-  --project=cnp-terraform-500015
-
-gcloud storage buckets add-iam-policy-binding gs://cnp-{appName}-data \
-  --member="serviceAccount:cloud-run-sa@cnp-terraform-500015.iam.gserviceaccount.com" \
-  --role="roles/storage.objectAdmin"
-```
-
-Replace `{appName}` with your exact app name (e.g. `app4-pixelcalm` → bucket `cnp-app4-pixelcalm-data`).
+**You have nothing to do manually** — the bucket is created and configured as part of the onboarding flow, before the Cloud Run service is provisioned.
 
 ### Reading `DATA_DIR` in your app
 
@@ -306,7 +294,7 @@ Use this before creating a deployment in the portal:
 - [ ] `npm test` passes locally
 - [ ] Tests override `DATA_DIR` to `os.tmpdir()`
 - [ ] No secrets committed to the repository
-- [ ] If using persistent storage: GCS bucket `cnp-{appName}-data` created in `europe-west9` with `roles/storage.objectAdmin` for `cloud-run-sa@cnp-terraform-500015.iam.gserviceaccount.com`
+- [ ] If using persistent storage: check "DB persistante" in the portal — bucket and IAM are provisioned automatically by Crossplane
 
 ---
 
@@ -334,7 +322,7 @@ A secret was found in the git history. Even if you deleted it in a later commit,
 Your app is trying to open the DB before the GCS volume is mounted, or `DATA_DIR` is not set. Make sure:
 1. You read `process.env.DATA_DIR` (not a hardcoded path)
 2. You call `fs.mkdirSync(DATA_DIR, { recursive: true })` before opening the DB
-3. The GCS bucket exists and has the correct IAM permissions
+3. The onboarding completed successfully (check ArgoCD for the `{appName}-cloudrun` Application status)
 
 ### `update-cloudrun-claim` fails with push conflict
 The retry loop (`for i in 1 2 3; do git pull --rebase && git push ...`) handles most concurrent push conflicts. If it still fails after 3 retries, it means multiple CI runs were updating config-repo simultaneously. Re-run the failed workflow.

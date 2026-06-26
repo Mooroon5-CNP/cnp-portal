@@ -330,9 +330,39 @@ const CLOUDRUN_AUTODISCOVERY_APPSET = {
     },
 };
 
+function tplCrossplaneGcsBucket(appName) {
+    const bucketName = `cnp-${appName}-data`;
+    return `apiVersion: storage.gcp.upbound.io/v1beta1
+kind: Bucket
+metadata:
+  name: ${bucketName}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  forProvider:
+    location: ${GCP_REGION}
+    project: ${GCP_PROJECT}
+    forceDestroy: false
+  providerConfigRef:
+    name: default
+---
+apiVersion: storage.gcp.upbound.io/v1beta1
+kind: BucketIAMMember
+metadata:
+  name: ${bucketName}-cloudrun-sa
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  forProvider:
+    bucket: ${bucketName}
+    role: roles/storage.objectAdmin
+    member: serviceAccount:${CLOUD_RUN_SA}
+  providerConfigRef:
+    name: default
+`;
+}
+
 function tplCrossplaneV2Service(appName, persistentStorage = false) {
-    // GCS volume block — only included when persistentStorage is requested.
-    // Bucket must be pre-created: gs://cnp-${appName}-data with objectAdmin for CLOUD_RUN_SA.
     const volumeBlock = persistentStorage ? `
       volumes:
         - name: data
@@ -385,12 +415,13 @@ spec:
 `;
 }
 
-function tplCrossplaneKustomization() {
+function tplCrossplaneKustomization(persistentStorage = false) {
+    const bucketLine = persistentStorage ? '\n  - gcs-bucket.yaml' : '';
     return `apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - cloudrun-claim.yaml
-  - cloudrun-iam.yaml
+  - cloudrun-iam.yaml${bucketLine}
 `;
 }
 
@@ -747,7 +778,10 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
             const cpBase = `apps/${appName}/crossplane`;
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, persistentStorage), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(), configRepoToken);
+            if (persistentStorage) {
+                await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/gcs-bucket.yaml`, tplCrossplaneGcsBucket(appName), configRepoToken);
+            }
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(persistentStorage), configRepoToken);
 
             const argoApp = tplCrossplaneArgocdApplication(appName, configRepoUrl);
             const argoAppYaml = yaml.dump(argoApp, { lineWidth: -1, noRefs: true });
