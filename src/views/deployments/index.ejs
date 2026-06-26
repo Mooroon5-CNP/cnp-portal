@@ -176,6 +176,14 @@
                       <div class="form-hint">Plateforme de déploiement. AWS disponible en V2.</div>
                     </div>
 
+                    <div class="form-group">
+                      <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:500;">
+                        <input type="checkbox" name="persistentStorage" id="persistentStorage" style="width:18px;height:18px;accent-color:#6366f1;">
+                        DB persistante (SQLite sur GCS)
+                      </label>
+                      <div class="form-hint">Monte un bucket GCS sur <code>/data</code> — les données survivent aux redémarrages. Le bucket est créé automatiquement par la plateforme.</div>
+                    </div>
+
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
