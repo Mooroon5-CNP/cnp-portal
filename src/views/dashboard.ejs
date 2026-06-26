@@ -12,21 +12,12 @@
               <div class="page-header">
                 <div>
                   <div class="page-title">Dashboard</div>
-                  <div class="page-subtitle">Bienvenue, <%= user.gitlabUsername %> — vue d'ensemble de votre équipe
+                  <div class="page-subtitle">Bienvenue, <%= user.username %> — vue d'ensemble de votre équipe
                   </div>
                 </div>
               </div>
 
               <div class="stats-grid">
-                <div class="stat-card">
-                  <div class="stat-label">Pods actifs</div>
-                  <div class="stat-value">
-                    <%= stats.runningPods %>
-                  </div>
-                  <div class="stat-meta">
-                    <%= stats.totalPods %> pods au total
-                  </div>
-                </div>
                 <div class="stat-card">
                   <div class="stat-label">Alertes actives</div>
                   <div class="stat-value"
@@ -42,14 +33,6 @@
                   </div>
                   <div class="stat-meta">
                     <%= stats.totalApps %> apps gérées
-                  </div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Environnement</div>
-                  <div class="stat-value" style="font-size:20px;padding-top:6px;">
-                    <%= process.env.DD_ENV || 'dev' %>
-                  </div>
-                  <div class="stat-meta">v<%= process.env.DD_VERSION || '1.0.0' %>
                   </div>
                 </div>
               </div>
@@ -82,14 +65,17 @@
                               <%= app.name %>
                             </div>
                             <div style="font-size:12px;color:var(--text-muted);">
-                              <%= app.running %>/<%= app.pods %> pods running
+                              <% if (app.isGcp) { %>
+                                <%= app.url ? 'Cloud Run — actif' : (app.status === 'ready' ? 'Cloud Run — URL en attente' : 'Cloud Run — provisionnement') %>
+                              <% } else { %>
+                                <%= app.status %>
+                              <% } %>
                             </div>
                           </div>
                           <div style="display:flex;gap:6px;flex-shrink:0;">
                             <% if (app.url) { %>
                               <a href="<%= app.url %>" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm" style="font-size:11px;">↗</a>
                             <% } %>
-                            <a href="/k8s/pods" class="btn btn-ghost btn-sm" style="font-size:11px;">K8s</a>
                           </div>
                         </div>
                       <% }) %>

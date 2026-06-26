@@ -66,16 +66,18 @@ try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_error TEXT`); } cat
 try { db.exec(`ALTER TABLE deployments ADD COLUMN persistent_storage INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 try { db.exec(`ALTER TABLE deployments ADD COLUMN owner_team_id TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE deployments ADD COLUMN target_cluster TEXT NOT NULL DEFAULT 'gcp'`); } catch (_) {}
+try { db.exec(`ALTER TABLE deployments ADD COLUMN cloud_run_url TEXT`); } catch (_) {}
 
 const insertStmt = db.prepare(`
   INSERT INTO deployments
     (id, app_name, github_repo_url, app_port, config_repo_token, owner_user_id, owner_team_id, onboarding_status, persistent_storage, target_cluster, created_at, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
-const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, created_at, updated_at FROM deployments ORDER BY created_at DESC');
+const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, cloud_run_url, created_at, updated_at FROM deployments ORDER BY created_at DESC');
 const getStmt = db.prepare('SELECT * FROM deployments WHERE id = ?');
 const deleteStmt = db.prepare('DELETE FROM deployments WHERE id = ?');
 const updateStatusStmt = db.prepare('UPDATE deployments SET onboarding_status = ?, onboarding_error = ?, updated_at = ? WHERE id = ?');
+const updateCloudRunUrlStmt = db.prepare('UPDATE deployments SET cloud_run_url = ?, updated_at = ? WHERE id = ?');
 
 function _rowToObj(row) {
     if (!row) return null;
@@ -91,6 +93,7 @@ function _rowToObj(row) {
         onboardingError: row.onboarding_error || null,
         persistentStorage: !!row.persistent_storage,
         targetCluster: row.target_cluster || 'gcp',
+        cloudRunUrl: row.cloud_run_url || null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -112,6 +115,10 @@ module.exports = {
 
     updateOnboardingStatus: (id, status, error = null) => {
         updateStatusStmt.run(status, error || null, new Date().toISOString(), id);
+    },
+
+    updateCloudRunUrl: (id, url) => {
+        updateCloudRunUrlStmt.run(url, new Date().toISOString(), id);
     },
 
     // Returns raw rows (camelCase fields only needed for list enrichment).

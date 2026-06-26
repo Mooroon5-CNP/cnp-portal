@@ -61,19 +61,15 @@ router.get('/', requireAuth, async (req, res) => {
     // Build per-app summary for the "Mes Applications" panel.
     const baseDomain = config.cluster.baseDomain;
     const myAppsList = myDeployments.slice(0, 8).map(dep => {
-      const appPods = pods.filter(p =>
-        p.app === dep.app_name ||
-        (p.namespace || '').replace(/-dev$|-prod$/, '') === dep.app_name
-      );
-      const running = appPods.filter(p => p.status === 'Running').length;
+      const isGcp = (dep.target_cluster || 'gcp') === 'gcp';
+      const url = isGcp
+        ? (dep.cloud_run_url || null)
+        : (baseDomain && baseDomain !== 'cnp.example.com' ? `http://${dep.app_name}-dev.${baseDomain}` : null);
       return {
         name:   dep.app_name,
         status: dep.onboarding_status,
-        pods:   appPods.length,
-        running,
-        url:    baseDomain && baseDomain !== 'cnp.example.com'
-          ? `http://${dep.app_name}-dev.${baseDomain}`
-          : null,
+        isGcp,
+        url,
       };
     });
 
