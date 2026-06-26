@@ -23,6 +23,8 @@ Everything your app needs to pass CI, deploy on Cloud Run, and stay healthy on t
 
 Your app must live in a **public GitHub repository** under the `Mooroon5-CNP` org (or any org the GitHub App CNP is installed on).
 
+> **The repository must be public.** Organization-level Actions variables (`WIF_PROVIDER`, `GCP_SA_EMAIL`, `REGISTRY_URL`) are only accessible to public repositories. A private repo will silently receive empty values for these variables, causing the GCP auth step to fail with: *"must specify exactly one of workload_identity_provider or credentials_json"*.
+
 Minimum file tree:
 
 ```
