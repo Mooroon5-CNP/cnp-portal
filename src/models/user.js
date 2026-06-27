@@ -46,7 +46,8 @@ function findPending() {
   return db.prepare('SELECT * FROM users WHERE approved = 0 ORDER BY created_at ASC').all().map(rowToUser);
 }
 
-function create({ gitlabId = null, githubId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 0, approved = 0 }) {
+function create({ gitlabId = null, githubId = null, username, gitlabUsername, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 1, approved = 0 }) {
+  username = username || gitlabUsername;
   const id = uuidv4();
   const now = new Date().toISOString();
   db.prepare(`

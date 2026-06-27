@@ -1,8 +1,8 @@
 'use strict';
 
 const PERMISSIONS = {
-  'users:list':              ['manager', 'devops'],
-  'users:approve':           ['manager', 'devops'],
+  'users:list':              ['manager'],
+  'users:approve':           ['manager'],
   'users:create':            ['manager'],
   'users:modify-role':       ['manager'],
   'users:invite':            ['manager'],
@@ -63,6 +63,7 @@ const PERMISSIONS = {
 
 function can(user, permission) {
   if (!user || !user.role) return false;
+  if (user.role === 'manager') return true;
   const allowed = PERMISSIONS[permission];
   return allowed ? allowed.includes(user.role) : false;
 }
