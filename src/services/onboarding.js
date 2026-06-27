@@ -364,7 +364,7 @@ spec:
 `;
 }
 
-function tplCrossplaneV2Service(appName, persistentStorage = false) {
+function tplCrossplaneV2Service(appName, appPort, persistentStorage = false) {
     const volumeBlock = persistentStorage ? `
       volumes:
         - name: data
@@ -392,7 +392,9 @@ spec:
     template:
       serviceAccount: ${CLOUD_RUN_SA}${volumeBlock}
       containers:
-        - image: ${IMAGE_REGISTRY}/${appName}:placeholder${dataDir}${volumeMount}
+        - image: ${IMAGE_REGISTRY}/${appName}:placeholder
+          ports:
+            containerPort: ${appPort}${dataDir}${volumeMount}
   providerConfigRef:
     name: default
 `;
@@ -778,7 +780,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 console.warn(`[onboarding] Could not apply cloudrun-autodiscovery AppSet: ${e.message}`);
             }
             const cpBase = `apps/${appName}/crossplane`;
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, persistentStorage), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, appPort, persistentStorage), configRepoToken);
             await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
             if (persistentStorage) {
                 await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/gcs-bucket.yaml`, tplCrossplaneGcsBucket(appName), configRepoToken);
