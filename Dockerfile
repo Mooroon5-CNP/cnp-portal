@@ -12,15 +12,14 @@ FROM node:20-alpine AS final
 WORKDIR /app
 
 # hadolint ignore=DL3018
-RUN apk add --no-cache tini \
- && addgroup -g 1000 cnp && adduser -u 1000 -S -G cnp cnp
+RUN apk add --no-cache tini
 
-COPY --from=deps --chown=cnp:cnp /app/node_modules ./node_modules
-COPY --chown=cnp:cnp src/ ./src/
-COPY --chown=cnp:cnp public/ ./public/
-COPY --chown=cnp:cnp documentation/ ./documentation/
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node src/ ./src/
+COPY --chown=node:node public/ ./public/
+COPY --chown=node:node documentation/ ./documentation/
 
-USER 1000
+USER node
 
 EXPOSE 3000
 
