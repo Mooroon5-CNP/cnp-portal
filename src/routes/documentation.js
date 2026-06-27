@@ -10,6 +10,16 @@ const { requirePermission, can } = require('../middleware/rbac');
 
 const DOCS_DIR = path.resolve(process.cwd(), 'documentation');
 
+const DEVOPS_PREFIX = 'devops/';
+
+function isDevopsFile(relPath) {
+  return relPath.startsWith(DEVOPS_PREFIX);
+}
+
+function canSeeDevopsFiles(user) {
+  return user && (user.role === 'manager' || user.role === 'devops');
+}
+
 function listDocFiles(dir, base = '') {
   const entries = [];
   try {
@@ -25,17 +35,22 @@ function listDocFiles(dir, base = '') {
   return entries;
 }
 
-router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
-  const files = listDocFiles(DOCS_DIR);
-  res.render('documentation/index', {
-    title: 'Documentation — CNP Portal',
-    currentPage: 'docs',
-    files,
-    content: null,
-    currentFile: null,
-    user: req.user,
-    can: (p) => can(req.user, p),
+function sortedFiles(allFiles) {
+  // DEVELOPER_GUIDE.md always first, then alphabetical, devops/ section last
+  return [...allFiles].sort((a, b) => {
+    if (a === 'DEVELOPER_GUIDE.md') return -1;
+    if (b === 'DEVELOPER_GUIDE.md') return 1;
+    const aDevops = isDevopsFile(a);
+    const bDevops = isDevopsFile(b);
+    if (aDevops && !bDevops) return 1;
+    if (!aDevops && bDevops) return -1;
+    return a.localeCompare(b);
   });
+}
+
+router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
+  // Auto-open the developer guide as the landing page
+  return res.redirect('/docs/DEVELOPER_GUIDE.md');
 });
 
 router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
@@ -47,9 +62,17 @@ router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
     return res.status(400).render('error', { title: 'Fichier invalide', message: 'Fichier non autorisé.', code: 400, user: req.user });
   }
 
-  const files = listDocFiles(DOCS_DIR);
-  let content = null;
+  // Gate devops-only files
+  if (isDevopsFile(requestedPath) && !canSeeDevopsFiles(req.user)) {
+    return res.status(403).render('error', { title: 'Accès refusé', message: 'Ce document est réservé aux DevOps.', code: 403, user: req.user });
+  }
 
+  const allFiles = listDocFiles(DOCS_DIR);
+  const files = sortedFiles(
+    canSeeDevopsFiles(req.user) ? allFiles : allFiles.filter(f => !isDevopsFile(f))
+  );
+
+  let content = null;
   try {
     const raw = fs.readFileSync(resolved, 'utf8');
     content = marked(raw);
@@ -63,6 +86,7 @@ router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
     files,
     content,
     currentFile: requestedPath,
+    isDevopsFile,
     user: req.user,
     can: (p) => can(req.user, p),
   });
