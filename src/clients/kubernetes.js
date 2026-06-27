@@ -349,7 +349,7 @@ async function getIngressControllerIp() {
         _ingressIpCache = ip;
         return ip;
       }
-    } catch (_) {}
+    } catch (_) { /* namespace not found or unavailable */ }
   }
 
   // Last resort: scan all services for one with a LoadBalancer IP and an ingress-related name.
@@ -366,7 +366,7 @@ async function getIngressControllerIp() {
         return ip;
       }
     }
-  } catch (_) {}
+  } catch (_) { /* no services found */ }
 
   return null;
 }

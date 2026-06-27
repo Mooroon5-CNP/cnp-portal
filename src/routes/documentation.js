@@ -21,7 +21,7 @@ function listDocFiles(dir, base = '') {
         entries.push(relPath);
       }
     }
-  } catch (_) {}
+  } catch (_) { /* directory unreadable */ }
   return entries;
 }
 

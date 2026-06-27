@@ -10,5 +10,6 @@ module.exports = {
   },
   rules: {
     'no-console': 'off',    // we use console.log for structured JSON logging
+    'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
   },
 };

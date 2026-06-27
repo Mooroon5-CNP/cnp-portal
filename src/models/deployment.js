@@ -58,15 +58,15 @@ db.exec(`
     PRIMARY KEY (deployment_id, team_id)
   )
 `);
-try { db.exec(`ALTER TABLE deployment_team_access ADD COLUMN permission_level TEXT NOT NULL DEFAULT 'read'`); } catch (_) {}
+try { db.exec(`ALTER TABLE deployment_team_access ADD COLUMN permission_level TEXT NOT NULL DEFAULT 'read'`); } catch (_) { /* column already exists */ }
 
 // Migrate existing tables that predate the onboarding columns.
-try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'configuring'`); } catch (_) {}
-try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_error TEXT`); } catch (_) {}
-try { db.exec(`ALTER TABLE deployments ADD COLUMN persistent_storage INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-try { db.exec(`ALTER TABLE deployments ADD COLUMN owner_team_id TEXT`); } catch (_) {}
-try { db.exec(`ALTER TABLE deployments ADD COLUMN target_cluster TEXT NOT NULL DEFAULT 'gcp'`); } catch (_) {}
-try { db.exec(`ALTER TABLE deployments ADD COLUMN cloud_run_url TEXT`); } catch (_) {}
+try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'configuring'`); } catch (_) { /* column already exists */ }
+try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_error TEXT`); } catch (_) { /* column already exists */ }
+try { db.exec(`ALTER TABLE deployments ADD COLUMN persistent_storage INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column already exists */ }
+try { db.exec(`ALTER TABLE deployments ADD COLUMN owner_team_id TEXT`); } catch (_) { /* column already exists */ }
+try { db.exec(`ALTER TABLE deployments ADD COLUMN target_cluster TEXT NOT NULL DEFAULT 'gcp'`); } catch (_) { /* column already exists */ }
+try { db.exec(`ALTER TABLE deployments ADD COLUMN cloud_run_url TEXT`); } catch (_) { /* column already exists */ }
 
 const insertStmt = db.prepare(`
   INSERT INTO deployments
@@ -108,7 +108,7 @@ module.exports = {
         insertStmt.run(id, appName, githubRepoUrl, appPort || null, enc, ownerUserId, ownerTeamId || null, 'configuring', persistentStorage ? 1 : 0, cluster, now, now);
         // Grant access to owner team automatically.
         if (ownerTeamId) {
-            try { db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id) VALUES (?, ?)').run(id, ownerTeamId); } catch (_) {}
+            try { db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id) VALUES (?, ?)').run(id, ownerTeamId); } catch (_) { /* duplicate — already has access */ }
         }
         return module.exports.get(id);
     },

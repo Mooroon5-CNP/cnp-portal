@@ -33,7 +33,7 @@ async function syncMrsFromGitHub(mrs) {
             } else if (status.state === 'closed' && !status.merged) {
                 manifestMrModel.reject(mr.id, 'github', 'PR fermée directement sur GitHub');
             }
-        } catch (_) {}
+        } catch (_) { /* PR status unavailable */ }
     }));
 }
 

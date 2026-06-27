@@ -50,7 +50,7 @@ app.use((req, res, next) => {
       } else if (req.user.role === 'devops') {
         res.locals.rejectedMrCount = manifestMrModel.countRejectedForUser(req.user.id);
       }
-    } catch (_) {}
+    } catch (_) { /* non-critical — badge counts default to 0 */ }
   }
   next();
 });
@@ -78,7 +78,7 @@ app.use((req, res) => {
   res.status(404).render('error', { title: 'Page introuvable', message: 'Cette page n\'existe pas.', code: 404, user: req.user || null });
 });
 
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   logger.error({ message: err.message, stack: err.stack, path: req.path });
   res.status(err.status || 500).render('error', {
     title: 'Erreur',

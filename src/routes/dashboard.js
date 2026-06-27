@@ -38,14 +38,14 @@ router.get('/', requireAuth, async (req, res) => {
     const myAppNames = new Set(myDeployments.map(d => d.app_name));
 
     // Filter pods and ArgoCD apps to the user's scope.
-    function podInScope(pod) {
+    const podInScope = (pod) => {
       if (isManager) return true;
       return myAppNames.has(pod.app) || myAppNames.has((pod.namespace || '').replace(/-dev$|-prod$/, ''));
-    }
-    function argoAppInScope(app) {
+    };
+    const argoAppInScope = (app) => {
       if (isManager) return true;
       return [...myAppNames].some(n => (app.name || '').startsWith(n));
-    }
+    };
 
     const myPods = pods.filter(podInScope);
     const myApps = apps.filter(argoAppInScope);

@@ -49,7 +49,7 @@ function addMember(teamId, userId) {
   if (!getTeam(teamId)) throw new Error('Équipe introuvable');
   try {
     db.prepare('INSERT INTO team_members (team_id, user_id) VALUES (?, ?)').run(teamId, userId);
-  } catch (_) {} // duplicate — already a member
+  } catch (_) { /* duplicate — already a member */ }
   return getTeam(teamId);
 }
 

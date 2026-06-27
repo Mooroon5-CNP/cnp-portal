@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
-const { requirePermission, requireRole, can } = require('../middleware/rbac');
+const { requirePermission, can } = require('../middleware/rbac');
 const k8sService = require('../services/k8s');
 const deploymentModel = require('../models/deployment');
 const teamService = require('../services/teams');
@@ -284,7 +284,7 @@ router.get('/manifest-prs', requireAuth, requirePermission('k8s:manifest:edit'),
         } else if (status.state === 'closed' && !status.merged) {
           manifestMrModel.reject(mr.id, 'github', 'PR fermée directement sur GitHub');
         }
-      } catch (_) {}
+      } catch (_) { /* PR status unavailable */ }
     }));
   }
 

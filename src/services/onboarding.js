@@ -93,7 +93,7 @@ spec:
 `;
 }
 
-function tplOverlayPvc(appName, env) {
+function tplOverlayPvc(appName, _env) {
     return `apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -630,7 +630,7 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
     if (sha) {
         const raw = await githubService.getFileContent(owner, repo, path, token);
         if (raw) {
-            try { doc = yaml.load(raw) || doc; } catch (_) { }
+            try { doc = yaml.load(raw) || doc; } catch (_) { /* invalid YAML — keep default */ }
         }
     }
     if (!Array.isArray(doc.apps)) doc.apps = [];
