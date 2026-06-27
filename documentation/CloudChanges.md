@@ -112,7 +112,163 @@ Pour `ARGOCD_TOKEN` → voir [argocd-gcp-setup.md](./argocd-gcp-setup.md) étape
 
 ---
 
-## 3. Fichiers de code à mettre à jour
+## 3. RBAC Kubernetes du portail (à refaire sur chaque nouveau cluster)
+
+Le portail a besoin de deux ensembles de permissions Kubernetes pour fonctionner correctement.
+
+### Pourquoi c'est à refaire à chaque cluster
+
+Ces `Role`/`ClusterRole` et leurs `Binding` sont des objets Kubernetes stockés **dans le cluster**. Un nouveau cluster repart de zéro — aucune permission n'est héritée.
+
+### Appliquer les permissions
+
+```bash
+kubectl apply -f - <<EOF
+# Permet au portail de créer/supprimer les ApplicationSets ArgoCD lors de l'onboarding/offboarding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cnp-portal-applicationsets
+  namespace: argocd
+rules:
+- apiGroups: ["argoproj.io"]
+  resources: ["applicationsets"]
+  verbs: ["get","list","create","update","patch","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cnp-portal-applicationsets
+  namespace: argocd
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: Role
+  name: cnp-portal-applicationsets
+  apiGroup: rbac.authorization.k8s.io
+---
+# Permet au portail de supprimer les namespaces applicatifs lors de la suppression d'une app.
+# Sans cette permission, les namespaces {app}-dev et {app}-prod restent après suppression.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-portal-namespaces
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get","list","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-portal-namespaces
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: ClusterRole
+  name: cnp-portal-namespaces
+  apiGroup: rbac.authorization.k8s.io
+---
+# Permet au portail de lire l'URL Cloud Run depuis le status du V2Service Crossplane.
+# Sans cette permission, getV2ServiceUrl() échoue silencieusement (403 catch → null)
+# et l'URL ne s'affiche jamais dans le portail, même après un pipeline réussi.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-portal-crossplane-read
+rules:
+- apiGroups: ["cloudrun.gcp.upbound.io"]
+  resources: ["v2services"]
+  verbs: ["get","list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-portal-crossplane-read
+subjects:
+- kind: ServiceAccount
+  name: cnp-portal
+  namespace: cnp-portal
+roleRef:
+  kind: ClusterRole
+  name: cnp-portal-crossplane-read
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+> **Note ArgoCD Applications** : la suppression des `Application` ArgoCD (lors de l'offboarding) passe par l'API REST ArgoCD avec `ARGOCD_TOKEN` — pas par le K8s API. Pas de RBAC K8s supplémentaire nécessaire pour ça.
+
+### Automatiser avec Terraform
+
+Si le cluster GKE est provisionné via Terraform, ces RBAC peuvent être appliqués automatiquement avec le provider `kubernetes` :
+
+```hcl
+resource "kubernetes_role" "cnp_portal_applicationsets" {
+  metadata {
+    name      = "cnp-portal-applicationsets"
+    namespace = "argocd"
+  }
+  rule {
+    api_groups = ["argoproj.io"]
+    resources  = ["applicationsets"]
+    verbs      = ["get", "list", "create", "update", "patch", "delete"]
+  }
+}
+
+resource "kubernetes_role_binding" "cnp_portal_applicationsets" {
+  metadata {
+    name      = "cnp-portal-applicationsets"
+    namespace = "argocd"
+  }
+  subject {
+    kind      = "ServiceAccount"
+    name      = "cnp-portal"
+    namespace = "cnp-portal"
+  }
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role.cnp_portal_applicationsets.metadata[0].name
+  }
+}
+
+resource "kubernetes_cluster_role" "cnp_portal_namespaces" {
+  metadata {
+    name = "cnp-portal-namespaces"
+  }
+  rule {
+    api_groups = [""]
+    resources  = ["namespaces"]
+    verbs      = ["get", "list", "delete"]
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "cnp_portal_namespaces" {
+  metadata {
+    name = "cnp-portal-namespaces"
+  }
+  subject {
+    kind      = "ServiceAccount"
+    name      = "cnp-portal"
+    namespace = "cnp-portal"
+  }
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = kubernetes_cluster_role.cnp_portal_namespaces.metadata[0].name
+  }
+}
+```
+
+> **Prérequis Terraform** : le namespace `argocd` doit exister avant d'appliquer le `Role` (ArgoCD doit être installé d'abord). Utiliser `depends_on` sur la ressource ArgoCD si nécessaire. Le namespace `cnp-portal` et le `ServiceAccount` `cnp-portal` doivent aussi exister avant les `Binding`.
+
+---
+
+## 4. Fichiers de code à mettre à jour
 
 ### `ci-templates/.github/workflows/pipeline.yml` et `build-push-artifact-registry.yml`
 
@@ -200,6 +356,7 @@ Sur `cnp-terraform-500015`, `gke-nodes-sa` a déjà `artifactregistry.reader` �
     □ kubectl apply -f config-repo/argocd/projects/default-project.yaml
     □ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
     □ kubectl apply -f config-repo/infra/crossplane/application.yaml
+    □ RBAC portail appliqué (voir §3) — Role applicationsets + ClusterRole namespaces + ClusterRole crossplane-read
 
 □ ArgoCD configuré (voir argocd-gcp-setup.md) :
     □ Mode insecure activé

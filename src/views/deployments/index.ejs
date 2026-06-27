@@ -87,12 +87,12 @@
                               <% if (can('deployments:delete')) { %>
                                 <% if (dep.pendingDeletion) { %>
                                   <span class="badge badge-warning" style="margin-right:6px;">Suppression demandée</span>
-                                  <button class="btn btn-danger btn-sm" onclick="openApproveModal('<%= dep.id %>', '<%= dep.appName %>')">Approuver</button>
+                                  <button class="btn btn-danger btn-sm" onclick="openApproveModal('<%= dep.id %>', '<%= dep.appName %>', <%= dep.persistentStorage ? 'true' : 'false' %>)">Approuver</button>
                                   <form action="/deployments/<%= dep.id %>/reject-delete" method="POST" class="inline-form">
                                     <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
                                   </form>
                                 <% } else { %>
-                                  <button class="btn btn-danger btn-sm" onclick="openDeleteModal('<%= dep.id %>', '<%= dep.appName %>')">Supprimer</button>
+                                  <button class="btn btn-danger btn-sm" onclick="openDeleteModal('<%= dep.id %>', '<%= dep.appName %>', <%= dep.persistentStorage ? 'true' : 'false' %>)">Supprimer</button>
                                 <% } %>
                               <% } else if (can('deployments:delete:request')) { %>
                                 <% if (dep.pendingDeletion) { %>
@@ -194,15 +194,27 @@
 
               <!-- Delete confirmation modal (manager) -->
               <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
-                <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                <div style="background:var(--surface);width:520px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
                   <h3 style="margin:0 0 8px;">Supprimer l'application</h3>
-                  <p id="deleteModalText" style="color:var(--text-muted);margin-bottom:20px;"></p>
+                  <p id="deleteModalText" style="color:var(--text-muted);margin-bottom:16px;"></p>
                   <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
                     Cette action est irréversible. Les manifests Kubernetes, le pipeline CI/CD et les secrets GitHub seront supprimés.
                   </div>
+                  <div id="deleteBucketWarning" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--text-primary);">
+                    <strong style="color:#ca8a04;">⚠ Bucket GCS avec données potentielles</strong><br>
+                    Le bucket <code id="deleteBucketName" style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;"></code> a été créé avec <code style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;">forceDestroy: false</code>.<br>
+                    S'il contient des données, GCP refusera la suppression et Crossplane remontera une erreur — le bucket restera dans GCP.<br>
+                    <strong>Videz le bucket manuellement avant de continuer.</strong>
+                  </div>
                   <form id="deleteForm" method="POST">
+                    <div id="deleteBucketAck" style="display:none;margin-bottom:14px;">
+                      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
+                        <input type="checkbox" id="deleteBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
+                        J'ai compris — le bucket est vide ou je suis prêt à le gérer manuellement.
+                      </label>
+                    </div>
                     <div style="display:flex;gap:10px;">
-                      <button type="submit" class="btn btn-danger">Confirmer la suppression</button>
+                      <button type="submit" id="deleteConfirmBtn" class="btn btn-danger">Confirmer la suppression</button>
                       <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Annuler</button>
                     </div>
                   </form>
@@ -211,15 +223,27 @@
 
               <!-- Approve deletion request modal (manager) -->
               <div id="approveModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
-                <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                <div style="background:var(--surface);width:520px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
                   <h3 style="margin:0 0 8px;">Approuver la demande de suppression</h3>
-                  <p id="approveModalText" style="color:var(--text-muted);margin-bottom:20px;"></p>
+                  <p id="approveModalText" style="color:var(--text-muted);margin-bottom:16px;"></p>
                   <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
                     Cela supprimera définitivement l'application et toutes ses ressources.
                   </div>
+                  <div id="approveBucketWarning" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--text-primary);">
+                    <strong style="color:#ca8a04;">⚠ Bucket GCS avec données potentielles</strong><br>
+                    Le bucket <code id="approveBucketName" style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;"></code> a été créé avec <code style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;">forceDestroy: false</code>.<br>
+                    S'il contient des données, GCP refusera la suppression et Crossplane remontera une erreur — le bucket restera dans GCP.<br>
+                    <strong>Videz le bucket manuellement avant de continuer.</strong>
+                  </div>
                   <form id="approveForm" method="POST">
+                    <div id="approveBucketAck" style="display:none;margin-bottom:14px;">
+                      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
+                        <input type="checkbox" id="approveBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
+                        J'ai compris — le bucket est vide ou je suis prêt à le gérer manuellement.
+                      </label>
+                    </div>
                     <div style="display:flex;gap:10px;">
-                      <button type="submit" class="btn btn-danger">Confirmer et supprimer</button>
+                      <button type="submit" id="approveConfirmBtn" class="btn btn-danger">Confirmer et supprimer</button>
                       <button type="button" class="btn btn-secondary" onclick="closeApproveModal()">Annuler</button>
                     </div>
                   </form>
@@ -273,17 +297,49 @@
                 });
 
                 // Delete modal (manager)
-                function openDeleteModal(id, name) {
+                function openDeleteModal(id, name, hasBucket) {
                   document.getElementById('deleteModalText').textContent = `Supprimer "${name}" et toutes ses ressources (config-repo, pipeline, secrets) ?`;
                   document.getElementById('deleteForm').action = `/deployments/${id}/delete`;
+                  const warn = document.getElementById('deleteBucketWarning');
+                  const ack  = document.getElementById('deleteBucketAck');
+                  const btn  = document.getElementById('deleteConfirmBtn');
+                  const chk  = document.getElementById('deleteBucketAckCheck');
+                  if (hasBucket) {
+                    document.getElementById('deleteBucketName').textContent = `cnp-${name}-data`;
+                    warn.style.display = 'block';
+                    ack.style.display  = 'block';
+                    chk.checked = false;
+                    btn.disabled = true;
+                    chk.onchange = () => { btn.disabled = !chk.checked; };
+                  } else {
+                    warn.style.display = 'none';
+                    ack.style.display  = 'none';
+                    btn.disabled = false;
+                  }
                   document.getElementById('deleteModal').style.display = 'flex';
                 }
                 function closeDeleteModal() { document.getElementById('deleteModal').style.display = 'none'; }
 
                 // Approve modal (manager)
-                function openApproveModal(id, name) {
+                function openApproveModal(id, name, hasBucket) {
                   document.getElementById('approveModalText').textContent = `Approuver la demande de suppression de "${name}" ?`;
                   document.getElementById('approveForm').action = `/deployments/${id}/approve-delete`;
+                  const warn = document.getElementById('approveBucketWarning');
+                  const ack  = document.getElementById('approveBucketAck');
+                  const btn  = document.getElementById('approveConfirmBtn');
+                  const chk  = document.getElementById('approveBucketAckCheck');
+                  if (hasBucket) {
+                    document.getElementById('approveBucketName').textContent = `cnp-${name}-data`;
+                    warn.style.display = 'block';
+                    ack.style.display  = 'block';
+                    chk.checked = false;
+                    btn.disabled = true;
+                    chk.onchange = () => { btn.disabled = !chk.checked; };
+                  } else {
+                    warn.style.display = 'none';
+                    ack.style.display  = 'none';
+                    btn.disabled = false;
+                  }
                   document.getElementById('approveModal').style.display = 'flex';
                 }
                 function closeApproveModal() { document.getElementById('approveModal').style.display = 'none'; }

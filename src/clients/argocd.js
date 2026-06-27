@@ -88,4 +88,30 @@ async function checkConnectivity() {
   }
 }
 
-module.exports = { listApplications, getApplicationStatus, syncApplication, checkConnectivity };
+// Delete an ArgoCD Application via the ArgoCD REST API.
+// cascade=true tells ArgoCD to prune all managed K8s resources first
+// (including Crossplane CRs, which triggers GCP resource deletion).
+async function deleteApplication(name, { cascade = true } = {}) {
+  const client = makeClient();
+  try {
+    await client.delete(`/applications/${encodeURIComponent(name)}`, {
+      params: { cascade, propagationPolicy: 'foreground' },
+    });
+  } catch (err) {
+    if (err.response && err.response.status === 404) return;
+    handleError(err, `deleteApplication(${name})`);
+  }
+}
+
+// Delete an ArgoCD ApplicationSet via the ArgoCD REST API.
+async function deleteApplicationSet(name) {
+  const client = makeClient();
+  try {
+    await client.delete(`/applicationsets/${encodeURIComponent(name)}`);
+  } catch (err) {
+    if (err.response && err.response.status === 404) return;
+    handleError(err, `deleteApplicationSet(${name})`);
+  }
+}
+
+module.exports = { listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };

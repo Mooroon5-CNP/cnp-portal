@@ -26,6 +26,8 @@ const getByIdStmt       = db.prepare(`SELECT * FROM argocd_access_requests WHERE
 const listPendingStmt   = db.prepare(`SELECT * FROM argocd_access_requests WHERE status = 'pending' ORDER BY created_at ASC`);
 const listForUserStmt   = db.prepare(`SELECT * FROM argocd_access_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`);
 const hasPendingStmt    = db.prepare(`SELECT id FROM argocd_access_requests WHERE user_id = ? AND status = 'pending'`);
+const hasApprovedStmt   = db.prepare(`SELECT id FROM argocd_access_requests WHERE user_id = ? AND status = 'approved'`);
+const getApprovedStmt   = db.prepare(`SELECT * FROM argocd_access_requests WHERE user_id = ? AND status = 'approved' ORDER BY updated_at DESC LIMIT 1`);
 const approveStmt       = db.prepare(`
   UPDATE argocd_access_requests
   SET status = 'approved', argocd_username = ?, argocd_password = ?, reviewed_by = ?, updated_at = ?
@@ -63,6 +65,14 @@ module.exports = {
 
   hasPending(userId) {
     return !!hasPendingStmt.get(userId);
+  },
+
+  hasApproved(userId) {
+    return !!hasApprovedStmt.get(userId);
+  },
+
+  getApprovedForUser(userId) {
+    return toObj(getApprovedStmt.get(userId));
   },
 
   listPending() {

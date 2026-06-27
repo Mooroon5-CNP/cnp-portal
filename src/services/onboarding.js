@@ -344,6 +344,7 @@ spec:
     location: ${GCP_REGION}
     project: ${GCP_PROJECT}
     forceDestroy: false
+    uniformBucketLevelAccess: true
   providerConfigRef:
     name: default
 ---
@@ -352,7 +353,7 @@ kind: BucketIAMMember
 metadata:
   name: ${bucketName}-cloudrun-sa
   annotations:
-    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   forProvider:
     bucket: ${bucketName}
@@ -1025,4 +1026,27 @@ async function healIngressHostname(appName) {
     }
 }
 
-module.exports = { onboardApp, offboardApp, healIngressHostname };
+/**
+ * Rewrite gcs-bucket.yaml for an already-onboarded app if the current file
+ * is missing `uniformBucketLevelAccess: true` (required by GCP org policy).
+ * Also corrects the BucketIAMMember sync-wave to "1" so it runs after the bucket exists.
+ * Called automatically from the deployment detail page — idempotent, no-op if already correct.
+ */
+async function healGcsBucket(appName) {
+    const configRepoToken = config.github.configRepoToken;
+    if (!configRepoToken) return;
+
+    const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
+    const path = `apps/${appName}/crossplane/gcs-bucket.yaml`;
+    try {
+        const current = await githubService.getFileContent(crOwner, crRepo, path, configRepoToken).catch(() => null);
+        if (!current) return; // file doesn't exist — app has no persistent storage, nothing to fix
+        if (current.includes('uniformBucketLevelAccess: true')) return; // already correct
+        await writeConfigRepoFile(crOwner, crRepo, path, tplCrossplaneGcsBucket(appName), configRepoToken);
+        console.info(`[healGcsBucket] Fixed gcs-bucket.yaml for ${appName}`);
+    } catch (e) {
+        console.warn(`[healGcsBucket] Could not update ${path}: ${e.message}`);
+    }
+}
+
+module.exports = { onboardApp, offboardApp, healIngressHostname, healGcsBucket };
