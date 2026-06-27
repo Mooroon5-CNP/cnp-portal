@@ -20,6 +20,10 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Trust the first proxy (Cloud Run / load balancer) so req.secure reflects
+// the original HTTPS connection, which is required for secure session cookies.
+app.set('trust proxy', 1);
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
   resave: false,
