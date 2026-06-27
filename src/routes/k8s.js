@@ -154,14 +154,16 @@ router.get('/apps/:appName/edit', requireAuth, requirePermission('k8s:manifest:e
   }
 
   const { owner, repo, token } = configRepo();
-  const base    = `apps/${appName}/base`;
-  const devDir  = `apps/${appName}/overlays/dev`;
-  const prodDir = `apps/${appName}/overlays/prod`;
+  const base         = `apps/${appName}/base`;
+  const devDir       = `apps/${appName}/overlays/dev`;
+  const prodDir      = `apps/${appName}/overlays/prod`;
+  const crossplaneDir = `apps/${appName}/crossplane`;
 
-  const [baseFiles, devFiles, prodFiles] = await Promise.all([
-    githubService.listDirectory(owner, repo, base,    token),
-    githubService.listDirectory(owner, repo, devDir,  token),
-    githubService.listDirectory(owner, repo, prodDir, token),
+  const [baseFiles, devFiles, prodFiles, crossplaneFiles] = await Promise.all([
+    githubService.listDirectory(owner, repo, base,         token),
+    githubService.listDirectory(owner, repo, devDir,       token),
+    githubService.listDirectory(owner, repo, prodDir,      token),
+    githubService.listDirectory(owner, repo, crossplaneDir, token).catch(() => []),
   ]);
 
   const yamlOnly = f => f.type === 'file' && /\.ya?ml$/.test(f.name);
@@ -169,6 +171,7 @@ router.get('/apps/:appName/edit', requireAuth, requirePermission('k8s:manifest:e
     { label: 'base/',          files: baseFiles.filter(yamlOnly) },
     { label: 'overlays/dev/',  files: devFiles.filter(yamlOnly) },
     { label: 'overlays/prod/', files: prodFiles.filter(yamlOnly) },
+    { label: 'crossplane/',    files: crossplaneFiles.filter(yamlOnly) },
   ];
 
   res.render('k8s/editor', {
