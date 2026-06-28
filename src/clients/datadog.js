@@ -66,6 +66,22 @@ async function getGoldenSignals(serviceName) {
   const toPct  = v => v !== null ? Math.round(v * 10) / 10 : '—';
   const toRate = v => v !== null ? Math.round(v * 10) / 10 : '—';
 
+  // Cloud Run GCP metrics — isolated block: if GCP integration is not active in Datadog,
+  // the golden signals above must still be returned normally.
+  let cloudRun = { requests: '—', cpu: '—', memory: '—' };
+  try {
+    const [crReqRaw, crCpuRaw, crMemRaw] = await Promise.all([
+      query(`sum:gcp.run.request_count{service_name:${serviceName}}.as_count()`),
+      query(`avg:gcp.run.container.cpu.utilizations{service_name:${serviceName}}`),
+      query(`avg:gcp.run.container.memory.utilizations{service_name:${serviceName}}`),
+    ]);
+    cloudRun = {
+      requests: crReqRaw !== null ? Math.round(crReqRaw) : '—',
+      cpu:      toPct(crCpuRaw !== null ? crCpuRaw * 100 : null),
+      memory:   toPct(crMemRaw !== null ? crMemRaw * 100 : null),
+    };
+  } catch (_) {}
+
   return {
     latency: {
       p50: nsToMs(p50ns),
@@ -86,6 +102,7 @@ async function getGoldenSignals(serviceName) {
       rps: toRate(rpsRaw),
       unit: 'req/s',
     },
+    cloudRun,
   };
 }
 
@@ -125,6 +142,16 @@ async function silenceMonitor(monitorId) {
   }
 }
 
+async function unsilenceMonitor(monitorId) {
+  const client = makeClient();
+  try {
+    const { data } = await client.post(`/api/v1/monitor/${monitorId}/unmute`, {});
+    return data;
+  } catch (err) {
+    handleError(err, `unsilenceMonitor(${monitorId})`);
+  }
+}
+
 async function createMonitor({ name, query, tags = [] }) {
   const client = makeClient();
   try {
@@ -150,4 +177,4 @@ async function checkConnectivity() {
   }
 }
 
-module.exports = { getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };
+module.exports = { getGoldenSignals, getLogs, getMonitors, silenceMonitor, unsilenceMonitor, createMonitor, checkConnectivity };

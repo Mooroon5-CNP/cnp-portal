@@ -23,17 +23,18 @@ async function getLogs(serviceFilter = null) {
   }
 }
 
-async function getMetrics() {
+async function getMetrics(appName = null) {
   try {
-    return await client.getGoldenSignals(SERVICE_NAME);
+    const service = appName || SERVICE_NAME;
+    return await client.getGoldenSignals(service);
   } catch (err) {
     console.error('[datadog] getMetrics error:', err.message);
-    // Return a shape with '—' values so the view doesn't crash
     return {
       latency:    { p50: '—', p95: '—', p99: '—', unit: 'ms' },
       errorRate:  { value: '—', unit: '%' },
       saturation: { cpu: '—', memory: '—', unit: '%' },
       traffic:    { rps: '—', unit: 'req/s' },
+      cloudRun:   { requests: '—', cpu: '—', memory: '—' },
     };
   }
 }
@@ -70,6 +71,10 @@ async function silenceAlert(monitorId) {
   return client.silenceMonitor(Number(monitorId));
 }
 
+async function unsilenceAlert(monitorId) {
+  return client.unsilenceMonitor(Number(monitorId));
+}
+
 async function createAlert({ name, query, app }) {
   const tags = app ? [`service:${app}`] : [`service:${SERVICE_NAME}`];
   return client.createMonitor({ name, query, tags });
@@ -90,4 +95,4 @@ async function approveAccess(requestIndex) {
   return accessRequests[requestIndex];
 }
 
-module.exports = { getLogs, getMetrics, getAlerts, silenceAlert, createAlert, requestAccess, getAccessRequests, approveAccess };
+module.exports = { getLogs, getMetrics, getAlerts, silenceAlert, unsilenceAlert, createAlert, requestAccess, getAccessRequests, approveAccess };

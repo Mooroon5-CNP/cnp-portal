@@ -1,0 +1,135 @@
+<% if (!ddMetrics) { %>
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px;">
+    Données Datadog indisponibles pour cette application.
+  </div>
+</div>
+<% } else { %>
+
+<div class="grid-2 mb-6" style="margin-bottom:16px;">
+  <div class="metric-card card">
+    <div class="metric-name">Latence (p50 / p95 / p99)</div>
+    <div class="metric-value"><%= ddMetrics.latency.p50 %></div>
+    <div class="metric-unit"><%= ddMetrics.latency.unit %> · p95: <%= ddMetrics.latency.p95 %><%= ddMetrics.latency.unit %> · p99: <%= ddMetrics.latency.p99 %><%= ddMetrics.latency.unit %></div>
+  </div>
+  <div class="metric-card card">
+    <div class="metric-name">Taux d'erreur</div>
+    <div class="metric-value" style="color: <%= ddMetrics.errorRate.value !== '—' && ddMetrics.errorRate.value > 5 ? 'var(--danger)' : 'var(--success)' %>"><%= ddMetrics.errorRate.value %></div>
+    <div class="metric-unit"><%= ddMetrics.errorRate.unit %></div>
+  </div>
+  <div class="metric-card card">
+    <div class="metric-name">Saturation (CPU / Mémoire)</div>
+    <div class="metric-value" style="color: <%= ddMetrics.saturation.cpu !== '—' && ddMetrics.saturation.cpu > 80 ? 'var(--danger)' : 'var(--text)' %>"><%= ddMetrics.saturation.cpu %></div>
+    <div class="metric-unit"><%= ddMetrics.saturation.unit %> CPU · <%= ddMetrics.saturation.memory %><%= ddMetrics.saturation.unit %> Mémoire</div>
+  </div>
+  <div class="metric-card card">
+    <div class="metric-name">Trafic</div>
+    <div class="metric-value"><%= ddMetrics.traffic.rps %></div>
+    <div class="metric-unit"><%= ddMetrics.traffic.unit %></div>
+  </div>
+</div>
+
+<% if (ddMetrics.cloudRun) { %>
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Cloud Run (GCP)</span>
+  </div>
+  <div class="card-body" style="display:flex;gap:32px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Requêtes (5 min)</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.requests %></div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">CPU container</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.cpu %> <span style="font-size:14px;font-weight:400;color:var(--text-muted);">%</span></div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Mémoire container</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.memory %> <span style="font-size:14px;font-weight:400;color:var(--text-muted);">%</span></div>
+    </div>
+  </div>
+</div>
+<% } %>
+
+<% } %>
+
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Logs récents</span>
+    <span class="badge badge-gray"><%= ddLogs.length %> entrées</span>
+  </div>
+  <div style="background:#1e2330;border-radius:0 0 8px 8px;overflow-x:auto;max-height:280px;overflow-y:auto;">
+    <% if (ddLogs.length === 0) { %>
+      <div style="padding:32px;text-align:center;color:#9aa3b8;">Aucun log disponible</div>
+    <% } else { %>
+      <% ddLogs.forEach(log => { %>
+      <div class="log-line">
+        <span class="log-ts"><%= new Date(log.timestamp).toLocaleTimeString('fr-FR') %></span>
+        <span class="log-level-<%= log.level %>"><%= log.level %></span>
+        <span class="log-service"><%= log.service %></span>
+        <span style="color:#e2e8f0;"><%= log.message %></span>
+      </div>
+      <% }) %>
+    <% } %>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Alertes Datadog</span>
+    <%
+      var activeAlerts = ddAlerts.filter(function(a) { return a.status === 'ALERT' || a.status === 'WARN'; });
+    %>
+    <% if (activeAlerts.length > 0) { %>
+    <span class="badge badge-danger"><%= activeAlerts.length %> actif<%= activeAlerts.length > 1 ? 's' : '' %></span>
+    <% } else { %>
+    <span class="badge badge-success">OK</span>
+    <% } %>
+  </div>
+  <% if (ddAlerts.length === 0) { %>
+  <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:32px;">
+    Aucune alerte configurée pour cette application.
+  </div>
+  <% } else { %>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr><th>Alerte</th><th>Statut</th><th>Silencé</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        <% ddAlerts.forEach(function(alert) { %>
+        <tr>
+          <td>
+            <div style="font-weight:600;"><%= alert.name %></div>
+            <div class="font-mono text-muted" style="font-size:11.5px;margin-top:2px;"><%= alert.query %></div>
+          </td>
+          <td>
+            <% if (alert.status === 'ALERT') { %><span class="badge badge-danger"><%= alert.status %></span>
+            <% } else if (alert.status === 'WARN') { %><span class="badge badge-warning"><%= alert.status %></span>
+            <% } else { %><span class="badge badge-success"><%= alert.status %></span>
+            <% } %>
+          </td>
+          <td><% if (alert.silenced) { %><span class="badge badge-gray">Silencé</span><% } else { %>—<% } %></td>
+          <td>
+            <div class="actions-cell">
+              <% if (can('observability:alerts:silence') && !alert.silenced) { %>
+              <form action="/observability/monitors/<%= alert.id %>/silence" method="POST" class="inline-form">
+                <input type="hidden" name="redirectTo" value="/deployments/<%= deployment.id %>">
+                <button type="submit" class="btn btn-warning btn-sm">Silencer</button>
+              </form>
+              <% } %>
+              <% if (can('observability:alerts:silence') && alert.silenced) { %>
+              <form action="/observability/monitors/<%= alert.id %>/unsilence" method="POST" class="inline-form">
+                <input type="hidden" name="redirectTo" value="/deployments/<%= deployment.id %>">
+                <button type="submit" class="btn btn-secondary btn-sm">Réactiver</button>
+              </form>
+              <% } %>
+            </div>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+</div>

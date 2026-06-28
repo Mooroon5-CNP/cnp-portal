@@ -103,4 +103,28 @@ router.post('/access-request/:index/approve', requireAuth, requirePermission('ob
   res.redirect('/observability/alerts');
 });
 
+// Per-app monitor silence/unsilence — used from the deployment detail observability tab.
+// Accepts a `redirectTo` body field to redirect back to the calling page.
+router.post('/monitors/:id/silence', requireAuth, requirePermission('observability:alerts:silence'), async (req, res) => {
+  const redirectTo = (req.body.redirectTo || '').startsWith('/') ? req.body.redirectTo : '/observability/alerts';
+  try {
+    await datadogService.silenceAlert(req.params.id);
+    req.flash('success', 'Alerte silencée.');
+  } catch (err) {
+    req.flash('error', err.message);
+  }
+  res.redirect(redirectTo);
+});
+
+router.post('/monitors/:id/unsilence', requireAuth, requirePermission('observability:alerts:silence'), async (req, res) => {
+  const redirectTo = (req.body.redirectTo || '').startsWith('/') ? req.body.redirectTo : '/observability/alerts';
+  try {
+    await datadogService.unsilenceAlert(req.params.id);
+    req.flash('success', 'Alerte réactivée.');
+  } catch (err) {
+    req.flash('error', err.message);
+  }
+  res.redirect(redirectTo);
+});
+
 module.exports = router;

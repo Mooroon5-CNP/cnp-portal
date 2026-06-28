@@ -47,6 +47,13 @@
                 </div>
               <% } %>
 
+              <!-- ── Tab navigation ─────────────────────────────────────── -->
+              <div style="display:flex;border-bottom:2px solid var(--border);margin-bottom:20px;margin-top:4px;">
+                <button id="tab-btn-pipeline" onclick="switchTab('pipeline')" style="padding:10px 20px;border:none;background:none;cursor:pointer;font-size:14px;font-weight:600;color:var(--primary);border-bottom:2px solid var(--primary);margin-bottom:-2px;">Pipeline</button>
+                <button id="tab-btn-observability" onclick="switchTab('observability')" style="padding:10px 20px;border:none;background:none;cursor:pointer;font-size:14px;font-weight:600;color:var(--text-muted);border-bottom:2px solid transparent;margin-bottom:-2px;">Observabilité</button>
+              </div>
+              <div id="tab-pipeline">
+
               <!-- ── Onboarding: configuring ─────────────────────────────── -->
               <% if (deployment.onboardingStatus === 'configuring') { %>
                 <div id="onboarding-card" class="card">
@@ -304,6 +311,10 @@
                 </div>
               </div>
               <% } %>
+              </div><!-- /tab-pipeline -->
+              <div id="tab-observability" style="display:none;">
+                <%- include('../partials/observability-tab') %>
+              </div>
 
           </div>
         </main>
@@ -457,6 +468,20 @@
           } catch (_) {}
         }, 5000);
       })();
+    </script>
+
+    <script>
+      function switchTab(name) {
+        document.getElementById('tab-pipeline').style.display = name === 'pipeline' ? '' : 'none';
+        document.getElementById('tab-observability').style.display = name === 'observability' ? '' : 'none';
+        ['pipeline', 'observability'].forEach(function(t) {
+          var btn = document.getElementById('tab-btn-' + t);
+          var active = t === name;
+          btn.style.color = active ? 'var(--primary)' : 'var(--text-muted)';
+          btn.style.borderBottomColor = active ? 'var(--primary)' : 'transparent';
+          btn.style.fontWeight = active ? '600' : '400';
+        });
+      }
     </script>
 
   </body>
