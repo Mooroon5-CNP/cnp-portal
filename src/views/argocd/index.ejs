@@ -131,9 +131,14 @@
             </div>
           </div>
 
-          <p style="font-size:12px;color:var(--text-muted);">
-            Accès approuvé le <%= new Date(myRequest.updatedAt).toLocaleString('fr-FR') %>.
-          </p>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:8px;">
+            <p style="font-size:12px;color:var(--text-muted);margin:0;">
+              Accès approuvé le <%= new Date(myRequest.updatedAt).toLocaleString('fr-FR') %>.
+            </p>
+            <form action="/argocd/credentials/regenerate" method="POST" onsubmit="return confirm('Régénérer les identifiants ? L\'ancien mot de passe ne fonctionnera plus.')">
+              <button type="submit" class="btn btn-secondary btn-sm">⟳ Régénérer mes identifiants</button>
+            </form>
+          </div>
         </div>
       </div>
 

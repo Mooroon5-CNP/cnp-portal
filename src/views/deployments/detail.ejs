@@ -112,12 +112,21 @@
                 <!-- Final status banner (shown once CI has a result) -->
                 <% if (latest && latest.status === 'completed') { %>
                   <% if (latest.conclusion === 'success') { %>
+                    <% if (cloudRunUrl) { %>
                     <div class="flash flash-success" style="margin-bottom:16px;">
-                      <strong>Votre application a été déployée avec succès.</strong>
-                      <% if (cloudRunUrl) { %>
-                        &nbsp;—&nbsp;<a href="<%= cloudRunUrl %>" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:underline;font-weight:600;"><%= cloudRunUrl %> ↗</a>
-                      <% } %>
+                      <strong>Votre application est déployée.</strong>
+                      &nbsp;—&nbsp;<a href="<%= cloudRunUrl %>" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:underline;font-weight:600;"><%= cloudRunUrl %> ↗</a>
                     </div>
+                    <% } else if (deployment.targetCluster === 'gcp') { %>
+                    <div class="flash flash-warning" style="margin-bottom:16px;">
+                      <strong>Pipeline CI réussi !</strong>
+                      Le déploiement sur Cloud Run est en cours — comptez environ <strong>10 minutes</strong>. L'URL et l'accès apparaîtront ici dès que l'application est disponible. Cette page se met à jour automatiquement.
+                    </div>
+                    <% } else { %>
+                    <div class="flash flash-success" style="margin-bottom:16px;">
+                      <strong>Pipeline CI réussi — déploiement en cours.</strong>
+                    </div>
+                    <% } %>
                   <% } else if (latest.conclusion === 'failure') { %>
                     <div class="flash flash-error" style="margin-bottom:16px;">
                       <strong>Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.</strong>

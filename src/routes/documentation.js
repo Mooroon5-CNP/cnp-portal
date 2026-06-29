@@ -36,10 +36,14 @@ function listDocFiles(dir, base = '') {
 }
 
 function sortedFiles(allFiles) {
-  // DEVELOPER_GUIDE.md always first, then alphabetical, devops/ section last
+  // PLATFORM_CONTRACT.md first, DEVELOPER_GUIDE.md second, then alphabetical, devops/ section last
+  const ORDER = ['PLATFORM_CONTRACT.md', 'DEVELOPER_GUIDE.md'];
   return [...allFiles].sort((a, b) => {
-    if (a === 'DEVELOPER_GUIDE.md') return -1;
-    if (b === 'DEVELOPER_GUIDE.md') return 1;
+    const ai = ORDER.indexOf(a);
+    const bi = ORDER.indexOf(b);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
     const aDevops = isDevopsFile(a);
     const bDevops = isDevopsFile(b);
     if (aDevops && !bDevops) return 1;
@@ -49,8 +53,7 @@ function sortedFiles(allFiles) {
 }
 
 router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
-  // Auto-open the developer guide as the landing page
-  return res.redirect('/docs/DEVELOPER_GUIDE.md');
+  return res.redirect('/docs/PLATFORM_CONTRACT.md');
 });
 
 router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
