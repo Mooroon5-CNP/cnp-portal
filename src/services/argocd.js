@@ -80,7 +80,9 @@ function getAccessRequests() {
 }
 
 function getUserAccessRequest(userId) {
-  const req = accessReqModel.getLatestForUser(userId);
+  // If the user has an approved request, always surface it (credentials take priority
+  // over a newer pending/rejected request so the UI always shows the credentials card).
+  const req = accessReqModel.getApprovedForUser(userId) || accessReqModel.getLatestForUser(userId);
   if (req && req.argoCDPassword) {
     req.argoCDPassword = _decrypt(req.argoCDPassword);
   }
@@ -146,9 +148,37 @@ function rejectAccess(requestId, reviewerId) {
   return accessReqModel.reject(requestId, reviewerId);
 }
 
+// Regenerate credentials for an already-approved user.
+async function regenerateCredentials(userId) {
+  const existing = accessReqModel.getApprovedForUser(userId);
+  if (!existing) throw new Error('Aucun accès ArgoCD approuvé trouvé.');
+
+  const user = userModel.findById(userId);
+  if (!user) throw new Error('Utilisateur introuvable.');
+
+  const argoCDUsername = existing.argoCDUsername;
+
+  const alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const password = Array.from(crypto.randomBytes(16))
+    .map(b => alphabet[b % alphabet.length])
+    .join('');
+
+  const bcryptHash = bcrypt.hashSync(password, 10);
+
+  try {
+    await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
+  } catch (err) {
+    console.error('[argocd] regenerateCredentials provisionArgoCDLocalUser failed:', err.message);
+  }
+
+  return accessReqModel.updateCredentials(existing.id, {
+    argoCDPassword: _encrypt(password),
+  });
+}
+
 module.exports = {
   listApps, syncApp,
   hasApproved,
   requestAccess, getAccessRequests, getUserAccessRequest,
-  approveAccess, rejectAccess,
+  approveAccess, rejectAccess, regenerateCredentials,
 };

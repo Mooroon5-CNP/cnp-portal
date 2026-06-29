@@ -26,7 +26,8 @@ function broadcastPendingUpdate() {
 
 // User list — manager + devops
 router.get('/users', requireAuth, requireRole('manager', 'devops'), (req, res) => {
-  const users = userStore.findAll();
+  // Pending (unapproved) users are shown in the live SSE section; exclude from main table.
+  const users = userStore.findAll().filter(u => u.approved);
   res.render('admin/users', {
     title: 'Gestion des utilisateurs — CNP Portal',
     currentPage: 'admin',
@@ -88,7 +89,7 @@ router.post('/users/:id/role', requireAuth, requireRole('manager'), (req, res) =
   res.redirect('/admin/users');
 });
 
-// Toggle active — manager only
+// Toggle active — manager only (kept for backward-compat, UI now uses /remove)
 router.post('/users/:id/toggle', requireAuth, requireRole('manager'), (req, res) => {
   const target = userStore.findById(req.params.id);
   if (!target) {
@@ -100,10 +101,22 @@ router.post('/users/:id/toggle', requireAuth, requireRole('manager'), (req, res)
   res.redirect('/admin/users');
 });
 
+// Remove user — manager only
+router.post('/users/:id/remove', requireAuth, requireRole('manager'), (req, res) => {
+  const target = userStore.findById(req.params.id);
+  if (!target) {
+    req.flash('error', 'Utilisateur introuvable.');
+    return res.redirect('/admin/users');
+  }
+  userStore.remove(req.params.id);
+  req.flash('success', `Utilisateur ${target.username} supprimé.`);
+  res.redirect('/admin/users');
+});
+
 router.get('/secrets', requireAuth, requirePermission('secrets:view-names'), (req, res) => {
   res.render('admin/secrets', {
     title: 'Secrets — CNP Portal',
-    currentPage: 'admin',
+    currentPage: 'admin-secrets',
     secrets: MOCK_SECRETS,
     user: req.user,
     can: (p) => can(req.user, p),

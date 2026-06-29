@@ -411,7 +411,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash) {
     // 1. Enable the account in argocd-cm
     await api.patchNamespacedConfigMap(
       'argocd-cm', ns,
-      { data: { [`accounts.${username}`]: 'login' } },
+      { data: { [`accounts.${username}`]: 'apiKey,login' } },
       undefined, undefined, undefined, undefined,
       mergeHeader,
     );

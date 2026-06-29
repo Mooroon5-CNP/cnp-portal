@@ -117,11 +117,11 @@
                       </select>
                       <button type="submit" class="btn btn-secondary btn-sm">Appliquer</button>
                     </form>
-                    <form action="/admin/users/<%= u.id %>/toggle" method="POST" class="inline-form">
-                      <button type="submit" class="btn btn-sm <%= u.active ? 'btn-warning' : 'btn-secondary' %>">
-                        <%= u.active ? 'Désactiver' : 'Réactiver' %>
-                      </button>
-                    </form>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      onclick="openRemoveModal('<%= u.id %>', '<%= u.username %>')"
+                    >Supprimer l'utilisateur</button>
                     <% } %>
                   </div>
                   <% } else { %>
@@ -141,6 +141,23 @@
 
     </div>
   </main>
+</div>
+
+<!-- Remove user confirmation modal -->
+<div id="removeUserModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);width:440px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+    <h3 style="margin:0 0 8px;color:var(--danger,#ef4444);">Supprimer l'utilisateur</h3>
+    <p id="removeUserModalText" style="color:var(--text-muted);margin-bottom:16px;font-size:14px;"></p>
+    <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
+      Cette action est irréversible. Le compte sera définitivement supprimé.
+    </div>
+    <form id="removeUserForm" method="POST">
+      <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-danger">Confirmer la suppression</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('removeUserModal').style.display='none'">Annuler</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <style>
@@ -225,6 +242,14 @@
   document.querySelectorAll('.approve-btn').forEach(btn => {
     btn.addEventListener('click', () => approveUser(btn.dataset.id, btn.dataset.username, btn));
   });
+
+  // Remove user modal
+  function openRemoveModal(id, username) {
+    document.getElementById('removeUserModalText').textContent = `Supprimer le compte "${username}" ? Cette action ne peut pas être annulée.`;
+    document.getElementById('removeUserForm').action = `/admin/users/${id}/remove`;
+    document.getElementById('removeUserModal').style.display = 'flex';
+  }
+  window.openRemoveModal = openRemoveModal;
 
   // Connect SSE
   const evtSource = new EventSource('/admin/users/events');
