@@ -12,8 +12,8 @@ jobs:
   pipeline:
     uses: Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@main
     with:
-      app_name: "cnp-portal"
-      app_port: "3000"
+      app_name: "argocd"
+      app_port: "8080"
       config_repo_url: "https://github.com/Mooroon5-CNP/config-repo"
       target_cloud: "gcp"
     secrets:
@@ -30,13 +30,13 @@ jobs:
           token: ${{ secrets.CONFIG_REPO_TOKEN }}
       - name: Update Cloud Run image tag
         run: |
-          sed -i "s|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/cnp-portal:.*|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/cnp-portal:${{ github.sha }}|" \
-            apps/cnp-portal/crossplane/cloudrun-claim.yaml
+          sed -i "s|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/argocd:.*|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/argocd:${{ github.sha }}|" \
+            apps/argocd/crossplane/cloudrun-claim.yaml
           git config user.email "ci-bot@cnp"
           git config user.name "CI Bot"
-          git add apps/cnp-portal/crossplane/cloudrun-claim.yaml
+          git add apps/argocd/crossplane/cloudrun-claim.yaml
           git diff --staged --quiet && exit 0
-          git commit -m "ci(cnp-portal): cloud run → ${{ github.sha }}"
+          git commit -m "ci(argocd): cloud run → ${{ github.sha }}"
           for i in 1 2 3; do
             git pull --rebase && git push && break || sleep 5
           done
