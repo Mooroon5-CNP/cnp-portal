@@ -50,11 +50,11 @@ const config = {
     configRepoName: process.env.GITHUB_CONFIG_REPO_NAME,
     configRepoToken: process.env.GITHUB_CONFIG_REPO_TOKEN || null,
     wifProvider: process.env.GITHUB_WIF_PROVIDER
-      || 'projects/688655933459/locations/global/workloadIdentityPools/github-pool/providers/github-provider',
+      || 'projects/352983558199/locations/global/workloadIdentityPools/github-pool/providers/github-provider',
     gcpSaEmail: process.env.GITHUB_GCP_SA_EMAIL
-      || 'github-ci-sa@cnp-terraform-500015.iam.gserviceaccount.com',
+      || 'github-ci-sa@cnp-terraform-500015-508716.iam.gserviceaccount.com',
     registryUrl: process.env.GITHUB_REGISTRY_URL
-      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015'}/cnp-registry`,
+      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015-508716'}/cnp-registry`,
   },
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,
@@ -82,13 +82,13 @@ const config = {
     baseDomain: process.env.CLUSTER_BASE_DOMAIN || 'cnp.example.com',
   },
   gcp: {
-    project:       process.env.GCP_PROJECT        || 'cnp-terraform-500015',
+    project:       process.env.GCP_PROJECT        || 'cnp-terraform-500015-508716',
     region:        process.env.GCP_REGION         || 'europe-west9',
     // Full Artifact Registry prefix: europe-west9-docker.pkg.dev/<project>/cnp-registry
     imageRegistry: process.env.GCP_IMAGE_REGISTRY
-      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015'}/cnp-registry`,
+      || `${process.env.GCP_REGION || 'europe-west9'}-docker.pkg.dev/${process.env.GCP_PROJECT || 'cnp-terraform-500015-508716'}/cnp-registry`,
     cloudRunSa:    process.env.GCP_CLOUD_RUN_SA
-      || `cloud-run-sa@${process.env.GCP_PROJECT || 'cnp-terraform-500015'}.iam.gserviceaccount.com`,
+      || `cloud-run-sa@${process.env.GCP_PROJECT || 'cnp-terraform-500015-508716'}.iam.gserviceaccount.com`,
   },
 };
 

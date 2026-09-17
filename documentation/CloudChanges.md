@@ -6,14 +6,18 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 
 ---
 
-## Valeurs actuelles (projet `cnp-terraform-500015`)
+## Valeurs actuelles (projet `cnp-terraform-500015-508716`)
+
+> Cluster recréé le 2026-09-15 (nouveau project ID auto-suffixé par GCP, nouvelle
+> zone). Les valeurs ci-dessous ont été vérifiées le 2026-09-17.
 
 | Variable `.env` | Valeur actuelle |
 |---|---|
-| `GCP_PROJECT` | `cnp-terraform-500015` |
-| `KUBE_API_URL` | `https://34.163.86.239` |
-| `ARGOCD_SERVER_URL` | `http://argocd.34.155.213.145.nip.io` |
-| `ARGOCD_UI_URL` | `http://argocd.34.155.213.145.nip.io` |
+| `GCP_PROJECT` | `cnp-terraform-500015-508716` |
+| Project Number | `352983558199` |
+| Zone du cluster | `europe-west9-b` |
+| `KUBE_API_URL` | `https://34.163.195.132` |
+| `ARGOCD_SERVER_URL` / `ARGOCD_UI_URL` | Pas d'adresse publique pour l'instant — `ingress-nginx` n'est pas déployé sur ce cluster (l'Application ArgoCD existe mais échoue : "referencing project platform which does not exist", l'AppProject `platform` n'a jamais été créé ici). En attendant, `ARGOCD_TOKEN` a été généré via `kubectl port-forward svc/argocd-server -n argocd 8080:443` plutôt que via une URL publique. |
 
 ---
 
@@ -23,7 +27,7 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 
 | Variable | Dépend de | Comment obtenir la nouvelle valeur |
 |---|---|---|
-| `GCP_PROJECT` | ID du projet GCP | Valeur textuelle du projet (ex: `cnp-terraform-500015`) |
+| `GCP_PROJECT` | ID du projet GCP | Valeur textuelle du projet (ex: `cnp-terraform-500015-508716`) |
 | `KUBE_API_URL` | Endpoint du cluster GKE | `gcloud container clusters describe <NOM_CLUSTER> --zone <ZONE> --format="value(endpoint)"` → `https://<IP>` |
 | `KUBE_TOKEN` | Service account du portail sur le cluster | Voir [§ Obtenir KUBE_TOKEN](#obtenir-kube_token) |
 | `KUBE_CA_CERT` | CA du cluster GKE | Voir [§ Obtenir KUBE_CA_CERT](#obtenir-kube_ca_cert) |
@@ -53,7 +57,7 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 ```bash
 gcloud projects list
 # Utiliser la valeur de la colonne PROJECT_ID
-# Exemple : cnp-terraform-500015
+# Exemple : cnp-terraform-500015-508716
 ```
 
 ### Obtenir `KUBE_API_URL`
@@ -272,40 +276,30 @@ resource "kubernetes_cluster_role_binding" "cnp_portal_namespaces" {
 
 ### `ci-templates/.github/workflows/pipeline.yml` et `build-push-artifact-registry.yml`
 
-Ces fichiers contiennent le project ID, project number et SA GCP en dur. À mettre à jour :
+**Mise à jour 2026-09-17 : ces fichiers ne contiennent plus rien en dur.** Ils lisent
+`${{ vars.WIF_PROVIDER }}`, `${{ vars.GCP_SA_EMAIL }}` et `${{ vars.REGISTRY_URL }}` —
+des variables GitHub Actions définies **par repo applicatif** (Settings → Secrets and
+variables → Actions → Variables), pas dans ces fichiers. Rien à `sed` ici.
 
-| Valeur | Ancienne | Nouvelle |
-|---|---|---|
-| Project ID | `cnp-terraform` | `cnp-terraform-500015` |
-| Project Number | `199851303237` | `688655933459` |
-| GitHub CI SA | `github-ci-sa@cnp-terraform.iam.gserviceaccount.com` | `github-ci-sa@cnp-terraform-500015.iam.gserviceaccount.com` |
-| AR Registry | `europe-west9-docker.pkg.dev/cnp-terraform/cnp-registry` | `europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry` |
-| WIF provider | `projects/199851303237/locations/...` | `projects/688655933459/locations/...` |
+En cas de changement de projet GCP, c'est donc dans **chaque repo d'application**
+(ex. `cnp-portal`) qu'il faut mettre à jour ces 3 variables, avec :
 
-Commande rapide pour tout remplacer :
-```bash
-OLD_PROJECT="cnp-terraform"
-NEW_PROJECT="cnp-terraform-500015"
-OLD_NUMBER="199851303237"
-NEW_NUMBER="688655933459"
-
-for FILE in ci-templates/.github/workflows/pipeline.yml \
-            ci-templates/.github/workflows/build-push-artifact-registry.yml; do
-  sed -i \
-    -e "s|projects/${OLD_NUMBER}/|projects/${NEW_NUMBER}/|g" \
-    -e "s|github-ci-sa@${OLD_PROJECT}\.iam|github-ci-sa@${NEW_PROJECT}.iam|g" \
-    -e "s|europe-west9-docker\.pkg\.dev/${OLD_PROJECT}/|europe-west9-docker.pkg.dev/${NEW_PROJECT}/|g" \
-    "$FILE"
-done
-```
+| Variable GitHub Actions | Nouvelle valeur |
+|---|---|
+| `WIF_PROVIDER` | `projects/352983558199/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `GCP_SA_EMAIL` | `github-ci-sa@cnp-terraform-500015-508716.iam.gserviceaccount.com` |
+| `REGISTRY_URL` | `europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry` |
 
 ### `test-app-cnp/src/config/env.js`
 
-Le default de `GCP_PROJECT` est lu depuis l'env var. Mettre à jour la valeur par défaut si le projet change durablement :
+Le default de `GCP_PROJECT` est lu depuis l'env var, avec une valeur de secours codée en dur.
+**Mise à jour 2026-09-17 :** cette valeur de secours (ainsi que celles de `wifProvider`,
+`gcpSaEmail`, `imageRegistry` et `cloudRunSa`, qui en dépendent) a été alignée sur le
+projet actuel :
 ```javascript
-project: process.env.GCP_PROJECT || 'cnp-terraform-500015',
+project: process.env.GCP_PROJECT || 'cnp-terraform-500015-508716',
 ```
-En production : toujours passer `GCP_PROJECT` en variable d'environnement plutôt que de modifier le code.
+En production : toujours passer `GCP_PROJECT` en variable d'environnement plutôt que de modifier le code — ces valeurs de secours ne servent qu'en dev local sans `.env` complet.
 
 ---
 
@@ -317,19 +311,15 @@ Si le portail est déployé **sur le cluster GKE**, l'image Docker contient le n
 europe-west9-docker.pkg.dev/<NOM_PROJET_GCP>/cnp-registry/cnp-portal:<tag>
 ```
 
-Fichiers à mettre à jour :
-
-| Fichier | Champ |
-|---|---|
-| `k8s/base/deployment.yaml` | `image:` |
-| `k8s/overlays/dev/kustomization.yaml` | `images[].newName` |
-| `k8s/overlays/prod/kustomization.yaml` | `images[].newName` |
-
-Commande :
-```bash
-find k8s/ -name "*.yaml" -exec sed -i \
-  "s|europe-west9-docker.pkg.dev/cnp-terraform/|europe-west9-docker.pkg.dev/cnp-terraform-500015/|g" {} \;
-```
+**Constat 2026-09-17 : ce n'est pas le cas actuellement.** Le portail est onboardé
+sur sa propre plateforme (`.cnp-platform`) et tourne en réalité sur **Cloud Run**,
+piloté par `config-repo/apps/cnp-portal/crossplane/cloudrun-claim.yaml` — pas par
+les manifests `k8s/` de ce repo, qui restent une référence non appliquée pour ce
+type d'app (voir le File map en tête de README). Rien à modifier ici tant que ça
+reste le cas ; si le portail repasse un jour en déploiement K8s direct, les
+fichiers `k8s/base/deployment.yaml`, `k8s/overlays/dev/kustomization.yaml` et
+`k8s/overlays/prod/kustomization.yaml` (champ `image:` / `images[].name`)
+devront alors être alignés sur le project ID courant.
 
 ---
 
@@ -343,39 +333,57 @@ Ces permissions doivent exister sur le nouveau projet — vérifier avec `gcloud
 | `github-ci-sa@<PROJECT>.iam.gserviceaccount.com` | `roles/artifactregistry.writer` | CI pipeline push les images buildées |
 | `crossplane-gcp-sa@<PROJECT>.iam.gserviceaccount.com` | `roles/run.admin` + `roles/iam.serviceAccountUser` | Crossplane gère Cloud Run |
 
-Sur `cnp-terraform-500015`, `gke-nodes-sa` a déjà `artifactregistry.reader` ✅
+Sur `cnp-terraform-500015-508716`, ces rôles n'ont pas été revérifiés depuis la
+recréation du cluster — à confirmer avec `gcloud projects get-iam-policy cnp-terraform-500015-508716`.
 
 ---
 
 ## 6. Checklist de migration — résumé
 
+État au 2026-09-17, pour la migration vers `cnp-terraform-500015-508716` :
+
 ```
-□ Nouveau cluster GKE provisionné (Terraform)
+☑ Nouveau cluster GKE provisionné (Terraform) — cnp-cluster-terraform, europe-west9-b
 
-□ Bootstrap cluster (une fois, kubectl) :
-    □ kubectl apply -f config-repo/argocd/projects/default-project.yaml
-    □ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
-    □ kubectl apply -f config-repo/infra/crossplane/application.yaml
-    □ RBAC portail appliqué (voir §3) — Role applicationsets + ClusterRole namespaces + ClusterRole crossplane-read
+☑ Bootstrap cluster (une fois, kubectl) :
+    ☐ kubectl apply -f config-repo/argocd/projects/default-project.yaml
+         → PAS FAIT : AppProject "platform" absent sur ce cluster (seuls
+           "default" et "team-cnp" existent). C'est pour ça que l'Application
+           ArgoCD "ingress-nginx" est bloquée en erreur "referencing project
+           platform which does not exist".
+    ☐ kubectl apply -f config-repo/infra/ingress-nginx/application.yaml
+         → Application déjà enregistrée dans ArgoCD mais jamais synced (dépend
+           du point ci-dessus). Pas d'IP publique pour l'instant.
+    ☑ crossplane — déjà installé et sain (crossplane-config / crossplane-providers
+      Synced/Healthy dans ArgoCD)
+    ☑ RBAC portail appliqué (voir §3) — Role applicationsets + ClusterRole
+      namespaces + ClusterRole crossplane-read
 
-□ ArgoCD configuré (voir argocd-gcp-setup.md) :
-    □ Mode insecure activé
-    □ Ingress créé  →  http://argocd.<IP>.nip.io
-    □ Compte cnp-portal créé + RBAC configuré
-    □ Token API généré
+☑ ArgoCD — compte cnp-portal créé + RBAC + token API généré, mais **via
+  `kubectl port-forward svc/argocd-server -n argocd 8080:443`**, pas via une
+  URL publique (puisque ingress-nginx n'est pas up). Donc pas de "Mode
+  insecure" ni d'Ingress créés pour l'instant — inutile tant qu'on n'expose
+  pas ArgoCD publiquement.
 
-□ .env mis à jour :
-    □ GCP_PROJECT=<nouveau-project-id>
-    □ KUBE_API_URL=https://<endpoint-cluster>
-    □ KUBE_TOKEN=<token SA cnp-portal>
-    □ KUBE_CA_CERT=<base64 CA>
-    □ ARGOCD_SERVER_URL=http://argocd.<IP>.nip.io
-    □ ARGOCD_UI_URL=http://argocd.<IP>.nip.io
-    □ ARGOCD_TOKEN=<token généré>
+☑ Secret cnp-portal-cloud-access créé dans le namespace cnp-portal, avec :
+    ☑ KUBE_TOKEN, KUBE_CA_CERT
+    ☑ ARGOCD_TOKEN
+    ☑ GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY
+    ☑ GITHUB_CONFIG_REPO_TOKEN
+    ☐ DD_API_KEY / DD_APP_KEY — pas nécessaire au démarrage de l'appli (voir
+      src/clients/datadog.js : erreur seulement si on ouvre la page Observability),
+      laissé de côté pour l'instant
 
-□ ci-templates mis à jour (project ID, number, SA, registry)
+☑ ci-templates — rien à mettre à jour (plus de valeurs en dur, voir §4). Les
+  variables GitHub Actions (WIF_PROVIDER, GCP_SA_EMAIL, REGISTRY_URL) sont à
+  vérifier/mettre à jour par repo applicatif si besoin.
 
-□ IAM vérifié :
-    □ gke-nodes-sa a roles/artifactregistry.reader
-    □ github-ci-sa a roles/artifactregistry.writer
+☑ src/config/env.js — valeurs de secours mises à jour vers cnp-terraform-500015-508716
+
+☐ IAM vérifié — pas revérifié sur le nouveau projet (voir §5)
 ```
+
+**Ce qui reste ouvert si le portail doit un jour fonctionner en conditions
+réelles (pas juste avoir les accès prêts)** : l'AppProject `platform` et
+`ingress-nginx` doivent être bootstrapés pour qu'ArgoCD ait une URL publique
+que `ARGOCD_SERVER_URL` puisse référencer.
