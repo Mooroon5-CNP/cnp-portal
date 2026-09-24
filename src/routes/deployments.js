@@ -22,7 +22,8 @@ const manifestMrModel = require('../models/manifest_mr');
 async function syncMrsFromGitHub(mrs) {
     if (!mrs.length) return;
     const { owner, repo } = parseConfigRepo();
-    const token = config.github.configRepoToken;
+    const token = await githubClient.getConfigRepoToken().catch(() => null);
+    if (!token) return;
     await Promise.all(mrs.map(async (mr) => {
         if (!mr.prNumber) return;
         try {
@@ -61,7 +62,7 @@ function parseConfigRepo() {
 async function readDeployedTag(appName) {
     try {
         const { owner, repo } = parseConfigRepo();
-        const token = config.github.configRepoToken;
+        const token = await githubClient.getConfigRepoToken();
         const path = `apps/${appName}/overlays/dev/kustomization.yaml`;
         const content = await githubService.getFileContent(owner, repo, path, token).catch(() => null);
         if (!content) return null;
@@ -612,9 +613,9 @@ router.post('/:id/manifest-prs/:mrId/approve', requireAuth, requirePermission('k
     }
 
     const { owner, repo } = parseConfigRepo();
-    const token = config.github.configRepoToken;
 
     try {
+        const token = await githubClient.getConfigRepoToken();
         await githubService.mergePullRequest(owner, repo, mr.prNumber, token,
             `Approuvé par ${req.user.username} via CNP Portal`);
         manifestMrModel.approve(mr.id, req.user.id);
@@ -644,9 +645,9 @@ router.post('/:id/manifest-prs/:mrId/reject', requireAuth, requirePermission('k8
 
     const comment = (req.body.comment || '').trim();
     const { owner, repo } = parseConfigRepo();
-    const token = config.github.configRepoToken;
 
     try {
+        const token = await githubClient.getConfigRepoToken();
         const rejectBody = comment
             ? `❌ **Rejeté par ${req.user.username}** :\n\n${comment}`
             : `❌ **Rejeté par ${req.user.username}**`;

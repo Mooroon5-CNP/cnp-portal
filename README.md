@@ -185,11 +185,11 @@ All read via `src/config/env.js`. Run `node src/config/env.js` to validate.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `GITHUB_APP_ID` | ✅ | GitHub App ID — used for app-repo operations (ci.yml, secrets, branches) |
+| `GITHUB_APP_ID` | ✅ | GitHub App ID — used for app-repo operations (ci.yml, secrets, branches) and for every portal write to config-repo (pushed as `cnp-platform-bot[bot]`, the only identity allowed on `apps/*/crossplane/prod/**`). The App needs Contents: write and Pull requests: write on config-repo |
 | `GITHUB_APP_PRIVATE_KEY` | ✅ | GitHub App private key (PEM; `\n`-escaped single-line is accepted) |
 | `GITHUB_APP_INSTALLATION_ID` | ✅ | GitHub App installation ID on the org |
 | `GITHUB_CONFIG_REPO_NAME` | ✅ | `owner/repo` of the GitOps config-repo (default: `Mooroon5-CNP/config-repo`) |
-| `GITHUB_CONFIG_REPO_TOKEN` | ✅ | Fine-grained PAT with Contents:write on config-repo |
+| `GITHUB_CONFIG_REPO_TOKEN` | ✅ | Fine-grained PAT with Contents:write on config-repo — injected into app repos as the `CONFIG_REPO_TOKEN` secret for their CI. Not used by the portal itself to write to config-repo |
 | `ARGOCD_SERVER_URL` | ✅ | ArgoCD API base URL (in-cluster or external) |
 | `ARGOCD_UI_URL` | — | Browser-accessible ArgoCD URL (falls back to `ARGOCD_SERVER_URL`) |
 | `ARGOCD_TOKEN` | ✅ | ArgoCD bearer token |
