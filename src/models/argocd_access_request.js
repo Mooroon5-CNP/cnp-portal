@@ -38,6 +38,11 @@ const rejectStmt        = db.prepare(`
   SET status = 'rejected', reviewed_by = ?, updated_at = ?
   WHERE id = ?
 `);
+const updateCredStmt    = db.prepare(`
+  UPDATE argocd_access_requests
+  SET argocd_password = ?, updated_at = ?
+  WHERE id = ?
+`);
 
 function toObj(row) {
   if (!row) return null;
@@ -94,6 +99,11 @@ module.exports = {
 
   reject(id, reviewedBy) {
     rejectStmt.run(reviewedBy, new Date().toISOString(), id);
+    return toObj(getByIdStmt.get(id));
+  },
+
+  updateCredentials(id, { argoCDPassword }) {
+    updateCredStmt.run(argoCDPassword, new Date().toISOString(), id);
     return toObj(getByIdStmt.get(id));
   },
 };

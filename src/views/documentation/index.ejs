@@ -20,9 +20,13 @@
           <% if (files.length === 0) { %>
             <div style="padding:16px;color:var(--text-muted);font-size:13px;">Aucun fichier .md trouvé</div>
           <% } else { %>
-            <% files.forEach(file => { %>
-              <a href="/docs/<%= file %>" class="<%= locals.currentFile === file ? 'active' : '' %>">
-                📄 <%= file %>
+            <% files.forEach(file => {
+              const devopsOnly = typeof isDevopsFile === 'function' && isDevopsFile(file);
+              const label = file.replace(/^devops\//, '').replace(/\.md$/, '').replace(/_/g, ' ');
+            %>
+              <a href="/docs/<%= file %>" class="<%= locals.currentFile === file ? 'active' : '' %>" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                <span>📄 <%= label %></span>
+                <% if (devopsOnly) { %><span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--primary);color:#fff;flex-shrink:0;">DevOps</span><% } %>
               </a>
             <% }) %>
           <% } %>

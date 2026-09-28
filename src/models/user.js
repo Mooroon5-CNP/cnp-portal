@@ -95,4 +95,8 @@ function upsertFromGithub({ githubId, githubUsername, email, avatarUrl }) {
   return create({ githubId, username, email, avatarUrl, active: 0 });
 }
 
-module.exports = { findById, findByGitlabId, findByGithubId, findByUsername, findAll, findPending, create, update, upsertFromGitlab, upsertFromGithub };
+function remove(id) {
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+
+module.exports = { findById, findByGitlabId, findByGithubId, findByUsername, findAll, findPending, create, update, remove, upsertFromGitlab, upsertFromGithub };

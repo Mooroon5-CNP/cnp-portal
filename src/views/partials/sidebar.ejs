@@ -70,7 +70,7 @@
         <a href="/admin/teams"><span class="nav-icon">◫</span> Équipes</a>
       </li>
       <% if (user.role === 'manager') { %>
-      <li>
+      <li class="<%= locals.currentPage === 'admin-secrets' ? 'active' : '' %>">
         <a href="/admin/secrets"><span class="nav-icon">🔑</span> Secrets</a>
       </li>
       <% } %>

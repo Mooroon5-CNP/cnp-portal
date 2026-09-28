@@ -195,6 +195,39 @@ app.listen(PORT, () => console.log(`Listening on :${PORT}`));
 
 ---
 
+## 6b. Adding custom environment variables
+
+If your app needs additional environment variables (API URLs, feature flags, configuration values, etc.), you **cannot set them yourself** — env vars for Cloud Run are declared in the platform's config-repo, which requires DevOps approval.
+
+### How to request an env var
+
+1. **After your deployment is created and onboarded**, contact your DevOps team and provide:
+   - The variable name (e.g. `MY_API_URL`)
+   - The value, or indicate that it is a secret (never send secret values over chat — DevOps will use the Secrets manager)
+   - A brief explanation of what the variable is used for
+
+2. The DevOps team will edit `config-repo/apps/{your-app}/crossplane/cloudrun-claim.yaml`, add the variable under `spec.forProvider.template.containers[0].env`, and submit a Manifest MR for manager approval.
+
+3. Once approved and merged, the variable will be live in your Cloud Run service within ~2 minutes. Your DevOps contact will notify you.
+
+### Reading env vars in your app
+
+Always read configuration from `process.env` with a sensible local default:
+
+```javascript
+const apiUrl  = process.env.MY_API_URL  || 'http://localhost:4000';
+const timeout = process.env.API_TIMEOUT || '5000';
+const featureX = process.env.FEATURE_FLAG_X === 'true';
+```
+
+> **Never hardcode** URLs, timeouts, or feature flags directly in the source. Anything that differs between local development and production must come from the environment.
+
+### Secret values
+
+If you need an API key, password, or token, **do not** send the value over Slack or email. Tell your DevOps team it is a secret — they will provision it via the Secrets manager so it never appears in plain text in any config file.
+
+---
+
 ## 7. Tests and linting
 
 ### Running lint locally

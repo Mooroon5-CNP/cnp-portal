@@ -86,6 +86,18 @@ router.post('/access-request/:id/approve', requireAuth, requirePermission('argoc
   res.redirect('/argocd');
 });
 
+// ── Regenerate credentials (approved user, self-service) ──────────────────────
+
+router.post('/credentials/regenerate', requireAuth, requirePermission('argocd:access:request'), async (req, res) => {
+  try {
+    await argocdService.regenerateCredentials(req.user.id);
+    req.flash('success', 'Identifiants ArgoCD régénérés avec succès.');
+  } catch (err) {
+    req.flash('error', err.message);
+  }
+  res.redirect('/argocd');
+});
+
 // ── Reject (manager) ──────────────────────────────────────────────────────────
 
 router.post('/access-request/:id/reject', requireAuth, requirePermission('argocd:access:approve'), async (req, res) => {

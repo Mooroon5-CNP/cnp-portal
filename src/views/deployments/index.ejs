@@ -207,6 +207,12 @@
                     <strong>Videz le bucket manuellement avant de continuer.</strong>
                   </div>
                   <form id="deleteForm" method="POST">
+                    <div style="margin-bottom:14px;">
+                      <label style="font-size:13px;display:block;margin-bottom:6px;">Pour confirmer, saisissez <strong style="font-family:monospace;color:var(--danger,#ef4444);">DELETE</strong> :</label>
+                      <input type="text" id="deleteConfirmText" autocomplete="off" placeholder="DELETE"
+                        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:14px;background:var(--surface);color:var(--text);"
+                        oninput="checkDeleteInput()">
+                    </div>
                     <div id="deleteBucketAck" style="display:none;margin-bottom:14px;">
                       <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
                         <input type="checkbox" id="deleteBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
@@ -214,7 +220,7 @@
                       </label>
                     </div>
                     <div style="display:flex;gap:10px;">
-                      <button type="submit" id="deleteConfirmBtn" class="btn btn-danger">Confirmer la suppression</button>
+                      <button type="submit" id="deleteConfirmBtn" class="btn btn-danger" disabled>Confirmer la suppression</button>
                       <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Annuler</button>
                     </div>
                   </form>
@@ -236,6 +242,12 @@
                     <strong>Videz le bucket manuellement avant de continuer.</strong>
                   </div>
                   <form id="approveForm" method="POST">
+                    <div style="margin-bottom:14px;">
+                      <label style="font-size:13px;display:block;margin-bottom:6px;">Pour confirmer, saisissez <strong style="font-family:monospace;color:var(--danger,#ef4444);">DELETE</strong> :</label>
+                      <input type="text" id="approveConfirmText" autocomplete="off" placeholder="DELETE"
+                        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:14px;background:var(--surface);color:var(--text);"
+                        oninput="checkApproveInput()">
+                    </div>
                     <div id="approveBucketAck" style="display:none;margin-bottom:14px;">
                       <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
                         <input type="checkbox" id="approveBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
@@ -243,7 +255,7 @@
                       </label>
                     </div>
                     <div style="display:flex;gap:10px;">
-                      <button type="submit" id="approveConfirmBtn" class="btn btn-danger">Confirmer et supprimer</button>
+                      <button type="submit" id="approveConfirmBtn" class="btn btn-danger" disabled>Confirmer et supprimer</button>
                       <button type="button" class="btn btn-secondary" onclick="closeApproveModal()">Annuler</button>
                     </div>
                   </form>
@@ -297,6 +309,13 @@
                 });
 
                 // Delete modal (manager)
+                function checkDeleteInput() {
+                  const txt = document.getElementById('deleteConfirmText').value;
+                  const chk = document.getElementById('deleteBucketAckCheck');
+                  const hasBucket = document.getElementById('deleteBucketAck').style.display !== 'none';
+                  const bucketOk = !hasBucket || chk.checked;
+                  document.getElementById('deleteConfirmBtn').disabled = !(txt === 'DELETE' && bucketOk);
+                }
                 function openDeleteModal(id, name, hasBucket) {
                   document.getElementById('deleteModalText').textContent = `Supprimer "${name}" et toutes ses ressources (config-repo, pipeline, secrets) ?`;
                   document.getElementById('deleteForm').action = `/deployments/${id}/delete`;
@@ -304,23 +323,32 @@
                   const ack  = document.getElementById('deleteBucketAck');
                   const btn  = document.getElementById('deleteConfirmBtn');
                   const chk  = document.getElementById('deleteBucketAckCheck');
+                  const inp  = document.getElementById('deleteConfirmText');
+                  inp.value = '';
+                  btn.disabled = true;
                   if (hasBucket) {
                     document.getElementById('deleteBucketName').textContent = `cnp-${name}-data`;
                     warn.style.display = 'block';
                     ack.style.display  = 'block';
                     chk.checked = false;
-                    btn.disabled = true;
-                    chk.onchange = () => { btn.disabled = !chk.checked; };
+                    chk.onchange = checkDeleteInput;
                   } else {
                     warn.style.display = 'none';
                     ack.style.display  = 'none';
-                    btn.disabled = false;
                   }
                   document.getElementById('deleteModal').style.display = 'flex';
+                  inp.focus();
                 }
                 function closeDeleteModal() { document.getElementById('deleteModal').style.display = 'none'; }
 
                 // Approve modal (manager)
+                function checkApproveInput() {
+                  const txt = document.getElementById('approveConfirmText').value;
+                  const chk = document.getElementById('approveBucketAckCheck');
+                  const hasBucket = document.getElementById('approveBucketAck').style.display !== 'none';
+                  const bucketOk = !hasBucket || chk.checked;
+                  document.getElementById('approveConfirmBtn').disabled = !(txt === 'DELETE' && bucketOk);
+                }
                 function openApproveModal(id, name, hasBucket) {
                   document.getElementById('approveModalText').textContent = `Approuver la demande de suppression de "${name}" ?`;
                   document.getElementById('approveForm').action = `/deployments/${id}/approve-delete`;
@@ -328,19 +356,21 @@
                   const ack  = document.getElementById('approveBucketAck');
                   const btn  = document.getElementById('approveConfirmBtn');
                   const chk  = document.getElementById('approveBucketAckCheck');
+                  const inp  = document.getElementById('approveConfirmText');
+                  inp.value = '';
+                  btn.disabled = true;
                   if (hasBucket) {
                     document.getElementById('approveBucketName').textContent = `cnp-${name}-data`;
                     warn.style.display = 'block';
                     ack.style.display  = 'block';
                     chk.checked = false;
-                    btn.disabled = true;
-                    chk.onchange = () => { btn.disabled = !chk.checked; };
+                    chk.onchange = checkApproveInput;
                   } else {
                     warn.style.display = 'none';
                     ack.style.display  = 'none';
-                    btn.disabled = false;
                   }
                   document.getElementById('approveModal').style.display = 'flex';
+                  inp.focus();
                 }
                 function closeApproveModal() { document.getElementById('approveModal').style.display = 'none'; }
 

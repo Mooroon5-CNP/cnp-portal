@@ -1,0 +1,88 @@
+<!-- First-login onboarding modal — shown once via localStorage -->
+<div id="onboarding-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);width:600px;max-width:95vw;max-height:90vh;overflow-y:auto;border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.3);padding:32px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+      <div>
+        <h2 style="margin:0 0 4px;font-size:20px;">Bienvenue sur CNP Portal 👋</h2>
+        <p style="margin:0;font-size:13px;color:var(--text-muted);">Voici un rapide tour de la plateforme pour bien démarrer.</p>
+      </div>
+      <button onclick="closeOnboarding()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--text-muted);line-height:1;">×</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px;margin-bottom:28px;">
+
+      <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--surface-alt,#f8f9fa);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-size:22px;flex-shrink:0;">⬆</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px;">Déploiements</div>
+          <div style="font-size:13px;color:var(--text-muted);line-height:1.5;">Créez et suivez vos applications déployées sur GCP Cloud Run. Connectez un dépôt GitHub et la plateforme configure automatiquement le pipeline CI/CD, les secrets et les manifests Kubernetes.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--surface-alt,#f8f9fa);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-size:22px;flex-shrink:0;">⟳</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px;">ArgoCD</div>
+          <div style="font-size:13px;color:var(--text-muted);line-height:1.5;">Demandez un accès ArgoCD pour surveiller vos déploiements GitOps en temps réel. Un manager approuve votre demande et vos identifiants sont créés automatiquement.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--surface-alt,#f8f9fa);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-size:22px;flex-shrink:0;">📄</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px;">Documentation</div>
+          <div style="font-size:13px;color:var(--text-muted);line-height:1.5;">Consultez le <strong>Guide Développeur</strong> pour comprendre le workflow de déploiement et le <strong>Platform Contract</strong> qui définit les responsabilités de chacun. Les DevOps ont accès à une documentation technique supplémentaire.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--surface-alt,#f8f9fa);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-size:22px;flex-shrink:0;">◫</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px;">Équipes</div>
+          <div style="font-size:13px;color:var(--text-muted);line-height:1.5;">Rejoignez ou créez une équipe pour partager l'accès à vos déploiements. L'équipe propriétaire d'une application peut en voir les ressources K8s et les logs.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:rgba(99,102,241,0.06);border-radius:8px;border:1px solid rgba(99,102,241,0.25);">
+        <div style="font-size:22px;flex-shrink:0;">🚀</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:4px;">Workflow de déploiement</div>
+          <div style="font-size:13px;color:var(--text-muted);line-height:1.5;">
+            <strong>1.</strong> Créer un déploiement → <strong>2.</strong> Le pipeline CI/CD se configure automatiquement → <strong>3.</strong> Pousser du code sur votre dépôt → <strong>4.</strong> Le CI build et push l'image → <strong>5.</strong> ArgoCD déploie sur Cloud Run (~10 min).
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer;">
+        <input type="checkbox" id="onboarding-no-show" style="accent-color:var(--primary);">
+        Ne plus afficher
+      </label>
+      <div style="display:flex;gap:10px;">
+        <a href="/docs" class="btn btn-secondary">Lire la documentation</a>
+        <button onclick="closeOnboarding()" class="btn btn-primary">C'est parti !</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const STORAGE_KEY = 'cnp_onboarding_v1_done';
+  const modal = document.getElementById('onboarding-modal');
+
+  function closeOnboarding() {
+    modal.style.display = 'none';
+    if (document.getElementById('onboarding-no-show').checked) {
+      localStorage.setItem(STORAGE_KEY, '1');
+    }
+  }
+  window.closeOnboarding = closeOnboarding;
+
+  if (!localStorage.getItem(STORAGE_KEY)) {
+    modal.style.display = 'flex';
+  }
+})();
+</script>

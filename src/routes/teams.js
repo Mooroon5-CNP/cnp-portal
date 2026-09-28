@@ -17,7 +17,7 @@ router.get('/', requireAuth, requirePermission('teams:view'), (req, res) => {
 
   res.render('admin/teams', {
     title: 'Équipes — CNP Portal',
-    currentPage: 'admin',
+    currentPage: 'teams',
     teams: visibleTeams,
     allUsers,
     user: req.user,
