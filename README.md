@@ -207,7 +207,7 @@ The deployment detail page (`/deployments/:id`) has an **Observabilité** tab ne
 
 | Block | Source | Notes |
 |---|---|---|
-| Golden signals (latency p50/p95/p99, error rate, traffic) | Datadog metrics API, scoped with `service:{appName}` | Needs APM traces (`trace.web.request.*`). Shows `—` and an explanatory hint when nothing was received in the last 5 minutes. |
+| Golden signals (latency p50/p95/p99, error rate, traffic) | Datadog metrics API, scoped with `service:{appName}` | Needs APM traces (`trace.web.request.*`, i.e. `dd-trace` in the app). The three cards are hidden, with a one-line note, when nothing was received in the last 5 minutes. |
 | Kubernetes (pods, CPU in mCPU, memory in MiB, restarts) per environment | `kubernetes.*` / `kubernetes_state.*` metrics from the Datadog Agent, scoped with `kube_namespace:{appName}-dev` and `{appName}-prod` | No instrumentation needed — works for any app the Agent can see. Shows a hint when no pod is found in either namespace. |
 | Cloud Run (requests, CPU, memory) | `gcp.run.*` metrics, scoped with `service_name:{appName}` | Needs the Datadog GCP integration. Only shown for `gcp` apps that have a Cloud Run URL or received data. |
 | Recent logs | Datadog Logs search, `service:{appName}`, last hour, 100 entries | |

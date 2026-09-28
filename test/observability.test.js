@@ -238,10 +238,26 @@ describe('Observability tab partial', () => {
     expect(html).toContain('Données Datadog indisponibles');
   });
 
-  test('shows the APM hint when every golden signal is "—"', async () => {
+  test('hides the latency/error/traffic cards, with a discreet note, when there is no APM data', async () => {
     const html = await render({ ddMetrics: EMPTY_METRICS });
-    expect(html).toContain('aucune métrique reçue de Datadog pour');
+    expect(html).not.toContain('Latence (p50');
+    expect(html).not.toContain("Taux d'erreur");
+    expect(html).not.toContain('metric-card');
+    expect(html).toContain('masqués');
     expect(html).toContain('service:my-app');
+  });
+
+  test('shows the latency/error/traffic cards when APM data is present', async () => {
+    const html = await render();
+    expect(html).toContain('Latence (p50');
+    expect(html).toContain("Taux d'erreur");
+    expect(html).toContain('Trafic');
+    expect(html).not.toContain('masqués');
+  });
+
+  test('a single golden signal with data is enough to show the cards', async () => {
+    const html = await render({ ddMetrics: { ...EMPTY_METRICS, traffic: { rps: 2.5, unit: 'req/s' } } });
+    expect(html).toContain('Latence (p50');
   });
 
   test('renders the Kubernetes table per environment and flags restarts', async () => {
@@ -266,7 +282,7 @@ describe('Observability tab partial', () => {
 
   test('renders metrics and the Cloud Run card for a GCP app with data', async () => {
     const html = await render();
-    expect(html).not.toContain('aucune métrique reçue');
+    expect(html).not.toContain('masqués');
     expect(html).toContain('Cloud Run (GCP)');
     expect(html).toContain('1234');
   });
