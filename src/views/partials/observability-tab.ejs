@@ -5,6 +5,24 @@
   </div>
 </div>
 <% } else { %>
+<%
+  var NO_DATA = '—';
+  var golden = [ddMetrics.latency.p50, ddMetrics.latency.p95, ddMetrics.latency.p99, ddMetrics.errorRate.value,
+                ddMetrics.saturation.cpu, ddMetrics.saturation.memory, ddMetrics.traffic.rps];
+  var noGoldenData = golden.every(function(v) { return v === NO_DATA; });
+  var cr = ddMetrics.cloudRun;
+  var crHasData = !!cr && (cr.requests !== NO_DATA || cr.cpu !== NO_DATA || cr.memory !== NO_DATA);
+  // Cloud Run only exists for GCP apps; show the card once a URL is known or metrics are flowing.
+  var showCloudRun = !!cr && deployment.targetCluster === 'gcp' && (crHasData || !!deployment.cloudRunUrl);
+%>
+<% if (noGoldenData) { %>
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-body" style="color:var(--text-muted);font-size:13px;">
+    Aucune métrique reçue de Datadog pour <strong><%= deployment.appName %></strong> sur les 5 dernières minutes.
+    Les métriques de latence, d'erreurs et de trafic nécessitent l'APM (traces) avec le tag <code>service:<%= deployment.appName %></code>.
+  </div>
+</div>
+<% } %>
 
 <div class="grid-2 mb-6" style="margin-bottom:16px;">
   <div class="metric-card card">
@@ -29,7 +47,7 @@
   </div>
 </div>
 
-<% if (ddMetrics.cloudRun) { %>
+<% if (showCloudRun) { %>
 <div class="card" style="margin-bottom:16px;">
   <div class="card-header">
     <span class="card-title">Cloud Run (GCP)</span>

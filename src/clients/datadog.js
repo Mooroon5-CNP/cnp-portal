@@ -66,21 +66,19 @@ async function getGoldenSignals(serviceName) {
   const toPct  = v => v !== null ? Math.round(v * 10) / 10 : '—';
   const toRate = v => v !== null ? Math.round(v * 10) / 10 : '—';
 
-  // Cloud Run GCP metrics — isolated block: if GCP integration is not active in Datadog,
-  // the golden signals above must still be returned normally.
-  let cloudRun = { requests: '—', cpu: '—', memory: '—' };
-  try {
-    const [crReqRaw, crCpuRaw, crMemRaw] = await Promise.all([
-      query(`sum:gcp.run.request_count{service_name:${serviceName}}.as_count()`),
-      query(`avg:gcp.run.container.cpu.utilizations{service_name:${serviceName}}`),
-      query(`avg:gcp.run.container.memory.utilizations{service_name:${serviceName}}`),
-    ]);
-    cloudRun = {
-      requests: crReqRaw !== null ? Math.round(crReqRaw) : '—',
-      cpu:      toPct(crCpuRaw !== null ? crCpuRaw * 100 : null),
-      memory:   toPct(crMemRaw !== null ? crMemRaw * 100 : null),
-    };
-  } catch (_) {}
+  // Cloud Run GCP metrics (requires the GCP integration in Datadog). query() never rejects —
+  // it resolves to null when a metric is missing — so an inactive integration only yields '—'
+  // here and never affects the golden signals above.
+  const [crReqRaw, crCpuRaw, crMemRaw] = await Promise.all([
+    query(`sum:gcp.run.request_count{service_name:${serviceName}}.as_count()`),
+    query(`avg:gcp.run.container.cpu.utilizations{service_name:${serviceName}}`),
+    query(`avg:gcp.run.container.memory.utilizations{service_name:${serviceName}}`),
+  ]);
+  const cloudRun = {
+    requests: crReqRaw !== null ? Math.round(crReqRaw) : '—',
+    cpu:      toPct(crCpuRaw !== null ? crCpuRaw * 100 : null),
+    memory:   toPct(crMemRaw !== null ? crMemRaw * 100 : null),
+  };
 
   return {
     latency: {

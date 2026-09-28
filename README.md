@@ -87,7 +87,7 @@ src/
 │   ├── teams.js                Team management routes
 │   ├── argocd.js               ArgoCD — app listing, sync, access-request workflow (request / approve / reject)
 │   ├── k8s.js                  Pod/namespace/event views
-│   ├── observability.js        Datadog metrics, logs, alerts
+│   ├── observability.js        Datadog metrics, logs, alerts + per-app monitor silence/unsilence
 │   ├── profile.js              User profile
 │   ├── health.js               /api/health JSON endpoint
 │   └── documentation.js        In-app docs viewer
@@ -198,6 +198,23 @@ a manager can then create the ArgoCD account manually using those same credentia
 ```
 
 Apply the Role + RoleBinding from bootstrap step 4 below. Without it, ApplicationSets are not applied and ArgoCD will never watch the app — CI runs will build the image but nothing will deploy. The portal logs a warning in that case but still completes onboarding.
+
+---
+
+## Per-app observability
+
+The deployment detail page (`/deployments/:id`) has an **Observabilité** tab next to **Pipeline**. It is populated only when the app's onboarding status is `ready`, and each Datadog call is independent and non-blocking: if Datadog is down, the page still renders and the tab shows "indisponible" / empty states.
+
+| Block | Source | Notes |
+|---|---|---|
+| Golden signals (latency p50/p95/p99, error rate, CPU/memory, traffic) | Datadog metrics API, scoped with `service:{appName}` | Needs APM traces (`trace.web.request.*`) and Agent system metrics carrying the `service` tag. Shows `—` and an explanatory hint when nothing was received in the last 5 minutes. |
+| Cloud Run (requests, CPU, memory) | `gcp.run.*` metrics, scoped with `service_name:{appName}` | Needs the Datadog GCP integration. Only shown for `gcp` apps that have a Cloud Run URL or received data. |
+| Recent logs | Datadog Logs search, `service:{appName}`, last hour, 100 entries | |
+| Alerts | Datadog monitors tagged `service:{appName}` | **Silencer** / **Réactiver** call `POST /observability/monitors/:id/silence` and `/unsilence` (Datadog `mute` / `unmute`). Requires `observability:alerts:silence` (`devops`, `manager`). |
+
+Viewing the tab requires `observability:metrics:view` (all roles). The silence/unsilence routes accept an optional `redirectTo` form field to return to the calling page; only same-origin paths (`/…`) are honored, anything else falls back to `/observability/alerts`.
+
+For an app to show data, its Datadog resources must use the app name as the service: `DD_SERVICE={appName}` on the workload (already set by the onboarding configmap), and monitors created with the tag `service:{appName}`.
 
 ---
 
@@ -514,7 +531,7 @@ ArgoCD project used for all apps: `platform` (defined in `config-repo/argocd/pro
 npm test
 ```
 
-Tests live in `test/index.test.js`. The CI pipeline runs them on every push.
+Tests live in `test/`: `index.test.js` (health, auth, RBAC, user model) and `observability.test.js` (Datadog client/service, silence/unsilence routes, deployment observability tab). Datadog is fully mocked — no network access or real credentials needed. Lint with `npm run lint`.
 
 ---
 
