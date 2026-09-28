@@ -28,12 +28,15 @@ const app = require('../src/index');
 
 const TAB = path.join(__dirname, '../src/views/partials/observability-tab.ejs');
 
+const NO_KUBE = { pods: '—', cpu: '—', memory: '—', restarts: '—' };
+
 const EMPTY_METRICS = {
   latency: { p50: '—', p95: '—', p99: '—', unit: 'ms' },
   errorRate: { value: '—', unit: '%' },
   saturation: { cpu: '—', memory: '—', unit: '%' },
   traffic: { rps: '—', unit: 'req/s' },
   cloudRun: { requests: '—', cpu: '—', memory: '—' },
+  kubernetes: { dev: NO_KUBE, prod: NO_KUBE },
 };
 
 const WITH_METRICS = {
@@ -42,6 +45,10 @@ const WITH_METRICS = {
   saturation: { cpu: 31.5, memory: 47.2, unit: '%' },
   traffic: { rps: 5.3, unit: 'req/s' },
   cloudRun: { requests: 1234, cpu: 22.1, memory: 40.8 },
+  kubernetes: {
+    dev: { pods: 2, cpu: 35.5, memory: 210, restarts: 0 },
+    prod: { pods: 3, cpu: 120.2, memory: 480, restarts: 4 },
+  },
 };
 
 beforeEach(() => {
@@ -112,6 +119,53 @@ describe('Datadog client — getGoldenSignals', () => {
   });
 });
 
+describe('Datadog client — getKubernetesUsage', () => {
+  const seriesFor = (ns, value) => ({ scope: `kube_namespace:${ns},(kube_namespace:a-dev OR kube_namespace:a-prod)`, pointlist: [[1, null], [2, value]] });
+
+  test('issues one grouped query per metric with an exact OR scope', async () => {
+    http.get.mockResolvedValue({ data: { series: [] } });
+    await ddClient.getKubernetesUsage(['a-dev', 'a-prod']);
+    const queries = http.get.mock.calls.map(([, { params }]) => params.query);
+    expect(queries).toHaveLength(4);
+    queries.forEach(q => {
+      expect(q).toContain('{kube_namespace:a-dev OR kube_namespace:a-prod} by {kube_namespace}');
+    });
+  });
+
+  test('converts nanocores to mCPU and bytes to MiB, per namespace', async () => {
+    http.get.mockImplementation((_url, { params }) => {
+      const q = params.query;
+      if (q.includes('kubernetes.cpu.usage.total')) return Promise.resolve({ data: { series: [seriesFor('a-dev', 35.5e6), seriesFor('a-prod', 120.2e6)] } });
+      if (q.includes('kubernetes.memory.usage')) return Promise.resolve({ data: { series: [seriesFor('a-dev', 210 * 1048576)] } });
+      if (q.includes('kubernetes.pods.running')) return Promise.resolve({ data: { series: [seriesFor('a-dev', 2), seriesFor('a-prod', 3)] } });
+      if (q.includes('container.restarts')) return Promise.resolve({ data: { series: [seriesFor('a-prod', 4)] } });
+      return Promise.resolve({ data: { series: [] } });
+    });
+    const usage = await ddClient.getKubernetesUsage(['a-dev', 'a-prod']);
+    expect(usage['a-dev']).toEqual({ pods: 2, cpu: 35.5, memory: 210, restarts: '—' });
+    expect(usage['a-prod']).toEqual({ pods: 3, cpu: 120.2, memory: '—', restarts: 4 });
+  });
+
+  test('returns "—" for a namespace that reports nothing', async () => {
+    http.get.mockResolvedValue({ data: { series: [] } });
+    expect(await ddClient.getKubernetesUsage(['a-dev'])).toEqual({ 'a-dev': NO_KUBE });
+  });
+
+  test('a failing metric query only blanks that metric', async () => {
+    http.get.mockImplementation((_url, { params }) => (params.query.includes('kubernetes.memory.usage')
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({ data: { series: [seriesFor('a-dev', 3)] } })));
+    const usage = await ddClient.getKubernetesUsage(['a-dev']);
+    expect(usage['a-dev'].memory).toBe('—');
+    expect(usage['a-dev'].pods).toBe(3);
+  });
+
+  test('ignores namespaces that were not requested', async () => {
+    http.get.mockResolvedValue({ data: { series: [seriesFor('other-ns', 9)] } });
+    expect(await ddClient.getKubernetesUsage(['a-dev'])).toEqual({ 'a-dev': NO_KUBE });
+  });
+});
+
 // ---------------------------------------------------------------------------
 describe('Datadog service', () => {
   test('unsilenceAlert converts the id to a number and delegates to the client', async () => {
@@ -124,6 +178,28 @@ describe('Datadog service', () => {
     http.get.mockResolvedValue({ data: { series: [] } });
     await ddServiceActual.getMetrics('my-app');
     expect(http.get.mock.calls.every(([, { params }]) => params.query.includes('my-app'))).toBe(true);
+  });
+
+  test('getMetrics(appName) adds Kubernetes usage for {app}-dev and {app}-prod', async () => {
+    http.get.mockImplementation((_url, { params }) => {
+      const q = params.query;
+      if (q.includes('kubernetes.pods.running')) {
+        return Promise.resolve({ data: { series: [{ scope: 'kube_namespace:my-app-prod,(x)', pointlist: [[1, 3]] }] } });
+      }
+      return Promise.resolve({ data: { series: [] } });
+    });
+    const m = await ddServiceActual.getMetrics('my-app');
+    expect(m.kubernetes.prod.pods).toBe(3);
+    expect(m.kubernetes.dev).toEqual(NO_KUBE);
+    const k8sQuery = http.get.mock.calls.map(([, { params }]) => params.query).find(q => q.includes('kubernetes.pods.running'));
+    expect(k8sQuery).toContain('kube_namespace:my-app-dev OR kube_namespace:my-app-prod');
+  });
+
+  test('getMetrics() without an app does not query Kubernetes', async () => {
+    http.get.mockResolvedValue({ data: { series: [] } });
+    const m = await ddServiceActual.getMetrics();
+    expect(m.kubernetes).toBeUndefined();
+    expect(http.get.mock.calls.some(([, { params }]) => params.query.includes('kubernetes'))).toBe(false);
   });
 
   test('getMetrics falls back to a full "—" shape including cloudRun when Datadog fails', async () => {
@@ -141,7 +217,7 @@ describe('Datadog service', () => {
     });
     const alerts = await ddServiceActual.getAlerts('my-app');
     expect(alerts.map(a => [a.id, a.status, a.silenced])).toEqual([['1', 'ALERT', true], ['2', 'OK', false]]);
-    expect(http.get).toHaveBeenCalledWith('/api/v1/monitor', { params: { tags: 'service:my-app' } });
+    expect(http.get).toHaveBeenCalledWith('/api/v1/monitor', { params: { monitor_tags: 'service:my-app' } });
   });
 });
 
@@ -164,13 +240,33 @@ describe('Observability tab partial', () => {
 
   test('shows the APM hint when every golden signal is "—"', async () => {
     const html = await render({ ddMetrics: EMPTY_METRICS });
-    expect(html).toContain('Aucune métrique reçue de Datadog pour');
+    expect(html).toContain('aucune métrique reçue de Datadog pour');
     expect(html).toContain('service:my-app');
+  });
+
+  test('renders the Kubernetes table per environment and flags restarts', async () => {
+    const html = await render();
+    expect(html).toContain('my-app-dev');
+    expect(html).toContain('my-app-prod');
+    expect(html).toContain('480');
+    expect(html).toContain('color: var(--danger)');
+  });
+
+  test('explains when no pod is found in either namespace', async () => {
+    const html = await render({ ddMetrics: { ...WITH_METRICS, kubernetes: EMPTY_METRICS.kubernetes } });
+    expect(html).toContain('Aucun pod détecté dans');
+    expect(html).not.toContain('Redémarrages');
+  });
+
+  test('does not crash when the metrics have no kubernetes block', async () => {
+    const { kubernetes, ...withoutKube } = WITH_METRICS; // eslint-disable-line no-unused-vars
+    const html = await render({ ddMetrics: withoutKube });
+    expect(html).toContain('Aucun pod détecté dans');
   });
 
   test('renders metrics and the Cloud Run card for a GCP app with data', async () => {
     const html = await render();
-    expect(html).not.toContain('Aucune métrique reçue');
+    expect(html).not.toContain('aucune métrique reçue');
     expect(html).toContain('Cloud Run (GCP)');
     expect(html).toContain('1234');
   });

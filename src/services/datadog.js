@@ -23,10 +23,24 @@ async function getLogs(serviceFilter = null) {
   }
 }
 
+const KUBE_ENVS = ['dev', 'prod'];
+const NO_KUBE_USAGE = { pods: '—', cpu: '—', memory: '—', restarts: '—' };
+
+// Onboarded apps run in `{app}-dev` and `{app}-prod` namespaces (see tplOverlayKustomization).
+async function getKubernetesByEnv(appName) {
+  const namespaces = KUBE_ENVS.map(env => `${appName}-${env}`);
+  const usage = await client.getKubernetesUsage(namespaces);
+  return Object.fromEntries(KUBE_ENVS.map(env => [env, usage[`${appName}-${env}`] || NO_KUBE_USAGE]));
+}
+
+// Without appName: portal-level golden signals. With appName: golden signals scoped to that
+// app plus its Kubernetes usage per environment.
 async function getMetrics(appName = null) {
   try {
     const service = appName || SERVICE_NAME;
-    return await client.getGoldenSignals(service);
+    const signals = await client.getGoldenSignals(service);
+    if (!appName) return signals;
+    return { ...signals, kubernetes: await getKubernetesByEnv(appName) };
   } catch (err) {
     console.error('[datadog] getMetrics error:', err.message);
     return {
@@ -35,6 +49,7 @@ async function getMetrics(appName = null) {
       saturation: { cpu: '—', memory: '—', unit: '%' },
       traffic:    { rps: '—', unit: 'req/s' },
       cloudRun:   { requests: '—', cpu: '—', memory: '—' },
+      kubernetes: Object.fromEntries(KUBE_ENVS.map(env => [env, NO_KUBE_USAGE])),
     };
   }
 }

@@ -104,6 +104,53 @@ async function getGoldenSignals(serviceName) {
   };
 }
 
+// Kubernetes usage per namespace, from the Datadog Agent's kubernetes.* / kubernetes_state.*
+// metrics. Works for any app without instrumentation (unlike APM), as long as the Agent runs on
+// the cluster. One query per metric, grouped by namespace, so the cost does not grow with the
+// number of namespaces. Values are '—' for a namespace that reports nothing (e.g. not deployed).
+async function getKubernetesUsage(namespaces) {
+  const client = makeClient();
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - 300;
+  const scope = namespaces.map(ns => `kube_namespace:${ns}`).join(' OR ');
+
+  // Resolves to { [namespace]: lastValue }; never rejects (a missing metric just yields {}).
+  function byNamespace(q) {
+    return client.get('/api/v1/query', { params: { query: `${q}{${scope}} by {kube_namespace}`, from, to: now } })
+      .then(r => {
+        const out = {};
+        for (const s of r.data?.series || []) {
+          const ns = /(?:^|,)kube_namespace:([^,()\s]+)/.exec(s.scope || '')?.[1];
+          const last = (s.pointlist || []).filter(p => p[1] !== null).pop();
+          if (ns && last) out[ns] = last[1];
+        }
+        return out;
+      })
+      .catch(() => ({}));
+  }
+
+  const [cpu, memory, pods, restarts] = await Promise.all([
+    byNamespace('sum:kubernetes.cpu.usage.total'),   // nanocores
+    byNamespace('sum:kubernetes.memory.usage'),      // bytes
+    byNamespace('sum:kubernetes.pods.running'),
+    byNamespace('sum:kubernetes_state.container.restarts'),
+  ]);
+
+  const round1 = v => Math.round(v * 10) / 10;
+  const pick = (metric, ns, fn) => (metric[ns] !== undefined ? fn(metric[ns]) : '—');
+
+  const usage = {};
+  for (const ns of namespaces) {
+    usage[ns] = {
+      pods:     pick(pods, ns, Math.round),
+      cpu:      pick(cpu, ns, v => round1(v / 1e6)),               // millicores
+      memory:   pick(memory, ns, v => Math.round(v / 1048576)),    // MiB
+      restarts: pick(restarts, ns, Math.round),
+    };
+  }
+  return usage;
+}
+
 async function getLogs(serviceName, limit = 50) {
   const client = makeClient();
   try {
@@ -121,8 +168,10 @@ async function getLogs(serviceName, limit = 50) {
 async function getMonitors(serviceName) {
   const client = makeClient();
   try {
+    // monitor_tags filters on the tags set on the monitor itself; the `tags` param would filter
+    // on scope tags (host:…) and never match `service:{app}`.
     const { data } = await client.get('/api/v1/monitor', {
-      params: { tags: `service:${serviceName}` },
+      params: { monitor_tags: `service:${serviceName}` },
     });
     return Array.isArray(data) ? data : [];
   } catch (err) {
@@ -175,4 +224,4 @@ async function checkConnectivity() {
   }
 }
 
-module.exports = { getGoldenSignals, getLogs, getMonitors, silenceMonitor, unsilenceMonitor, createMonitor, checkConnectivity };
+module.exports = { getGoldenSignals, getKubernetesUsage, getLogs, getMonitors, silenceMonitor, unsilenceMonitor, createMonitor, checkConnectivity };

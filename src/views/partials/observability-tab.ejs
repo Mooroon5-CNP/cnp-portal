@@ -8,7 +8,10 @@
 <%
   var NO_DATA = '—';
   var golden = [ddMetrics.latency.p50, ddMetrics.latency.p95, ddMetrics.latency.p99, ddMetrics.errorRate.value,
-                ddMetrics.saturation.cpu, ddMetrics.saturation.memory, ddMetrics.traffic.rps];
+                ddMetrics.traffic.rps];
+  var kube = ddMetrics.kubernetes || {};
+  var kubeEnvs = ['dev', 'prod'].filter(function(env) { return kube[env]; });
+  var hasKubeData = kubeEnvs.some(function(env) { return kube[env].pods !== NO_DATA; });
   var noGoldenData = golden.every(function(v) { return v === NO_DATA; });
   var cr = ddMetrics.cloudRun;
   var crHasData = !!cr && (cr.requests !== NO_DATA || cr.cpu !== NO_DATA || cr.memory !== NO_DATA);
@@ -18,13 +21,13 @@
 <% if (noGoldenData) { %>
 <div class="card" style="margin-bottom:16px;">
   <div class="card-body" style="color:var(--text-muted);font-size:13px;">
-    Aucune métrique reçue de Datadog pour <strong><%= deployment.appName %></strong> sur les 5 dernières minutes.
-    Les métriques de latence, d'erreurs et de trafic nécessitent l'APM (traces) avec le tag <code>service:<%= deployment.appName %></code>.
+    Latence, erreurs et trafic : aucune métrique reçue de Datadog pour <strong><%= deployment.appName %></strong> sur les 5 dernières minutes.
+    Ces métriques nécessitent l'APM (traces) avec le tag <code>service:<%= deployment.appName %></code>.
   </div>
 </div>
 <% } %>
 
-<div class="grid-2 mb-6" style="margin-bottom:16px;">
+<div class="grid-3 mb-6" style="margin-bottom:16px;">
   <div class="metric-card card">
     <div class="metric-name">Latence (p50 / p95 / p99)</div>
     <div class="metric-value"><%= ddMetrics.latency.p50 %></div>
@@ -36,15 +39,42 @@
     <div class="metric-unit"><%= ddMetrics.errorRate.unit %></div>
   </div>
   <div class="metric-card card">
-    <div class="metric-name">Saturation (CPU / Mémoire)</div>
-    <div class="metric-value" style="color: <%= ddMetrics.saturation.cpu !== '—' && ddMetrics.saturation.cpu > 80 ? 'var(--danger)' : 'var(--text)' %>"><%= ddMetrics.saturation.cpu %></div>
-    <div class="metric-unit"><%= ddMetrics.saturation.unit %> CPU · <%= ddMetrics.saturation.memory %><%= ddMetrics.saturation.unit %> Mémoire</div>
-  </div>
-  <div class="metric-card card">
     <div class="metric-name">Trafic</div>
     <div class="metric-value"><%= ddMetrics.traffic.rps %></div>
     <div class="metric-unit"><%= ddMetrics.traffic.unit %></div>
   </div>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Kubernetes</span>
+    <span class="badge badge-gray">5 dernières minutes</span>
+  </div>
+  <% if (!hasKubeData) { %>
+  <div class="card-body" style="color:var(--text-muted);font-size:13px;">
+    Aucun pod détecté dans <code><%= deployment.appName %>-dev</code> ni <code><%= deployment.appName %>-prod</code>
+    (application non déployée sur Kubernetes, ou Agent Datadog indisponible).
+  </div>
+  <% } else { %>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr><th>Environnement</th><th>Pods</th><th>CPU (mCPU)</th><th>Mémoire (MiB)</th><th>Redémarrages</th></tr>
+      </thead>
+      <tbody>
+        <% kubeEnvs.forEach(function(env) { var u = kube[env]; %>
+        <tr>
+          <td><span class="font-mono"><%= deployment.appName %>-<%= env %></span></td>
+          <td><%= u.pods %></td>
+          <td><%= u.cpu %></td>
+          <td><%= u.memory %></td>
+          <td style="color: <%= u.restarts !== NO_DATA && u.restarts > 0 ? 'var(--danger)' : 'inherit' %>"><%= u.restarts %></td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
 </div>
 
 <% if (showCloudRun) { %>
