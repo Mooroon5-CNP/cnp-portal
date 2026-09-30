@@ -8,12 +8,11 @@ Ce document liste **uniquement** les éléments propres à l'application **test-
 
 ## Valeurs actuelles (projet `cnp-terraform-500015`)
 
-| Variable `.env` | Valeur actuelle |
-|---|---|
-| `GCP_PROJECT` | `cnp-terraform-500015` |
-| `KUBE_API_URL` | `https://34.163.86.239` |
-| `ARGOCD_SERVER_URL` | `http://argocd.34.155.213.145.nip.io` |
-| `ARGOCD_UI_URL` | `http://argocd.34.155.213.145.nip.io` |
+| Variable `.env` |
+| `GCP_PROJECT` | 
+| `KUBE_API_URL` | 
+| `ARGOCD_SERVER_URL` |
+| `ARGOCD_UI_URL` | 
 
 ---
 

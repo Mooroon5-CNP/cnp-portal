@@ -1,0 +1,12 @@
+{
+  "name": "@cnp/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "schemas": "node src/generate-json-schema.js"
+  },
+  "peerDependencies": {
+    "zod": "^4.1.12"
+  }
+}

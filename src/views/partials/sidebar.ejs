@@ -48,6 +48,9 @@
   <div class="nav-section">
     <div class="nav-section-label">Outils</div>
     <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'mcp-chat' ? 'active' : '' %>">
+        <a href="/mcp-chat"><span class="nav-icon">◇</span> Assistant MCP</a>
+      </li>
       <li class="<%= locals.currentPage === 'argocd' ? 'active' : '' %>">
         <a href="/argocd"><span class="nav-icon">⟳</span> ArgoCD</a>
       </li>

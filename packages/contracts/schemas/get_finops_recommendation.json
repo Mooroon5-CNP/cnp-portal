@@ -1,0 +1,670 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "get_finops_recommendation",
+  "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "applicationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "environment": {
+        "type": "string",
+        "enum": [
+          "dev",
+          "prod"
+        ]
+      },
+      "observationWindowDays": {
+        "anyOf": [
+          {
+            "type": "number",
+            "const": 7
+          },
+          {
+            "type": "number",
+            "const": 14
+          },
+          {
+            "type": "number",
+            "const": 30
+          }
+        ]
+      }
+    },
+    "required": [
+      "applicationId",
+      "environment"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "const": "get_finops_recommendation"
+              },
+              "schemaVersion": {
+                "type": "string",
+                "const": "1.0"
+              },
+              "correlationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable",
+                        "not_configured"
+                      ]
+                    },
+                    "retrievedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "tool",
+              "schemaVersion",
+              "correlationId",
+              "generatedAt",
+              "sources"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "recommendation": {
+                "type": "string",
+                "enum": [
+                  "KEEP_CURRENT_CONFIGURATION",
+                  "RESIZE_RESOURCES",
+                  "EVALUATE_CLOUD_RUN",
+                  "EVALUATE_GKE",
+                  "INSUFFICIENT_DATA"
+                ]
+              },
+              "utilization": {
+                "type": "object",
+                "properties": {
+                  "averageCpuPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "peakCpuPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "averageMemoryPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "peakMemoryPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "averageCpuPercent",
+                  "peakCpuPercent",
+                  "averageMemoryPercent",
+                  "peakMemoryPercent"
+                ],
+                "additionalProperties": false
+              },
+              "currentMonthlyCost": {
+                "type": "null"
+              },
+              "estimatedTargetCost": {
+                "type": "null"
+              },
+              "estimatedMonthlySavings": {
+                "type": "null"
+              },
+              "currency": {
+                "type": "null"
+              },
+              "confidence": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "assumptions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "risks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "prerequisites": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "nextSteps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "recommendation",
+              "utilization",
+              "currentMonthlyCost",
+              "estimatedTargetCost",
+              "estimatedMonthlySavings",
+              "currency",
+              "confidence",
+              "assumptions",
+              "risks",
+              "prerequisites",
+              "nextSteps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "meta",
+          "warnings",
+          "errors",
+          "status",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "const": "get_finops_recommendation"
+              },
+              "schemaVersion": {
+                "type": "string",
+                "const": "1.0"
+              },
+              "correlationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable",
+                        "not_configured"
+                      ]
+                    },
+                    "retrievedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "tool",
+              "schemaVersion",
+              "correlationId",
+              "generatedAt",
+              "sources"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "status": {
+            "type": "string",
+            "const": "partial"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "recommendation": {
+                "type": "string",
+                "enum": [
+                  "KEEP_CURRENT_CONFIGURATION",
+                  "RESIZE_RESOURCES",
+                  "EVALUATE_CLOUD_RUN",
+                  "EVALUATE_GKE",
+                  "INSUFFICIENT_DATA"
+                ]
+              },
+              "utilization": {
+                "type": "object",
+                "properties": {
+                  "averageCpuPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "peakCpuPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "averageMemoryPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "peakMemoryPercent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "averageCpuPercent",
+                  "peakCpuPercent",
+                  "averageMemoryPercent",
+                  "peakMemoryPercent"
+                ],
+                "additionalProperties": false
+              },
+              "currentMonthlyCost": {
+                "type": "null"
+              },
+              "estimatedTargetCost": {
+                "type": "null"
+              },
+              "estimatedMonthlySavings": {
+                "type": "null"
+              },
+              "currency": {
+                "type": "null"
+              },
+              "confidence": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "assumptions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "risks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "prerequisites": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "nextSteps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "recommendation",
+              "utilization",
+              "currentMonthlyCost",
+              "estimatedTargetCost",
+              "estimatedMonthlySavings",
+              "currency",
+              "confidence",
+              "assumptions",
+              "risks",
+              "prerequisites",
+              "nextSteps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "meta",
+          "warnings",
+          "errors",
+          "status",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "const": "get_finops_recommendation"
+              },
+              "schemaVersion": {
+                "type": "string",
+                "const": "1.0"
+              },
+              "correlationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable",
+                        "not_configured"
+                      ]
+                    },
+                    "retrievedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "tool",
+              "schemaVersion",
+              "correlationId",
+              "generatedAt",
+              "sources"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "errors": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "status": {
+            "type": "string",
+            "const": "error"
+          },
+          "data": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "meta",
+          "warnings",
+          "errors",
+          "status",
+          "data"
+        ],
+        "additionalProperties": false
+      }
+    ],
+    "type": "object"
+  }
+}

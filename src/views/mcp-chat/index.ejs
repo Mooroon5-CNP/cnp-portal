@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head') %>
+<body>
+  <div class="layout">
+    <%- include('../partials/sidebar') %>
+    <main class="main-content">
+      <div class="mcp-chat-shell" data-mcp-chat data-csrf-token="<%= csrfToken %>">
+        <header class="mcp-chat-header">
+          <div>
+            <h1 class="page-title">Assistant MCP</h1>
+            <p class="page-subtitle">Consultation sécurisée des opérations CNP</p>
+          </div>
+          <span class="mcp-readonly-status"><span aria-hidden="true"></span> Lecture seule</span>
+        </header>
+
+        <div class="mcp-context-bar" aria-label="Contexte courant">
+          <label>
+            <span>Application</span>
+            <select data-context-application>
+              <option value="">Non sélectionnée</option>
+            </select>
+          </label>
+          <label>
+            <span>Environnement</span>
+            <select data-context-environment>
+              <option value="">Non sélectionné</option>
+              <option value="development">development</option>
+              <option value="staging">staging</option>
+              <option value="production">production</option>
+            </select>
+          </label>
+        </div>
+
+        <section class="mcp-conversation" aria-live="polite" aria-label="Conversation">
+          <div class="mcp-empty-state" data-empty-state>
+            <div class="mcp-mark" aria-hidden="true">M</div>
+            <h2>Que souhaitez-vous consulter ?</h2>
+            <div class="mcp-prompts">
+              <button type="button" data-prompt="Liste les applications disponibles">Applications</button>
+              <button type="button" data-prompt="Quel est le statut du déploiement majoutes-api en dev ?">Déploiement</button>
+              <button type="button" data-prompt="Montre les logs de majoutes-api en dev">Logs</button>
+              <button type="button" data-prompt="Donne une recommandation FinOps pour majoutes-api en dev">FinOps</button>
+            </div>
+          </div>
+          <div class="mcp-messages" data-messages></div>
+        </section>
+
+        <form class="mcp-composer" data-composer>
+          <label for="mcp-message" class="sr-only">Votre question</label>
+          <textarea id="mcp-message" name="message" maxlength="4000" rows="1" placeholder="Posez une question sur la plateforme..." required></textarea>
+          <button type="submit" class="mcp-send" aria-label="Envoyer" title="Envoyer">
+            <span aria-hidden="true">↑</span>
+          </button>
+        </form>
+      </div>
+    </main>
+  </div>
+  <script src="/js/mcp-chat.js" defer></script>
+</body>
+</html>

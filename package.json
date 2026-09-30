@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "lint": "eslint src test --ext .js",
+    "lint": "eslint src test apps packages public/js --ext .js",
     "test": "jest --forceExit"
   },
   "dependencies": {
@@ -25,7 +25,8 @@
     "libsodium-wrappers": "^0.7.13",
     "marked": "^9.1.6",
     "uuid": "^9.0.0",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "eslint": "^8.57.0",
@@ -40,7 +41,12 @@
   "jest": {
     "testEnvironment": "node",
     "testMatch": [
-      "**/test/**/*.test.js"
+      "**/test/**/*.test.js",
+      "**/apps/**/*.test.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/.kilo/worktrees/"
     ],
     "setupFiles": [
       "./test/setup.js"

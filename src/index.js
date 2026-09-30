@@ -7,8 +7,9 @@ const session = require('express-session');
 const flash = require('connect-flash');
 const path = require('path');
 const { createLogger, requestMiddleware } = require('./middleware/logger');
-const { populateUser, requirePending } = require('./middleware/auth');
+const { populateUser, requireAuth, requirePending } = require('./middleware/auth');
 const { can } = require('./middleware/rbac');
+const { buildOrchestratorRouter } = require('../apps/orchestrator/src');
 
 const app = express();
 const logger = createLogger();
@@ -77,6 +78,7 @@ app.use('/argocd',       require('./routes/argocd'));
 app.use('/docs',         require('./routes/documentation'));
 app.use('/admin',        require('./routes/admin'));
 app.use('/admin/teams',  require('./routes/teams'));
+app.use(buildOrchestratorRouter({ requireAuth }));
 
 app.use((req, res) => {
   res.status(404).render('error', { title: 'Page introuvable', message: 'Cette page n\'existe pas.', code: 404, user: req.user || null });

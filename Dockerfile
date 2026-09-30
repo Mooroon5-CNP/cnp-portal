@@ -15,6 +15,8 @@ WORKDIR /app
 RUN apk add --no-cache tini
 
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node apps/ ./apps/
+COPY --chown=node:node packages/ ./packages/
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
 COPY --chown=node:node documentation/ ./documentation/
