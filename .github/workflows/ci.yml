@@ -30,7 +30,9 @@ jobs:
           token: ${{ secrets.CONFIG_REPO_TOKEN }}
       - name: Update Cloud Run image tag
         run: |
-          sed -i "s|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/[^:]*:.*|image: europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/cnp-portal:${{ github.sha }}|" \
+          # Project-agnostic match: the GCP project id changed (cnp-terraform-500015 → -508716);
+          # the new image is built from the same REGISTRY_URL the reusable pipeline pushed to.
+          sed -i "s|image: europe-west9-docker.pkg.dev/[^/]*/cnp-registry/cnp-portal:.*|image: ${{ vars.REGISTRY_URL }}/cnp-portal:${{ github.sha }}|" \
             apps/cnp-portal/crossplane/cloudrun-claim.yaml
           git config user.email "ci-bot@cnp"
           git config user.name "CI Bot"
