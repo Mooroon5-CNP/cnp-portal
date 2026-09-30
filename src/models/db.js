@@ -19,7 +19,6 @@ db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id           TEXT PRIMARY KEY,
-    gitlab_id    INTEGER UNIQUE,
     github_id    INTEGER UNIQUE,
     username     TEXT NOT NULL UNIQUE,
     email        TEXT,
@@ -49,8 +48,8 @@ if (!adminExists) {
   const hash = bcrypt.hashSync('admin', 10);
   const now = new Date().toISOString();
   db.prepare(`
-    INSERT INTO users (id, gitlab_id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
-    VALUES (?, NULL, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
+    INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
+    VALUES (?, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
   `).run(uuidv4(), hash, now, now);
 }
 
