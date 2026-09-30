@@ -77,7 +77,7 @@ src/
 │   ├── teams.js                Team management routes
 │   ├── argocd.js               ArgoCD — app listing, sync, access-request workflow (request / approve / reject / regenerate)
 │   ├── k8s.js                  Pod/quota/event views + YAML editor (DevOps only)
-│   ├── observability.js        Datadog metrics, logs, alerts
+│   ├── observability.js        Datadog metrics, logs, alerts + per-app monitor silence/unsilence
 │   ├── profile.js              User profile
 │   ├── health.js               /api/health JSON endpoint
 │   └── documentation.js        In-app docs viewer
@@ -162,6 +162,24 @@ User revisits /argocd
 ```
 
 If the RBAC permission is missing, provisioning is logged as an error but the request is still marked approved and credentials are shown — a manager can create the ArgoCD account manually with those credentials.
+
+---
+
+## Per-app observability
+
+The deployment detail page (`/deployments/:id`) has an **Observabilité** tab next to **Pipeline**. It is populated only when the app's onboarding status is `ready`, and each Datadog call is independent and non-blocking: if Datadog is down, the page still renders and the tab shows "indisponible" / empty states.
+
+| Block | Source | Notes |
+|---|---|---|
+| Golden signals (latency p50/p95/p99, error rate, traffic) | Datadog metrics API, scoped with `service:{appName}` | Needs APM traces (`trace.web.request.*`, i.e. `dd-trace` in the app). The three cards are hidden, with a one-line note, when nothing was received in the last 5 minutes. |
+| Kubernetes (pods, CPU in mCPU, memory in MiB, restarts) per environment | `kubernetes.*` / `kubernetes_state.*` metrics from the Datadog Agent, scoped with `kube_namespace:{appName}-dev` and `{appName}-prod` | No instrumentation needed — works for any app the Agent can see. Shows a hint when no pod is found in either namespace. |
+| Cloud Run (requests, CPU, memory) | `gcp.run.*` metrics, scoped with `service_name:{appName}` | Needs the Datadog GCP integration. Only shown for `gcp` apps that have a Cloud Run URL or received data. |
+| Recent logs | Datadog Logs search, `service:{appName}`, last hour, 100 entries | |
+| Alerts | Datadog monitors tagged `service:{appName}` | **Silencer** / **Réactiver** call `POST /observability/monitors/:id/silence` and `/unsilence` (Datadog `mute` / `unmute`). Requires `observability:alerts:silence` (`devops`, `manager`). |
+
+Viewing the tab requires `observability:metrics:view` (all roles). The silence/unsilence routes accept an optional `redirectTo` form field to return to the calling page; only same-origin paths (`/…`) are honored, anything else falls back to `/observability/alerts`.
+
+For an app to show data, its Datadog resources must use the app name as the service: `DD_SERVICE={appName}` on the workload (already set by the onboarding configmap), and monitors created with the tag `service:{appName}`.
 
 ---
 
@@ -367,7 +385,7 @@ Health endpoints (no auth): `GET /healthz`, `GET /ready`
 npm test
 ```
 
-Tests live in `test/index.test.js`. The CI pipeline runs them on every push.
+Tests live in `test/`: `index.test.js` (health, auth, RBAC, user model) and `observability.test.js` (Datadog client/service, silence/unsilence routes, deployment observability tab). Datadog is fully mocked — no network access or real credentials needed. Lint with `npm run lint`.
 
 ---
 

@@ -7,6 +7,16 @@ const { requirePermission, can } = require('../middleware/rbac');
 const datadogService = require('../services/datadog');
 const teamService = require('../services/teams');
 
+const DEFAULT_REDIRECT = '/observability/alerts';
+
+// Only same-origin absolute paths are accepted. '//host' and '/\host' are rejected because
+// browsers treat them as protocol-relative URLs (open redirect).
+function safeRedirect(target) {
+  if (typeof target !== 'string' || !target.startsWith('/')) return DEFAULT_REDIRECT;
+  if (target.startsWith('//') || target.startsWith('/\\')) return DEFAULT_REDIRECT;
+  return target;
+}
+
 router.get('/datadog', requireAuth, async (req, res) => {
   let accessRequests = [];
   if (can(req.user, 'observability:access:approve')) {
@@ -101,6 +111,30 @@ router.post('/access-request/:index/approve', requireAuth, requirePermission('ob
     req.flash('error', err.message);
   }
   res.redirect('/observability/alerts');
+});
+
+// Per-app monitor silence/unsilence — used from the deployment detail observability tab.
+// Accepts a `redirectTo` body field to redirect back to the calling page.
+router.post('/monitors/:id/silence', requireAuth, requirePermission('observability:alerts:silence'), async (req, res) => {
+  const redirectTo = safeRedirect(req.body.redirectTo);
+  try {
+    await datadogService.silenceAlert(req.params.id);
+    req.flash('success', 'Alerte silencée.');
+  } catch (err) {
+    req.flash('error', err.message);
+  }
+  res.redirect(redirectTo);
+});
+
+router.post('/monitors/:id/unsilence', requireAuth, requirePermission('observability:alerts:silence'), async (req, res) => {
+  const redirectTo = safeRedirect(req.body.redirectTo);
+  try {
+    await datadogService.unsilenceAlert(req.params.id);
+    req.flash('success', 'Alerte réactivée.');
+  } catch (err) {
+    req.flash('error', err.message);
+  }
+  res.redirect(redirectTo);
 });
 
 module.exports = router;

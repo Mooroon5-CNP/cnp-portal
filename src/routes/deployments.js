@@ -14,6 +14,7 @@ const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
+const datadogService = require('../services/datadog');
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -413,6 +414,16 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
+    // Fetch Datadog data for this specific app — non-blocking: page renders even if Datadog is down.
+    let ddLogs = [], ddMetrics = null, ddAlerts = [];
+    if (dep.onboardingStatus === 'ready' && can(req.user, 'observability:metrics:view')) {
+        [ddLogs, ddMetrics, ddAlerts] = await Promise.all([
+            datadogService.getLogs(dep.appName).catch(() => []),
+            datadogService.getMetrics(dep.appName).catch(() => null),
+            datadogService.getAlerts(dep.appName).catch(() => []),
+        ]);
+    }
+
     res.render('deployments/detail', {
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
@@ -429,6 +440,9 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         otherTeams,
         pendingMrs,
         mrUsers,
+        ddLogs,
+        ddMetrics,
+        ddAlerts,
         user: req.user,
         can: (p) => can(req.user, p),
     });
