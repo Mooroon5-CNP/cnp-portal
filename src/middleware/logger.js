@@ -28,7 +28,7 @@ function requestMiddleware(logger) {
         path: req.path,
         status: res.statusCode,
         duration_ms: Date.now() - start,
-        user: req.session && req.session.gitlabUsername,
+        user: req.session && req.session.username,
       });
     });
     next();

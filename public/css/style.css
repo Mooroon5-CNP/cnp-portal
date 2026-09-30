@@ -606,25 +606,25 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 36px;
 }
 
-.btn-gitlab {
+.btn-github {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   width: 100%;
   padding: 12px;
-  background: #fc6d26;
+  background: #24292e;
   color: #fff;
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 700;
-  border: none;
+  border: 1px solid #444d56;
   cursor: pointer;
   text-decoration: none;
   transition: background .15s;
 }
 
-.btn-gitlab:hover { background: #e8601f; color: #fff; }
+.btn-github:hover { background: #3a3f45; color: #fff; }
 
 .login-footer {
   margin-top: 24px;

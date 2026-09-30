@@ -26,7 +26,7 @@ router.get('/datadog', requireAuth, async (req, res) => {
 
 router.get('/logs', requireAuth, requirePermission('observability:logs:own'), async (req, res) => {
   const canViewAll = can(req.user, 'observability:logs:all');
-  const logs = await datadogService.getLogs(canViewAll ? null : req.user.gitlabUsername);
+  const logs = await datadogService.getLogs(canViewAll ? null : req.user.username);
 
   res.render('observability/logs', {
     title: 'Logs — CNP Portal',
@@ -51,7 +51,7 @@ router.get('/metrics', requireAuth, requirePermission('observability:metrics:vie
 
 router.get('/alerts', requireAuth, requirePermission('observability:metrics:view'), async (req, res) => {
   const canViewAll = can(req.user, 'observability:logs:all');
-  const alerts = await datadogService.getAlerts(canViewAll ? null : req.user.gitlabUsername);
+  const alerts = await datadogService.getAlerts(canViewAll ? null : req.user.username);
   const accessRequests = can(req.user, 'observability:access:approve')
     ? await datadogService.getAccessRequests()
     : [];
