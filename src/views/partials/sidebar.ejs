@@ -48,6 +48,9 @@
   <div class="nav-section">
     <div class="nav-section-label">Outils</div>
     <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'chat' ? 'active' : '' %>">
+        <a href="/chat"><span class="nav-icon">✦</span> Assistant CNP</a>
+      </li>
       <li class="<%= locals.currentPage === 'argocd' ? 'active' : '' %>">
         <a href="/argocd"><span class="nav-icon">⟳</span> ArgoCD</a>
       </li>

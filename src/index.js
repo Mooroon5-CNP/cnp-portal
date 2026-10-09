@@ -77,6 +77,7 @@ app.use('/argocd',       require('./routes/argocd'));
 app.use('/docs',         require('./routes/documentation'));
 app.use('/admin',        require('./routes/admin'));
 app.use('/admin/teams',  require('./routes/teams'));
+app.use('/',             require('./routes/chat'));
 
 app.use((req, res) => {
   res.status(404).render('error', { title: 'Page introuvable', message: 'Cette page n\'existe pas.', code: 404, user: req.user || null });

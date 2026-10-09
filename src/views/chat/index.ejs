@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title: title }) %>
+
+  <body>
+    <div class="layout">
+      <%- include('../partials/sidebar') %>
+        <main class="main-content">
+          <div class="content-wrapper chat-page">
+            <%- include('../partials/flash') %>
+
+              <div class="page-header">
+                <div>
+                  <div class="page-title">Assistant CNP</div>
+                  <div class="page-subtitle">Questions sur vos applications, déploiements, logs et recommandations FinOps — lecture seule</div>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="chat-reset">Nouvelle conversation</button>
+              </div>
+
+              <div class="card chat-card">
+                <div class="chat-context">
+                  <label for="chat-app">Application</label>
+                  <select id="chat-app">
+                    <option value="">— Aucune —</option>
+                    <% apps.forEach(function (a) { %>
+                      <option value="<%= a %>"><%= a %></option>
+                    <% }) %>
+                  </select>
+                  <label for="chat-env">Environnement</label>
+                  <select id="chat-env">
+                    <option value="">— Aucun —</option>
+                    <% environments.forEach(function (e) { %>
+                      <option value="<%= e %>"><%= e %></option>
+                    <% }) %>
+                  </select>
+                </div>
+
+                <div class="chat-messages" id="chat-messages" aria-live="polite">
+                  <div class="chat-empty" id="chat-empty">
+                    <div class="chat-empty-title">Que souhaitez-vous consulter ?</div>
+                    <div class="text-muted">L'assistant consulte la plateforme en lecture seule. Il n'exécute aucune action (déploiement, suppression, redimensionnement…).</div>
+                    <div class="chat-suggestions">
+                      <button type="button" class="chat-chip" data-suggestion="Liste les applications enregistrées">Lister les applications</button>
+                      <button type="button" class="chat-chip" data-suggestion="Quel est le statut du déploiement ?">Statut d'un déploiement</button>
+                      <button type="button" class="chat-chip" data-suggestion="Montre les dernières erreurs dans les logs">Dernières erreurs</button>
+                      <button type="button" class="chat-chip" data-suggestion="As-tu une recommandation FinOps ?">Recommandation FinOps</button>
+                    </div>
+                  </div>
+                </div>
+
+                <form class="chat-form" id="chat-form" autocomplete="off">
+                  <textarea id="chat-input" rows="2" maxlength="2000" placeholder="Posez votre question… (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)" required></textarea>
+                  <button type="submit" class="btn btn-primary" id="chat-send">Envoyer</button>
+                </form>
+              </div>
+          </div>
+        </main>
+    </div>
+    <script src="/js/chat.js"></script>
+  </body>
+</html>
