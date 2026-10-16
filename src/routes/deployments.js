@@ -197,6 +197,11 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    if (targetCluster && targetCluster !== 'gcp') {
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seul GCP est supporté pour le moment.');
+        return res.redirect('/deployments');
+    }
+
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
 
