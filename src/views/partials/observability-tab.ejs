@@ -1,0 +1,180 @@
+<% if (!ddMetrics) { %>
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px;">
+    Données Datadog indisponibles pour cette application.
+  </div>
+</div>
+<% } else { %>
+<%
+  var NO_DATA = '—';
+  var golden = [ddMetrics.latency.p50, ddMetrics.latency.p95, ddMetrics.latency.p99, ddMetrics.errorRate.value,
+                ddMetrics.traffic.rps];
+  var kube = ddMetrics.kubernetes || {};
+  var kubeEnvs = ['dev', 'prod'].filter(function(env) { return kube[env]; });
+  var hasKubeData = kubeEnvs.some(function(env) { return kube[env].pods !== NO_DATA; });
+  var noGoldenData = golden.every(function(v) { return v === NO_DATA; });
+  var cr = ddMetrics.cloudRun;
+  var crHasData = !!cr && (cr.requests !== NO_DATA || cr.cpu !== NO_DATA || cr.memory !== NO_DATA);
+  // Cloud Run only exists for GCP apps; show the card once a URL is known or metrics are flowing.
+  var showCloudRun = !!cr && deployment.targetCluster === 'gcp' && (crHasData || !!deployment.cloudRunUrl);
+%>
+<% if (!noGoldenData) { %>
+<div class="grid-3 mb-6" style="margin-bottom:16px;">
+  <div class="metric-card card">
+    <div class="metric-name">Latence (p50 / p95 / p99)</div>
+    <div class="metric-value"><%= ddMetrics.latency.p50 %></div>
+    <div class="metric-unit"><%= ddMetrics.latency.unit %> · p95: <%= ddMetrics.latency.p95 %><%= ddMetrics.latency.unit %> · p99: <%= ddMetrics.latency.p99 %><%= ddMetrics.latency.unit %></div>
+  </div>
+  <div class="metric-card card">
+    <div class="metric-name">Taux d'erreur</div>
+    <div class="metric-value" style="color: <%= ddMetrics.errorRate.value !== '—' && ddMetrics.errorRate.value > 5 ? 'var(--danger)' : 'var(--success)' %>"><%= ddMetrics.errorRate.value %></div>
+    <div class="metric-unit"><%= ddMetrics.errorRate.unit %></div>
+  </div>
+  <div class="metric-card card">
+    <div class="metric-name">Trafic</div>
+    <div class="metric-value"><%= ddMetrics.traffic.rps %></div>
+    <div class="metric-unit"><%= ddMetrics.traffic.unit %></div>
+  </div>
+</div>
+<% } else { %>
+<div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);">
+  Latence, erreurs et trafic masqués : aucune trace APM reçue pour <code><%= deployment.appName %></code> (nécessite <code>dd-trace</code> et le tag <code>service:<%= deployment.appName %></code>).
+</div>
+<% } %>
+
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Kubernetes</span>
+    <span class="badge badge-gray">5 dernières minutes</span>
+  </div>
+  <% if (!hasKubeData) { %>
+  <div class="card-body" style="color:var(--text-muted);font-size:13px;">
+    Aucun pod détecté dans <code><%= deployment.appName %>-dev</code> ni <code><%= deployment.appName %>-prod</code>
+    (application non déployée sur Kubernetes, ou Agent Datadog indisponible).
+  </div>
+  <% } else { %>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr><th>Environnement</th><th>Pods</th><th>CPU (mCPU)</th><th>Mémoire (MiB)</th><th>Redémarrages</th></tr>
+      </thead>
+      <tbody>
+        <% kubeEnvs.forEach(function(env) { var u = kube[env]; %>
+        <tr>
+          <td><span class="font-mono"><%= deployment.appName %>-<%= env %></span></td>
+          <td><%= u.pods %></td>
+          <td><%= u.cpu %></td>
+          <td><%= u.memory %></td>
+          <td style="color: <%= u.restarts !== NO_DATA && u.restarts > 0 ? 'var(--danger)' : 'inherit' %>"><%= u.restarts %></td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+</div>
+
+<% if (showCloudRun) { %>
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Cloud Run (GCP)</span>
+  </div>
+  <div class="card-body" style="display:flex;gap:32px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Requêtes (5 min)</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.requests %></div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">CPU container</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.cpu %> <span style="font-size:14px;font-weight:400;color:var(--text-muted);">%</span></div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Mémoire container</div>
+      <div style="font-size:22px;font-weight:700;"><%= ddMetrics.cloudRun.memory %> <span style="font-size:14px;font-weight:400;color:var(--text-muted);">%</span></div>
+    </div>
+  </div>
+</div>
+<% } %>
+
+<% } %>
+
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Logs récents</span>
+    <span class="badge badge-gray"><%= ddLogs.length %> entrées</span>
+  </div>
+  <div style="background:#1e2330;border-radius:0 0 8px 8px;overflow-x:auto;max-height:280px;overflow-y:auto;">
+    <% if (ddLogs.length === 0) { %>
+      <div style="padding:32px;text-align:center;color:#9aa3b8;">Aucun log disponible</div>
+    <% } else { %>
+      <% ddLogs.forEach(log => { %>
+      <div class="log-line">
+        <span class="log-ts"><%= new Date(log.timestamp).toLocaleTimeString('fr-FR') %></span>
+        <span class="log-level-<%= log.level %>"><%= log.level %></span>
+        <span class="log-service"><%= log.service %></span>
+        <span style="color:#e2e8f0;"><%= log.message %></span>
+      </div>
+      <% }) %>
+    <% } %>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Alertes Datadog</span>
+    <%
+      var activeAlerts = ddAlerts.filter(function(a) { return a.status === 'ALERT' || a.status === 'WARN'; });
+    %>
+    <% if (activeAlerts.length > 0) { %>
+    <span class="badge badge-danger"><%= activeAlerts.length %> actif<%= activeAlerts.length > 1 ? 's' : '' %></span>
+    <% } else { %>
+    <span class="badge badge-success">OK</span>
+    <% } %>
+  </div>
+  <% if (ddAlerts.length === 0) { %>
+  <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:32px;">
+    Aucune alerte configurée pour cette application.
+  </div>
+  <% } else { %>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr><th>Alerte</th><th>Statut</th><th>Silencé</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        <% ddAlerts.forEach(function(alert) { %>
+        <tr>
+          <td>
+            <div style="font-weight:600;"><%= alert.name %></div>
+            <div class="font-mono text-muted" style="font-size:11.5px;margin-top:2px;"><%= alert.query %></div>
+          </td>
+          <td>
+            <% if (alert.status === 'ALERT') { %><span class="badge badge-danger"><%= alert.status %></span>
+            <% } else if (alert.status === 'WARN') { %><span class="badge badge-warning"><%= alert.status %></span>
+            <% } else { %><span class="badge badge-success"><%= alert.status %></span>
+            <% } %>
+          </td>
+          <td><% if (alert.silenced) { %><span class="badge badge-gray">Silencé</span><% } else { %>—<% } %></td>
+          <td>
+            <div class="actions-cell">
+              <% if (can('observability:alerts:silence') && !alert.silenced) { %>
+              <form action="/observability/monitors/<%= alert.id %>/silence" method="POST" class="inline-form">
+                <input type="hidden" name="redirectTo" value="/deployments/<%= deployment.id %>">
+                <button type="submit" class="btn btn-warning btn-sm">Silencer</button>
+              </form>
+              <% } %>
+              <% if (can('observability:alerts:silence') && alert.silenced) { %>
+              <form action="/observability/monitors/<%= alert.id %>/unsilence" method="POST" class="inline-form">
+                <input type="hidden" name="redirectTo" value="/deployments/<%= deployment.id %>">
+                <button type="submit" class="btn btn-secondary btn-sm">Réactiver</button>
+              </form>
+              <% } %>
+            </div>
+          </td>
+        </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+</div>
