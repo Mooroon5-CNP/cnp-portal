@@ -134,7 +134,22 @@ try {
     .set('x-cnp-csrf', page.body.csrfToken).send({ message: 'Liste les applications' }).expect(200);
   assert.match(streamed.headers['content-type'], /text\/event-stream/);
   assert.match(streamed.text, /event: turn_completed/);
+  assert.match(streamed.text, /event: tool_result/);
   assert.match(streamed.text, /Majoutes API/);
+  const evidence = streamed.text.split('\n').filter(line => line.startsWith('data: '))
+    .map(line => JSON.parse(line.slice(6))).find(event => event.type === 'tool_result');
+  assert.equal(evidence.result.tool, 'list_applications');
+  assert.equal(evidence.result.data.applications[0].applicationId, 'majoutes-api');
+  // Resume the requested tool from the server-side session, without a second slash command.
+  const ask = await request(web).post('/api/v1/mcp/chat/turn')
+    .set('x-cnp-csrf', page.body.csrfToken).send({ message: '/deploiment' }).expect(200);
+  const parseEvents = text => text.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+  const question = parseEvents(ask.text);
+  assert.ok(question.some(event => event.type === 'clarification_required'));
+  const reply = await request(web).post('/api/v1/mcp/chat/turn').set('x-cnp-csrf', page.body.csrfToken)
+    .send({ conversationId: question[0].conversationId, message: 'majoutes-api en dev' }).expect(200);
+  assert.ok(parseEvents(reply.text).some(event => event.type === 'tool_started' && event.tool === 'get_deployment_status'));
+  assert.ok(parseEvents(reply.text).some(event => event.type === 'tool_result' && event.result.tool === 'get_deployment_status'));
   const count = audits.length;
   for await (const event of chat.run({ message: 'supprimer majoutes-api' }, {
     actor: { userId: "1", roles: ['manager'], authenticated: true },

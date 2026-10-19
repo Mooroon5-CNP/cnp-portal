@@ -2,7 +2,7 @@
 
 const { createKnownContextBuilder } = require('../context/known-context-builder');
 
-function createUserScope(client, catalog, deployments = require('../../../../src/models/deployment')) {
+function createUserScope(client, catalog, deployments = require('../../../../src/models/deployment'), contextOptions = {}) {
   return (user) => {
     const accessible = () => new Set(deployments.listForUser(user).map((row) => row.app_name));
     const manager = user.role === 'manager';
@@ -18,7 +18,7 @@ function createUserScope(client, catalog, deployments = require('../../../../src
       }
       return result;
     } };
-    return { catalog: scopedCatalog, mcpClient: scopedClient, buildKnownContext: createKnownContextBuilder(scopedCatalog) };
+    return { catalog: scopedCatalog, mcpClient: scopedClient, buildKnownContext: createKnownContextBuilder(scopedCatalog, contextOptions) };
   };
 }
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const MUTATION_PATTERN = /\b(deploy|delete|remove|restart|rollback|sync|scale|resize|migrate|promote|create|update|change|modifier|supprimer|deployer|redemarrer|synchroniser|redimensionner|migrer|promouvoir|creer|arreter|detruire|effacer)\b/i;
+const MUTATION_PATTERN = /\b(deploy|delete|remove|restart|rollback|sync|scale|resize|migrate|promote|create|update|change|modifier|supprim(?:er|e|ez)|deployer|redemarr(?:er|e|ez)|synchronis(?:er|e|ez)|redimensionn(?:er|e|ez)|migrer|promouvoir|creer|arret(?:er|e|ez)|detruire|effac(?:er|e|ez))\b/i;
 
 function classifyWithFallback(input) {
   const original = typeof input === 'string' ? input : input.userRequest;

@@ -38,9 +38,9 @@
             <h2>Que souhaitez-vous consulter ?</h2>
             <div class="mcp-prompts">
               <button type="button" data-prompt="Liste les applications disponibles">Applications</button>
-              <button type="button" data-prompt="Quel est le statut du déploiement en dev ?">Déploiement</button>
-              <button type="button" data-prompt="Montre les logs de en dev">Logs</button>
-              <button type="button" data-prompt="Donne une recommandation FinOps pour en dev">FinOps</button>
+              <button type="button" data-prompt="/deploiement">Déploiement</button>
+              <button type="button" data-prompt="/logs">Logs</button>
+              <button type="button" data-prompt="/finops">FinOps</button>
             </div>
           </div>
           <div class="mcp-messages" data-messages></div>
@@ -64,6 +64,7 @@
       </div>
     </main>
   </div>
+  <script src="/js/mcp-results.js" defer></script>
   <script src="/js/mcp-chat.js" defer></script>
 </body>
 </html>

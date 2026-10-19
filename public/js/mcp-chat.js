@@ -57,6 +57,14 @@
           .join(',');
         applicationSelect.appendChild(option);
       });
+      const initial = new URLSearchParams(location.search);
+      const applicationId = initial.get('applicationId');
+      if (Array.from(applicationSelect.options).some(option => option.value === applicationId)) {
+        applicationSelect.value = applicationId;
+      }
+      const environment = { dev: 'development', prod: 'production' }[initial.get('environment')] || initial.get('environment');
+      if (Array.from(environmentSelect.options).some(option => option.value === environment)) environmentSelect.value = environment;
+      updateEnvironmentOptions();
     } catch (_) { /* Context remains optional when the catalog is unavailable. */ }
   }
 
@@ -100,9 +108,43 @@
   }
 
   function renderEvent(event, assistant) {
+    if (event.type === 'tool_result') {
+      const view = window.CnpMcpResults.describeResult(event.result.tool, event.result.data);
+      const card = document.createElement('section');
+      card.className = 'mcp-tool-result';
+      const title = document.createElement('h3');
+      title.textContent = `${view.title}${event.status === 'partial' ? ' — données partielles' : ''}`;
+      card.appendChild(title);
+      if (!view.rows.length) {
+        const emptyResult = document.createElement('p');
+        emptyResult.textContent = 'Aucun résultat pour cette recherche.';
+        card.appendChild(emptyResult);
+      } else {
+        const table = document.createElement('table');
+        const header = table.createTHead().insertRow();
+        view.columns.forEach(label => {
+          const cell = document.createElement('th');
+          cell.scope = 'col'; cell.textContent = label; header.appendChild(cell);
+        });
+        const body = table.createTBody();
+        view.rows.forEach(values => {
+          const row = body.insertRow();
+          values.forEach(value => { row.insertCell().textContent = String(value); });
+        });
+        card.appendChild(table);
+      }
+      view.notes.forEach(note => { const text = document.createElement('p'); text.textContent = note; card.appendChild(text); });
+      const reference = document.createElement('small');
+      reference.textContent = `Référence : ${event.correlationId}`;
+      card.appendChild(reference);
+      assistant.after(card);
+    }
     if (event.type === 'turn_started') conversationId = event.conversationId;
     if (event.type === 'tool_started') assistant.textContent = `Consultation de ${event.tool}...`;
-    if (event.type === 'answer_delta') assistant.textContent = event.text;
+    if (event.type === 'answer_delta') {
+      if (!assistant.dataset.answerStarted) { assistant.textContent = ''; assistant.dataset.answerStarted = 'true'; }
+      assistant.appendChild(document.createTextNode(event.text));
+    }
     if (event.type === 'clarification_required') assistant.textContent = event.question;
     if (event.type === 'warning') addMessage('notice', event.message, 'mcp-message-warning');
     if (event.type === 'error') {

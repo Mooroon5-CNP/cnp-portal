@@ -8,7 +8,9 @@ const commands = Object.freeze([
 ]);
 function resolveCommand(message) {
   const [name, ...rest] = message.trim().split(/\s+/);
-  const command = commands.find((item) => item.command === name.toLowerCase());
+  const aliases = { '/deploiment': '/deploiement', '/deployment': '/deploiement' };
+  const normalized = name.toLowerCase();
+  const command = commands.find((item) => item.command === (aliases[normalized] || normalized));
   return command ? { tool: command.tool, message: `${command.prompt} ${rest.join(' ')}`.trim() } : null;
 }
 module.exports = { commands, resolveCommand };

@@ -171,6 +171,8 @@ const chatEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...eventBase, type: z.literal('clarification_required'), question: z.string().min(1) }),
   z.strictObject({ ...eventBase, type: z.literal('tool_started'), tool: z.enum(toolNames) }),
   z.strictObject({ ...eventBase, type: z.literal('tool_completed'), tool: z.enum(toolNames), status: z.enum(['success', 'partial', 'error']) }),
+  z.strictObject({ ...eventBase, type: z.literal('tool_result'), status: z.enum(['success', 'partial']), result: z.discriminatedUnion('tool',
+    toolNames.map(tool => z.strictObject({ tool: z.literal(tool), data: dataSchemas[tool] }))) }),
   z.strictObject({ ...eventBase, type: z.literal('warning'), code: z.string(), message: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('answer_delta'), text: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('turn_completed'), sources: z.array(sourceSummarySchema) }),

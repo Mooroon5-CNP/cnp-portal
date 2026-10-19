@@ -63,11 +63,11 @@ describe('MCP orchestrator', () => {
   test('streams a grounded application list with sources', async () => {
     const events = await collect({ message: 'Liste les applications disponibles' });
     expect(events.map((event) => event.type)).toEqual([
-      'turn_started', 'tool_started', 'tool_completed', 'answer_delta', 'turn_completed',
+      'turn_started', 'tool_started', 'tool_completed', 'tool_result', 'answer_delta', 'turn_completed',
     ]);
     expect(events[1].tool).toBe('list_applications');
-    expect(events[3].text).toContain('Majoutes API');
-    expect(events[4].sources[0].source).toBe('platform_api_fixture');
+    expect(events[4].text).toContain('Majoutes API');
+    expect(events[5].sources[0].source).toBe('platform_api_fixture');
   });
 
   test('refuses mutations before calling MCP', async () => {

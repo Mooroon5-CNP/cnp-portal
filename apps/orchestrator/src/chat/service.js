@@ -36,16 +36,41 @@ function answerFor(tool, result) {
 async function* runChatTurn(rawRequest, dependencies) {
   const request = chatTurnRequestSchema.parse(rawRequest);
   const command = resolveCommand(request.message);
+  const bareCommand = Boolean(command && request.message.trim().split(/\s+/).length === 1);
   if (command) request.message = command.message;
   const correlationId = uuidv4();
   const conversationId = request.conversationId || uuidv4();
   yield event({ type: 'turn_started', conversationId, correlationId });
+
+  if (request.message === '/annuler') {
+    if (dependencies.clearClarification) await dependencies.clearClarification({ conversationId });
+    yield event({ type: 'answer_delta', correlationId, text: 'La demande en attente est annulée.' });
+    yield event({ type: 'turn_completed', correlationId, sources: [] });
+    return;
+  }
 
   if (request.message === '/' || request.message === '/aide') {
     yield event({ type: 'answer_delta', correlationId, text: commands.map((item) => `${item.command} — ${item.description}`).join('\n') });
     yield event({ type: 'turn_completed', correlationId, sources: [] });
     return;
   }
+
+  // An explicit command replaces the previous intent; free-text replies retain it.
+  if (command && dependencies.clearClarification) await dependencies.clearClarification({ conversationId });
+  const localDecision = classifyWithFallback(request.message);
+  if (localDecision.kind === 'mutation') {
+    yield event({ type: 'error', correlationId, code: 'FORBIDDEN', retryable: false,
+      message: 'Le chat MCP est strictement en lecture seule et ne peut pas effectuer cette action.' });
+    return;
+  }
+  const pending = !command && dependencies.pendingRequest;
+  const pendingTool = pending && toolNames.includes(pending.tool) ? pending.tool : undefined;
+  const intendedTool = command?.tool || pendingTool || (localDecision.kind === 'tool' ? localDecision.tool : undefined);
+  const register = async (tool, target = {}) => {
+    if (dependencies.registerClarification) await dependencies.registerClarification({
+      conversationId, clarificationId: correlationId, tool, target,
+    });
+  };
 
   let knownContext;
   try {
@@ -54,15 +79,15 @@ async function* runChatTurn(rawRequest, dependencies) {
       allowedTools: dependencies.allowedTools || toolNames,
       portalContext: request.context,
       pageContext: dependencies.pageContext,
-      confirmedConversationContext: dependencies.confirmedConversationContext,
+      confirmedConversationContext: pending?.target || dependencies.confirmedConversationContext,
       pendingClarificationId: dependencies.pendingClarificationId,
       userRequest: request.message,
+      resolveApplication: Boolean(intendedTool && intendedTool !== 'list_applications' && !bareCommand
+        && !/^(?:en\s+)?(?:dev|development|prod|production|staging)$/i.test(request.message.trim())),
     });
   } catch (error) {
     if (!(error instanceof AmbiguousContextError)) throw error;
-    if (dependencies.registerClarification) {
-      await dependencies.registerClarification({ conversationId, clarificationId: correlationId });
-    }
+    await register(intendedTool, pending?.target);
     yield event({
       type: 'clarification_required', correlationId,
       question: `Plusieurs applications correspondent (${error.candidates.join(', ')}). Laquelle souhaitez-vous consulter ?`,
@@ -70,8 +95,7 @@ async function* runChatTurn(rawRequest, dependencies) {
     return;
   }
 
-  const classification = command ? (classifyWithFallback(request.message).kind === 'mutation'
-    ? { kind: 'mutation' } : { kind: 'tool', tool: command.tool }) : await dependencies.classify({
+  const classification = intendedTool && (command || pendingTool) ? { kind: 'tool', tool: intendedTool } : await dependencies.classify({
     userRequest: request.message,
     availableReadOnlyTools: toolNames,
     knownContext,
@@ -94,9 +118,7 @@ async function* runChatTurn(rawRequest, dependencies) {
     return;
   }
   if (classification.kind !== 'tool') {
-    if (dependencies.registerClarification) {
-      await dependencies.registerClarification({ conversationId, clarificationId: correlationId });
-    }
+    await register(undefined, knownContext.target);
     yield event({
       type: 'clarification_required', correlationId,
       question: 'Souhaitez-vous consulter les applications, un déploiement, des logs ou une recommandation FinOps ?',
@@ -112,12 +134,13 @@ async function* runChatTurn(rawRequest, dependencies) {
   }
   const args = buildToolArguments(tool, knownContext, dependencies.now());
   if (!args) {
-    if (dependencies.registerClarification) {
-      await dependencies.registerClarification({ conversationId, clarificationId: correlationId });
-    }
+    await register(tool, knownContext.target);
     yield event({
       type: 'clarification_required', correlationId,
-      question: 'Quelle application et quel environnement souhaitez-vous consulter ?',
+      question: !knownContext.target.applicationId
+        ? (knownContext.target.environment ? 'Quelle application souhaitez-vous consulter ? Donnez son nom ou une description.'
+          : 'Quelle application et quel environnement (dev ou prod) souhaitez-vous consulter ?')
+        : `Quel environnement (dev ou prod) souhaitez-vous consulter pour ${knownContext.target.applicationId} ?`,
     });
     return;
   }
@@ -136,6 +159,8 @@ async function* runChatTurn(rawRequest, dependencies) {
       ? 'Datadog n’est pas configuré : renseignez DD_API_KEY et DD_APP_KEY pour consulter les logs.' : issue.message, retryable: issue.retryable });
     return;
   }
+  // Publish only validated, user-scoped evidence. Rendering never depends on an LLM.
+  yield event({ type: 'tool_result', correlationId, status: result.status, result: { tool, data: result.data } });
   let answer = answerFor(tool, result);
   if (dependencies.generateAnswer) {
     try { answer = await dependencies.generateAnswer({ message: request.message, tool, result }); }
@@ -147,6 +172,7 @@ async function* runChatTurn(rawRequest, dependencies) {
     type: 'turn_completed', correlationId,
     sources: result.meta.sources.map(({ source, status }) => ({ source, status })),
   });
+  if (dependencies.clearClarification) await dependencies.clearClarification({ conversationId });
   if (dependencies.confirmContext && Object.keys(knownContext.target).length) {
     await dependencies.confirmContext({ conversationId, knownContext: knownContext.target });
   }

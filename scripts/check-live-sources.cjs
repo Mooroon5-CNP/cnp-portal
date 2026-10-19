@@ -21,7 +21,7 @@ if (fs.existsSync(mcpEnvPath)) {
   console.log('Catalog:', catalog.status, catalog.data?.applications.map((entry) => entry.applicationId).join(', ') || 'unavailable');
   if (catalog.status === 'error') { process.exitCode = 1; return; }
   if (catalog.warnings.some((entry) => entry.code === 'MOCK_DATA')) throw new Error('Unexpected mock source');
-  const applicationId = process.argv[2] || 'app-2-dancingduck';
+  const applicationId = process.argv.slice(2).find(arg => !arg.startsWith('--')) || 'app-2-dancingduck';
   for (const [tool, args] of [
     ['get_deployment_status', { applicationId, environment: 'dev' }],
     ['get_application_logs', { applicationId, environment: 'dev', from: new Date(Date.now() - 3600000).toISOString(), to: new Date().toISOString(), limit: 20 }],
@@ -31,6 +31,10 @@ if (fs.existsSync(mcpEnvPath)) {
     console.log(tool, result.status, 'warnings:', result.warnings.map((issue) => `${issue.source}:${issue.code}`).join(', '),
       'errors:', result.errors.map((issue) => `${issue.source}:${issue.code}`).join(', '));
     if (result.warnings.some((entry) => entry.code === 'MOCK_DATA')) throw new Error('Unexpected mock source');
+  }
+  if (process.argv.includes('--sources-only')) {
+    console.log('Read-only source check complete; no Jev or generation API called.');
+    return;
   }
   const { createHybridClassifier } = require('../apps/orchestrator/src/typesafe/hybrid-classifier');
   const decision = await createHybridClassifier({ env: { ...process.env, MCP_ROUTING_MODE: 'jev', MCP_PROJECT_DIR: mcpRoot } })({

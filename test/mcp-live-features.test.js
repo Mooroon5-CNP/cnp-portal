@@ -71,3 +71,15 @@ test('generation receives validated tool evidence; failure leaves a truthful ans
   expect(events.find((event) => event.type === 'answer_delta').text).toContain('Majoutes API');
   expect(scrub('Bearer secret-token password=abc')).not.toMatch(/secret-token|abc/);
 });
+
+test('chat exposes authorized structured results even when answer generation is unavailable', async () => {
+  const events = [];
+  for await (const event of runChatTurn({ message: '/applications' }, {
+    mcpClient: new FakeMcpClient(), classify: jest.fn(),
+    buildKnownContext: createKnownContextBuilder(new FixtureCatalog()),
+    actor: { userId: 'user', roles: ['manager'], authenticated: true }, now: () => new Date(),
+  })) events.push(event);
+  expect(events.find(event => event.type === 'tool_result')).toMatchObject({
+    result: { tool: 'list_applications', data: { applications: expect.any(Array) } },
+  });
+});

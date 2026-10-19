@@ -1,6 +1,11 @@
 # Intégration MCP-CNP / cnp-portal
 
-État vérifié le 7 octobre 2026. Branche portail : `feat/MCPapi`.
+État vérifié le 19 octobre 2026. Branche portail : `feat/MCPapi`.
+
+Le périmètre FinOps futur (demandes par équipe/application, sources de coûts et
+recommandations IA fondées sur les données) est décrit dans la
+[spécification FinOps conversationnel](SPEC_FINOPS_CONVERSATIONNEL.md).
+Cette spécification est à implémenter ; elle ne décrit pas des coûts déjà connectés.
 
 ## Démarrage local avec les applications réelles
 
@@ -29,6 +34,40 @@ Pour lancer explicitement les données synthétiques :
 ```bash
 npm run dev:integration:mock
 ```
+
+## Première implémentation utilisable
+
+La fusion avec main est résolue dans le commit local `a1dfa96`. Les environnements
+Python et caches ont été retirés de l’index Git, sans suppression sur disque.
+
+Les commandes ci-dessous restituent désormais les données structurées dans le chat,
+sans dépendre d’une génération IA :
+
+- `/applications` : tableau des applications accessibles, équipes et environnements ;
+- `/deploiement` : versions souhaitée/observée, digests disponibles, santé Argo CD,
+  synchronisation et dérive (indéterminée si les preuves manquent) ;
+- `/logs` : lignes datées, niveaux, messages et indication de résultats tronqués ;
+- `/finops` : mesures disponibles, recommandation, prérequis et limites. Les coûts
+  absents restent affichés comme indisponibles.
+
+Les textes de source sont insérés via `textContent`, sans interprétation HTML.
+Le nouvel événement SSE `tool_result` contient uniquement les données de l’outil
+validées et filtrées par les permissions du portail ; il ne change pas les quatre
+contrats du serveur MCP. Les réponses partielles sont identifiées et les résultats
+restent visibles si la génération IA échoue. La lecture Argo CD utilise désormais
+le client asynchrone et son authentification token ou login Terraform.
+
+Depuis la liste des déploiements, « Analyser avec MCP » ouvre le chat avec
+l’application présélectionnée. Choisir ensuite l’environnement et une commande.
+Le filtrage des utilisateurs est actif pour les sources HTTP même sans
+`MCP_DATA_MODE=real`. Le mode synthétique reste explicite avec le launcher `--mock`.
+
+Validation : 79 tests et lint passent. Le test d’intégration vérifie le transport
+MCP, les quatre outils, les refus d’accès, la réponse SSE et ses données structurées.
+Ce test emploie une API locale et des données synthétiques ; le contrôle réel
+séparé a confirmé neuf applications et un état Argo CD Healthy/Synced pour
+`app-2-dancingduck`. La version observée manque dans ce résultat réel ; il est partiel.
+Aucun déploiement, changement cloud ou appel IA payant n’a été effectué pour ce contrôle.
 
 ## Fonctions du chat
 
@@ -60,6 +99,35 @@ npm run dev:integration:mock
 | `/finops` | Recommandation de ressources ; les coûts réels ne sont pas configurés |
 | `/aide` ou `/` envoyé directement | Afficher les commandes sans appel de source |
 
+## Clarifications et noms d’applications en langage naturel
+
+Le dialogue conserve côté session l’outil demandé et les champs déjà fournis
+pendant 15 minutes (20 demandes maximum). Il ne choisit pas un environnement
+manquant à la place de l’utilisateur.
+
+```text
+Utilisateur : /deploiement
+Portail     : Quelle application et quel environnement (dev ou prod) ?
+Utilisateur : l’application sur le canard
+Portail     : Quel environnement (dev ou prod) pour app-2-dancingduck ?
+Utilisateur : en prod
+Portail     : consultation du déploiement de cette application en prod
+```
+
+`/deploiment` et `/deployment` sont des alias acceptés. `/annuler` abandonne la
+demande en attente ; une nouvelle commande `/` remplace l’intention précédente.
+Le même dialogue fonctionne pour `/finops`. Un nom exact avec l’environnement
+fonctionne sans IA, par exemple `app-2-dancingduck en dev`.
+
+Les descriptions comme « le canard » utilisent la configuration `GENAI_*`.
+Le modèle ne reçoit que la description nettoyée et les identifiants/noms des
+applications autorisées. Il propose un identifiant existant avec une confiance
+élevée ; le serveur revalide cet identifiant. Une ambiguïté, une proposition hors
+catalogue ou une panne IA laisse la question ouverte. Le modèle ne choisit ni
+outil d’écriture ni environnement. Le rapprochement sémantique est testé avec
+une réponse simulée ; sa qualité réelle dépend du modèle configuré et doit être
+vérifiée avec votre clé.
+
 ## Configuration des sources réelles
 
 Conserver les valeurs secrètes uniquement dans `cnp-portal/.env`.
@@ -67,8 +135,8 @@ Conserver les valeurs secrètes uniquement dans `cnp-portal/.env`.
 | Source | Configuration | Résultat de la vérification réelle |
 | --- | --- | --- |
 | Catalogue et configuration Git | `GITHUB_CONFIG_REPO_NAME`, `GITHUB_CONFIG_REPO_TOKEN` | Accès réussi ; neuf applications enregistrées |
-| Argo CD | `ARGOCD_SERVER_URL`, `ARGOCD_TOKEN`, configuration TLS existante | Endpoint actuel `https://localhost:8080` indisponible |
-| Kubernetes | `KUBE_API_URL`, `KUBE_TOKEN`, `KUBE_CA_CERT` | Lecture des Applications Argo refusée : HTTP 403 |
+| Argo CD | `ARGOCD_SERVER_URL`, token ou login Terraform, TLS existant | Connexion réussie via le tunnel ; état Healthy/Synced, version observée manquante pour l’app testée |
+| Kubernetes | `KUBE_API_URL`, `KUBE_TOKEN`, `KUBE_CA_CERT` | Pour une app Cloud Run, le digest ne provient pas de pods GKE ; la preuve reste partielle |
 | Datadog logs | `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE` | Clés absentes : erreur `OBSERVABILITY_NOT_CONFIGURED` |
 | Datadog FinOps | Même accès + `MCP_CPU_PERCENT_METRIC`, `MCP_MEMORY_PERCENT_METRIC` | Métriques non configurées ; recommandation `INSUFFICIENT_DATA` |
 | Jev | `TYPESAFE_ENABLED=true`, `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`, `TYPESAFE_TIMEOUT_MS` | API réelle répond ; la requête testée demandait une clarification |
@@ -88,7 +156,7 @@ kubectl -n argocd port-forward svc/argocd-server 8080:443
 ```
 
 Un HTTP 403 Kubernetes nécessite des droits de lecture adaptés sur les ressources
-concernées. Aucun droit cloud ou RBAC n’a été modifié par cette intégration.
+concernées. Aucun droit cloud ou RBAC supplémentaire n’a été modifié pendant cette itération MCP.
 
 Les logs Datadog sont filtrés sur `service:<applicationId> env:dev|prod` et la
 fenêtre demandée. Les noms de service et tags doivent correspondre au déploiement.
@@ -115,15 +183,28 @@ Ajouter à `cnp-portal/.env`, puis redémarrer le launcher :
 ```dotenv
 GENAI_ENABLED=true
 GENAI_BASE_URL=https://api.openai.com/v1
-GENAI_API_KEY=<votre clé locale>
-GENAI_MODEL=<modèle choisi>
+GENAI_API_KEY=<votre clé API OpenAI locale>
+GENAI_MODEL=<identifiant du modèle accessible à votre clé>
 ```
+
+Les quatre variables sont placées dans `cnp-portal/.env`, pas dans le navigateur
+ni dans `.env.example`. La clé et le modèle sont tous deux obligatoires. Le modèle
+doit supporter Responses et les sorties structurées. Redémarrer
+`npm run dev:integration` après modification. La même configuration sert à la
+résolution des descriptions d’applications et à la reformulation des résultats.
+
+FinOps ne récupère pas ses mesures grâce à la clé IA. Pour une recommandation
+basée sur l’utilisation, configurer aussi `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE`,
+`MCP_CPU_PERCENT_METRIC` et `MCP_MEMORY_PERCENT_METRIC`, avec une couverture
+suffisante (14 jours demandés par le chat). Sans ces mesures, la réponse est
+`INSUFFICIENT_DATA`. Aucun coût réel n’est connecté : les montants restent `null`.
+Les logs sont laissés hors du jalon conversationnel actuel.
 
 Ne collez jamais la clé dans un message de chat ou un fichier suivi par Git. La
 requête utilise l’AI SDK avec le fournisseur OpenAI, l’API Responses et
 `store=false`. Le test SDK utilise une réponse simulée ; il ne prouve pas l’accès
 réel à votre compte/modèle. Références :
-[OpenAI : génération de texte](https://developers.openai.com/api/docs/guides/text),
+[OpenAI : sorties structurées](https://developers.openai.com/api/docs/guides/structured-outputs),
 [AI SDK : generateText](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text).
 
 ## Vérifications
@@ -133,6 +214,7 @@ npm run lint
 npm test -- --runInBand
 npm run test:integration
 npm run test:generation
+npm run test:context
 npm run test:live-sources
 ```
 
@@ -143,9 +225,11 @@ réponse HTTP simulée ; aucune clé réelle n’est nécessaire. `test:live-sou
 effectue des lectures réelles et une classification Jev réelle avec les secrets
 locaux, et indique les sources encore indisponibles. Il n’affiche aucun secret.
 
-Le test navigateur vérifie la connexion locale, le catalogue réel, le menu `/`,
-les commandes clavier et les quatre routes d’outils. Les erreurs Argo/Datadog sont
-attendues tant que leurs accès n’ont pas été réparés.
+Après configuration de votre clé, vérifier dans le navigateur le menu `/`, le
+dialogue en plusieurs messages et la description « le canard ». Les tests
+automatisés de ce jalon ne prouvent pas la qualité d’une réponse IA réelle.
+`test:context` vérifie le format structuré Responses via le vrai SDK avec une
+réponse simulée, sans clé réelle ni appel payant.
 
 ## Interactions
 
@@ -178,3 +262,15 @@ les validations d’accès de bout en bout. Aucun code du projet MCP-CNP n’a �
 modifié pour ajouter du code portail : ses composants compilés sont réutilisés.
 Les changements restent locaux, non commités et non poussés ; le stash de
 sauvegarde initial est conservé.
+
+
+## Vérifier uniquement les sources, sans appel IA
+
+```bash
+npm run test:live-sources -- app-2-dancingduck --sources-only
+```
+
+Cette commande lit Git/Argo/Kubernetes/Datadog, sans Jev ni génération IA.
+Un statut `partial` peut aussi correspondre à un champ manquant (digest, version,
+coût), pas uniquement à une source totalement inaccessible. Les sources non
+configurées sont signalées ; elles ne sont jamais remplacées par un mock.

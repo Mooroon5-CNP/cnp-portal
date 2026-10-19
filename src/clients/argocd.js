@@ -92,7 +92,12 @@ async function getApplicationStatus(appName) {
 
 // Read-only raw status for the MCP contract adapter.
 async function getApplicationDetails(appName) {
-  return (await makeClient().get(`/applications/${encodeURIComponent(appName)}`)).data;
+  const client = await makeClient();
+  try {
+    return (await client.get(`/applications/${encodeURIComponent(appName)}`)).data;
+  } catch (err) {
+    handleError(err, `getApplicationDetails(${appName})`);
+  }
 }
 
 async function syncApplication(appName) {

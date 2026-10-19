@@ -107,7 +107,7 @@ function validatedFilters(filters) {
   return Object.keys(value).length ? value : undefined;
 }
 
-function createKnownContextBuilder(catalog) {
+function createKnownContextBuilder(catalog, { resolveApplication } = {}) {
   return async function buildKnownContext(rawInput = {}) {
     const input = {
       ...rawInput,
@@ -129,6 +129,14 @@ function createKnownContextBuilder(catalog) {
       const matches = resolveExact(selectedApplication.value, applications);
       if (matches.length > 1) throw new AmbiguousContextError(matches.map((item) => item.applicationId));
       application = matches[0];
+    }
+    if (!application && rawInput.resolveApplication === true && resolveApplication) {
+      try {
+        const candidate = await resolveApplication({ message: input.userRequest,
+          applications: applications.map(({ applicationId, name }) => ({ applicationId, name })) });
+        // A model proposal never bypasses the catalog or grants application access.
+        application = applications.find(item => item.applicationId === candidate);
+      } catch (_) { /* Unavailable/ambiguous AI leaves the target unresolved. */ }
     }
 
     const selectedEnvironment = pickCandidate(input, 'environment');

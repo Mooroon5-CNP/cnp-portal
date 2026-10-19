@@ -16,7 +16,8 @@
     "dev:integration": "node scripts/start-local-mcp.cjs",
     "dev:integration:mock": "node scripts/start-local-mcp.cjs --mock",
     "test:live-sources": "node scripts/check-live-sources.cjs",
-    "test:generation": "node scripts/test-generation.mjs"
+    "test:generation": "node scripts/test-generation.mjs",
+    "test:context": "node scripts/test-context-resolution.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.86",

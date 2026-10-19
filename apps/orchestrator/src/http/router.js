@@ -45,7 +45,7 @@ function describeError(error) {
   return messages[error.code] || 'Le service MCP est temporairement indisponible.';
 }
 
-function createRouter({ requireAuth, chatService, catalog, runtimeForUser }) {
+function createRouter({ requireAuth, chatService, catalog, runtimeForUser, dataMode = 'mock' }) {
   const router = express.Router();
 
   router.get('/mcp-chat', requireAuth, (req, res) => {
@@ -58,7 +58,7 @@ function createRouter({ requireAuth, chatService, catalog, runtimeForUser }) {
       currentPage: 'mcp-chat',
       csrfToken: csrfToken(req),
       commands,
-      dataMode: process.env.MCP_DATA_MODE === 'real' ? 'Données réelles' : 'Données de test',
+      dataMode: dataMode === 'real' ? 'Données réelles' : 'Données de test',
     });
   });
 
@@ -89,6 +89,9 @@ function createRouter({ requireAuth, chatService, catalog, runtimeForUser }) {
     try {
       const confirmedContexts = contextMap(req);
       const pendingClarifications = clarificationMap(req);
+      const storedPending = req.body.conversationId ? pendingClarifications[req.body.conversationId] : undefined;
+      const pendingRequest = storedPending && typeof storedPending === 'object' && storedPending.expiresAt > Date.now()
+        ? storedPending : undefined;
       const confirmedConversationContext = req.body.conversationId
         ? confirmedContexts[req.body.conversationId] : undefined;
       for await (const event of chatService.run(req.body, {
@@ -97,11 +100,14 @@ function createRouter({ requireAuth, chatService, catalog, runtimeForUser }) {
         allowedTools: ['list_applications', 'get_deployment_status', 'get_application_logs', 'get_finops_recommendation'],
         pageContext: req.session.mcpPageContext,
         confirmedConversationContext,
-        pendingClarificationId: req.body.conversationId
-          ? pendingClarifications[req.body.conversationId] : undefined,
-        registerClarification: async ({ conversationId, clarificationId }) => {
-          pendingClarifications[conversationId] = clarificationId;
+        pendingRequest,
+        pendingClarificationId: pendingRequest?.clarificationId,
+        registerClarification: async ({ conversationId, clarificationId, tool, target }) => {
+          pendingClarifications[conversationId] = { clarificationId, tool, target, expiresAt: Date.now() + 15 * 60 * 1000 };
+          const ids = Object.keys(pendingClarifications);
+          if (ids.length > 20) delete pendingClarifications[ids[0]];
         },
+        clearClarification: async ({ conversationId }) => { delete pendingClarifications[conversationId]; },
         confirmContext: async ({ conversationId, knownContext }) => {
           confirmedContexts[conversationId] = knownContext;
           delete pendingClarifications[conversationId];

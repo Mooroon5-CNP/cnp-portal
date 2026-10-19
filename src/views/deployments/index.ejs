@@ -84,6 +84,7 @@
                           </td>
                           <td>
                             <div class="actions-cell">
+                              <a class="btn btn-secondary btn-sm" href="/mcp-chat?applicationId=<%= encodeURIComponent(dep.appName) %>">Analyser avec MCP</a>
                               <% if (can('deployments:delete')) { %>
                                 <% if (dep.pendingDeletion) { %>
                                   <span class="badge badge-warning" style="margin-right:6px;">Suppression demandée</span>

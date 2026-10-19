@@ -33,6 +33,14 @@ test('existing API token is still used without a password login', async () => {
   expect(adapter.mock.calls[0][0].headers.Authorization).toBe('Bearer legacy-token');
 });
 
+test('MCP reads deployment details through the authenticated asynchronous client', async () => {
+  const raw = { metadata: { name: 'application-dev' }, status: { health: { status: 'Healthy' } } };
+  adapter.mockImplementation(async request => ({ status: 200, config: request, headers: {},
+    data: request.url === '/session' ? { token: 'session-token' } : raw }));
+  await expect(client.getApplicationDetails('application-dev')).resolves.toEqual(raw);
+  expect(adapter.mock.calls[1][0].headers.Authorization).toBe('Bearer session-token');
+});
+
 test('expired login session is renewed and original request is retried once', async () => {
   let rejected = false;
   adapter.mockImplementation(async request => {
