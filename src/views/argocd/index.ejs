@@ -124,10 +124,17 @@
 
             <div style="display:flex;align-items:center;gap:12px;padding:10px 0;">
               <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">3. Password</span>
+              <% if (myRequest.argoCDPassword) { %>
               <input type="password" id="argocd-pwd" value="<%= myRequest.argoCDPassword %>" readonly
                 style="font-family:monospace;font-size:14px;flex:1;border:none;background:transparent;outline:none;color:inherit;">
               <button id="argocd-pwd-toggle" onclick="(function(btn){var f=document.getElementById('argocd-pwd');var shown=f.type==='text';f.type=shown?'password':'text';btn.textContent=shown?'Afficher':'Masquer';})(this)" class="btn btn-secondary btn-sm">Afficher</button>
               <button onclick="navigator.clipboard.writeText(document.getElementById('argocd-pwd').value).then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
+              <% } else { %>
+              <span role="status" style="color:var(--text-muted);font-size:13px;">
+                Le mot de passe enregistré est illisible avec la configuration actuelle.
+                Cliquez sur « Régénérer mes identifiants » pour en créer un nouveau.
+              </span>
+              <% } %>
             </div>
           </div>
 

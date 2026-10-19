@@ -16,7 +16,7 @@ patches:
         value: 2
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: registry.gitlab.com/cnp/cnp-portal:1.0.0
+        value: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal:1.0.0
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
@@ -45,5 +45,5 @@ patches:
         value: "INFO"
 
 images:
-  - name: registry.gitlab.com/cnp/cnp-portal
+  - name: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal
     newTag: "1.0.0"

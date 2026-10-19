@@ -2,15 +2,16 @@
 
 ## Prérequis
 
-- Un compte GitLab.com avec accès à l'organisation CNP
+- Un compte GitHub avec accès à l'organisation `Mooroon5-CNP`
 - Une invitation envoyée par un `manager` CNP
 
 ## Connexion
 
 1. Rendez-vous sur l'URL du portail CNP
-2. Cliquez sur **Se connecter avec GitLab**
-3. Autorisez l'application OAuth CNP Portal sur GitLab
-4. Vous êtes redirigé automatiquement vers le dashboard
+2. Cliquez sur **Se connecter avec GitHub**
+3. Autorisez l'application OAuth CNP Portal sur GitHub
+4. Votre compte est créé en attente de validation : un `manager` ou `devops` doit l'approuver depuis **Admin → Utilisateurs**
+5. Une fois approuvé, vous êtes redirigé vers le dashboard
 
 Votre rôle initial est `dev`. Un `manager` peut le modifier depuis l'interface Admin.
 
@@ -24,12 +25,12 @@ Votre rôle initial est `dev`. Un `manager` peut le modifier depuis l'interface 
 
 ## Premier déploiement
 
-1. Allez dans **Déploiements → Nouveau déploiement**
-2. Sélectionnez votre repo GitLab (connecté via OAuth)
-3. Choisissez la branche cible (par défaut: `main`)
-4. Cliquez sur **Déclencher le déploiement**
+1. Allez dans **Déploiements → + Nouveau déploiement**
+2. Renseignez l'URL de votre dépôt GitHub (`https://github.com/org/mon-app`), le nom de l'application et son port
+3. Choisissez l'équipe propriétaire et le cloud cible
+4. Validez : le portail ajoute le workflow GitHub Actions dans votre dépôt et crée les manifests dans `config-repo`
 
-Le pipeline GitLab CI/CD associé à votre repo sera automatiquement déclenché.
+À chaque push sur `main`, le pipeline GitHub Actions construit l'image, la pousse dans Artifact Registry et met à jour `config-repo` ; ArgoCD synchronise ensuite le déploiement. Voir [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) pour le détail.
 
 ## Accès Datadog / ArgoCD
 

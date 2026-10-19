@@ -36,12 +36,16 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: cnp-portal
-          image: registry.gitlab.com/cnp/cnp-portal:1.0.0
+          image: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal:1.0.0
           imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 3000
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: cnp-portal-cloud-env
+                optional: true
           env:
             - name: NODE_ENV
               value: "production"
@@ -49,8 +53,6 @@ spec:
               value: "3000"
             - name: LOG_LEVEL
               value: "INFO"
-            - name: CLUSTER_BASE_DOMAIN
-              value: "34.155.213.145.nip.io"
             - name: DD_ENV
               valueFrom:
                 fieldRef:
@@ -68,21 +70,21 @@ spec:
                 secretKeyRef:
                   name: cnp-portal-dev-session-secret
                   key: SESSION_SECRET
-            - name: GITLAB_CLIENT_ID
+            - name: GITHUB_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: cnp-portal-dev-gitlab-oauth
-                  key: GITLAB_CLIENT_ID
-            - name: GITLAB_CLIENT_SECRET
+                  name: cnp-portal-dev-github-oauth
+                  key: GITHUB_CLIENT_ID
+            - name: GITHUB_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: cnp-portal-dev-gitlab-oauth
-                  key: GITLAB_CLIENT_SECRET
-            - name: GITLAB_REDIRECT_URI
+                  name: cnp-portal-dev-github-oauth
+                  key: GITHUB_CLIENT_SECRET
+            - name: GITHUB_REDIRECT_URI
               valueFrom:
                 secretKeyRef:
-                  name: cnp-portal-dev-gitlab-oauth
-                  key: GITLAB_REDIRECT_URI
+                  name: cnp-portal-dev-github-oauth
+                  key: GITHUB_REDIRECT_URI
             - name: DATADOG_API_KEY
               valueFrom:
                 secretKeyRef:

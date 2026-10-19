@@ -99,7 +99,7 @@ async function scaleDeployment(namespace, deploymentName, replicas) {
       deploymentName,
       namespace,
       { spec: { replicas } },
-      undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
       { headers: { 'Content-Type': 'application/strategic-merge-patch+json' } },
     );
     return { deployment: deploymentName, namespace, replicas };
@@ -401,7 +401,7 @@ async function getIngressUrl(appName, env) {
 //   - patches argocd-cm to enable the account (accounts.<username>: login)
 //   - patches argocd-secret to store the bcrypt password hash
 // bcryptHash must already be a bcrypt string (e.g. from bcryptjs.hashSync).
-async function provisionArgoCDLocalUser(username, bcryptHash) {
+async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false } = {}) {
   const kc  = getKubeConfig();
   const api = kc.makeApiClient(k8s.CoreV1Api);
   const ns  = 'argocd';
@@ -412,7 +412,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash) {
     await api.patchNamespacedConfigMap(
       'argocd-cm', ns,
       { data: { [`accounts.${username}`]: 'apiKey,login' } },
-      undefined, undefined, undefined, undefined,
+      undefined, dryRun ? 'All' : undefined, undefined, undefined, undefined,
       mergeHeader,
     );
 
@@ -421,7 +421,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash) {
     await api.patchNamespacedSecret(
       'argocd-secret', ns,
       { data: { [`accounts.${username}.password`]: hashB64 } },
-      undefined, undefined, undefined, undefined,
+      undefined, dryRun ? 'All' : undefined, undefined, undefined, undefined,
       mergeHeader,
     );
   } catch (err) {

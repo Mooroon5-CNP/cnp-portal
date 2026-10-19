@@ -2,6 +2,9 @@
 
 A web portal that lets developers deploy GitHub-hosted apps to **Cloud Run on GCP** via GitOps (ArgoCD + Crossplane + Kustomize). The portal manages the full lifecycle: onboarding, CI wiring, Crossplane Cloud Run provisioning, and offboarding.
 
+Changing GCP project or region? Follow the [Cloud onboarding runbook](documentation/Cloud/README.md)
+and run `npm run cloud:import -- --help` to import the Terraform-managed connection settings.
+
 ---
 
 ## What it does

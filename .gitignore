@@ -3,6 +3,8 @@ node_modules/
 services/platform-api/.venv/
 .env
 .env.local
+.env.onboarded*
+.env.cloud*
 npm-debug.log*
 *.log
 .DS_Store

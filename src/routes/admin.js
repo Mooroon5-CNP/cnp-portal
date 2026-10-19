@@ -7,10 +7,10 @@ const { requirePermission, requireRole, can } = require('../middleware/rbac');
 const userStore = require('../models/user');
 
 const MOCK_SECRETS = [
-  { name: 'cnp-portal-prod-gitlab-oauth',    type: 'Opaque', namespace: 'cnp-portal', keys: ['GITLAB_CLIENT_ID', 'GITLAB_CLIENT_SECRET', 'GITLAB_REDIRECT_URI'] },
+  { name: 'cnp-portal-prod-github-oauth',    type: 'Opaque', namespace: 'cnp-portal', keys: ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_REDIRECT_URI'] },
   { name: 'cnp-portal-prod-session-secret',  type: 'Opaque', namespace: 'cnp-portal', keys: ['SESSION_SECRET'] },
   { name: 'cnp-portal-prod-datadog-api-key', type: 'Opaque', namespace: 'cnp-portal', keys: ['DATADOG_API_KEY', 'DATADOG_APP_KEY'] },
-  { name: 'cnp-portal-dev-gitlab-oauth',     type: 'Opaque', namespace: 'cnp-portal', keys: ['GITLAB_CLIENT_ID', 'GITLAB_CLIENT_SECRET', 'GITLAB_REDIRECT_URI'] },
+  { name: 'cnp-portal-dev-github-oauth',     type: 'Opaque', namespace: 'cnp-portal', keys: ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_REDIRECT_URI'] },
 ];
 
 // SSE: keep track of connected admin clients

@@ -9,7 +9,6 @@ const PERMISSIONS = {
   'users:view-self':         ['manager', 'devops', 'dev'],
   'users:modify-permissions':['manager'],
 
-  'cicd:connect-gitlab':     ['manager', 'devops', 'dev'],
   'cicd:trigger-pipeline':   ['manager', 'devops', 'dev'],
   'cicd:view-pipeline':      ['manager', 'devops', 'dev'],
   'cicd:modify-config':      ['manager'],

@@ -28,7 +28,7 @@ describe('Auth routes', () => {
     const res = await request(app).get('/auth/login');
     expect(res.status).toBe(200);
     expect(res.text).toContain('CNP Portal');
-    expect(res.text).toContain('gitlab');
+    expect(res.text).toContain('/auth/github');
   });
 
   test('GET /deployments redirects to login when unauthenticated', async () => {
@@ -91,8 +91,8 @@ describe('User model', () => {
 
   test('creates a user with dev role by default', () => {
     const user = userStore.create({
-      gitlabId: 999999,
-      gitlabUsername: 'test-user',
+      githubId: 999999,
+      username: 'test-user',
       email: 'test@example.com',
       avatarUrl: null,
     });
@@ -102,16 +102,16 @@ describe('User model', () => {
   });
 
   test('finds user by id', () => {
-    const created = userStore.create({ gitlabId: 888888, gitlabUsername: 'alice', email: 'alice@example.com', avatarUrl: null });
+    const created = userStore.create({ githubId: 888888, username: 'alice', email: 'alice@example.com', avatarUrl: null });
     const found = userStore.findById(created.id);
     expect(found).toBeDefined();
-    expect(found.gitlabUsername).toBe('alice');
+    expect(found.username).toBe('alice');
   });
 
-  test('upserts existing gitlab user', () => {
-    const first = userStore.upsertFromGitlab({ gitlabId: 777777, gitlabUsername: 'bob', email: 'bob@example.com', avatarUrl: null });
-    const second = userStore.upsertFromGitlab({ gitlabId: 777777, gitlabUsername: 'bob-updated', email: 'bob@example.com', avatarUrl: null });
+  test('upserts existing github user', () => {
+    const first = userStore.upsertFromGithub({ githubId: 777777, githubUsername: 'bob', email: 'bob@example.com', avatarUrl: null });
+    const second = userStore.upsertFromGithub({ githubId: 777777, githubUsername: 'bob-updated', email: 'bob@example.com', avatarUrl: null });
     expect(first.id).toBe(second.id);
-    expect(second.gitlabUsername).toBe('bob-updated');
+    expect(second.username).toBe('bob-updated');
   });
 });

@@ -12,10 +12,10 @@ La CNP Platform gère des déploiements sur **3 clouds** :
 ```
 CNP Portal (Node.js 20 + Express + EJS)
     │
-    ├── Auth: GitLab OAuth 2.0 (gitlab.com)
+    ├── Auth: GitHub OAuth 2.0 (github.com) + compte local admin
     ├── Sessions: express-session (in-memory — Redis post-MVP)
     ├── Logs: Winston JSON → Datadog
-    └── Deploy: API GitLab CI/CD
+    └── Deploy: GitHub App → config-repo (GitOps) → ArgoCD → Crossplane / Cloud Run
 ```
 
 ## Kubernetes
@@ -28,14 +28,14 @@ CNP Portal (Node.js 20 + Express + EJS)
 
 ## CI/CD
 
-Pipeline GitLab CI :
+Pipeline GitHub Actions (workflow réutilisable `Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml`) :
 ```
-lint → test → scan-secu (Trivy) → build → push
+lint → test → scan-secu (Trivy) → build → push → update config-repo
 ```
 
 - CRITICAL CVEs : bloquant
 - HIGH/MEDIUM CVEs : warning (non bloquant au MVP)
-- Registry : GitLab Container Registry
+- Registry : GCP Artifact Registry (`europe-west9-docker.pkg.dev/<projet-gcp>/cnp-registry/<app>`)
 
 ## Observabilité
 
@@ -53,7 +53,7 @@ Logs en format JSON structuré, niveau INFO en production.
 Convention de nommage : `{app}-{env}-{type}`
 
 Exemples :
-- `cnp-portal-prod-gitlab-oauth`
+- `cnp-portal-prod-github-oauth`
 - `cnp-portal-prod-session-secret`
 - `cnp-portal-prod-datadog-api-key`
 
