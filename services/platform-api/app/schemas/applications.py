@@ -36,3 +36,10 @@ class ApplicationDetail(Application):
 class ApplicationList(ContractModel):
     applications: list[Application]
     next_cursor: str | None = Field(alias="nextCursor")
+
+
+class Workload(ContractModel):
+    platform: Literal["gke", "cloud_run"]
+    stateless: bool
+    http: bool
+    requiresKubernetes: bool

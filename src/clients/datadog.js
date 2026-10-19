@@ -103,6 +103,47 @@ async function getLogs(serviceName, limit = 50) {
   }
 }
 
+// Bounded MCP log search: propagate errors instead of silently returning empty data.
+async function searchMcpLogs(input) {
+  if (!/^[a-z0-9-]+$/i.test(input.applicationId)) throw new Error('INVALID_INPUT');
+  const parts = [`service:${input.applicationId}`, `env:${input.environment}`];
+  if (input.levels?.length) parts.push(`status:(${input.levels.map((level) => level.toLowerCase()).join(' OR ')})`);
+  if (input.query) parts.push(`"${input.query}"`);
+  const { data } = await makeClient().post('/api/v2/logs/events/search', {
+    filter: { query: parts.join(' '), from: input.from, to: input.to },
+    page: { limit: input.limit, ...(input.cursor ? { cursor: input.cursor } : {}) }, sort: 'timestamp',
+  });
+  const nextCursor = data.meta?.page?.after || null;
+  return { nextCursor, truncated: Boolean(nextCursor), logs: (data.data || []).map((entry) => {
+    const attributes = entry.attributes || {};
+    const level = String(attributes.status || '').toUpperCase().replace('WARNING', 'WARN');
+    return { timestamp: attributes.timestamp, level: ['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(level) ? level : 'UNKNOWN',
+      message: attributes.message || '', service: attributes.service || input.applicationId,
+      version: attributes.attributes?.version || null, correlationId: attributes.attributes?.correlation_id || null };
+  }) };
+}
+
+// Configure app-scoped metrics whose values are already percentages (0..100).
+async function queryMcpMetrics(applicationId, environment, days) {
+  if (!/^[a-z0-9-]+$/i.test(applicationId)) throw new Error('INVALID_INPUT');
+  const to = Math.floor(Date.now() / 1000), from = to - days * 86400;
+  const client = makeClient();
+  const query = async (metric) => {
+    if (!/^[a-zA-Z0-9_.]+$/.test(metric)) throw new Error('INVALID_METRIC');
+    const response = await client.get('/api/v1/query', { params: {
+      query: `avg:${metric}{service:${applicationId},env:${environment}}`, from, to,
+    } });
+    return (response.data.series || []).flatMap((series) => series.pointlist || [])
+      .filter(([timestamp, value]) => Number.isFinite(timestamp) && Number.isFinite(value) && value >= 0 && value <= 100);
+  };
+  const [cpu, memory] = await Promise.all([query(process.env.MCP_CPU_PERCENT_METRIC), query(process.env.MCP_MEMORY_PERCENT_METRIC)]);
+  const mean = (points) => points.length ? points.reduce((sum, point) => sum + point[1], 0) / points.length : null;
+  const peak = (points) => points.length ? Math.max(...points.map((point) => point[1])) : null;
+  const coverage = (points) => points.length > 1 ? Math.floor((Math.max(...points.map((p) => p[0])) - Math.min(...points.map((p) => p[0]))) / 86400000) : 0;
+  return { averageCpuPercent: mean(cpu), peakCpuPercent: peak(cpu), averageMemoryPercent: mean(memory),
+    peakMemoryPercent: peak(memory), coverageDays: Math.min(coverage(cpu), coverage(memory)) };
+}
+
 async function getMonitors(serviceName) {
   const client = makeClient();
   try {
@@ -150,4 +191,4 @@ async function checkConnectivity() {
   }
 }
 
-module.exports = { getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };
+module.exports = { searchMcpLogs, queryMcpMetrics, getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };

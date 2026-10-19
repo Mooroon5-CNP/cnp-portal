@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { commands } = require('../commands');
 const { randomBytes, timingSafeEqual } = require('crypto');
 const { ZodError } = require('zod');
 
@@ -32,7 +33,19 @@ function clarificationMap(req) {
   return req.session.mcpPendingClarifications;
 }
 
-function createRouter({ requireAuth, chatService, catalog }) {
+function describeError(error) {
+  const messages = {
+    MCP_UNAUTHENTICATED: 'Authentification MCP refusée : le JWT est expiré ou ne correspond pas au serveur. Relancez npm run dev:integration.',
+    MCP_FORBIDDEN: 'Accès MCP refusé : vérifiez MCP_ORIGIN, les hôtes autorisés et le scope cnp:read.',
+    MCP_ENDPOINT_INVALID: 'Adresse MCP incorrecte : MCP_URL doit pointer vers le serveur MCP (port 3000), pas vers le portail (port 3001).',
+    MCP_UNREACHABLE: 'Le serveur MCP est arrêté ou son port est incorrect. Lancez npm run dev:integration.',
+    MCP_TIMEOUT: 'Le serveur MCP ne répond pas dans le délai prévu.',
+    INVALID_MCP_RESPONSE: 'La réponse MCP ne respecte pas le contrat du portail.',
+  };
+  return messages[error.code] || 'Le service MCP est temporairement indisponible.';
+}
+
+function createRouter({ requireAuth, chatService, catalog, runtimeForUser }) {
   const router = express.Router();
 
   router.get('/mcp-chat', requireAuth, (req, res) => {
@@ -44,12 +57,20 @@ function createRouter({ requireAuth, chatService, catalog }) {
       title: 'Assistant MCP — CNP Portal',
       currentPage: 'mcp-chat',
       csrfToken: csrfToken(req),
+      commands,
+      dataMode: process.env.MCP_DATA_MODE === 'real' ? 'Données réelles' : 'Données de test',
     });
   });
 
-  router.get('/api/v1/mcp/catalog', requireAuth, async (_req, res) => {
-    const applications = await catalog.listApplications();
-    res.json({ applications });
+  router.get('/api/v1/mcp/catalog', requireAuth, async (req, res, next) => {
+    try {
+      const source = runtimeForUser ? runtimeForUser(req.user).catalog : catalog;
+      const applications = await source.listApplications();
+      res.json({ applications });
+    } catch (error) {
+      if (!error.code || !error.code.startsWith('MCP_')) return next(error);
+      return res.status(502).json({ code: error.code, message: describeError(error) });
+    }
   });
 
   router.post('/api/v1/mcp/chat/turn', requireAuth, async (req, res) => {
@@ -71,7 +92,8 @@ function createRouter({ requireAuth, chatService, catalog }) {
       const confirmedConversationContext = req.body.conversationId
         ? confirmedContexts[req.body.conversationId] : undefined;
       for await (const event of chatService.run(req.body, {
-        actor: { userId: req.user.id, roles: [req.user.role], authenticated: true },
+        ...(runtimeForUser ? runtimeForUser(req.user) : {}),
+        actor: { userId: String(req.user.id), roles: [req.user.role], authenticated: true },
         allowedTools: ['list_applications', 'get_deployment_status', 'get_application_logs', 'get_finops_recommendation'],
         pageContext: req.session.mcpPageContext,
         confirmedConversationContext,
@@ -94,8 +116,8 @@ function createRouter({ requireAuth, chatService, catalog }) {
       const invalid = error instanceof ZodError;
       writeEvent(res, {
         type: 'error', correlationId,
-        code: invalid ? 'INVALID_INPUT' : 'INTERNAL_ERROR',
-        message: invalid ? 'La demande ne respecte pas le format attendu.' : 'Le service MCP est temporairement indisponible.',
+        code: invalid ? 'INVALID_INPUT' : (error.code || 'INTERNAL_ERROR'),
+        message: invalid ? 'La demande ne respecte pas le format attendu.' : describeError(error),
         retryable: !invalid,
       });
     }
@@ -105,4 +127,4 @@ function createRouter({ requireAuth, chatService, catalog }) {
   return router;
 }
 
-module.exports = { createRouter };
+module.exports = { createRouter, describeError };

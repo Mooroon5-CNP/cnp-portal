@@ -9,7 +9,7 @@
         <header class="mcp-chat-header">
           <div>
             <h1 class="page-title">Assistant MCP</h1>
-            <p class="page-subtitle">Consultation sécurisée des opérations CNP</p>
+            <p class="page-subtitle">Consultation sécurisée des opérations CNP · <%= dataMode %></p>
           </div>
           <span class="mcp-readonly-status"><span aria-hidden="true"></span> Lecture seule</span>
         </header>
@@ -38,17 +38,25 @@
             <h2>Que souhaitez-vous consulter ?</h2>
             <div class="mcp-prompts">
               <button type="button" data-prompt="Liste les applications disponibles">Applications</button>
-              <button type="button" data-prompt="Quel est le statut du déploiement majoutes-api en dev ?">Déploiement</button>
-              <button type="button" data-prompt="Montre les logs de majoutes-api en dev">Logs</button>
-              <button type="button" data-prompt="Donne une recommandation FinOps pour majoutes-api en dev">FinOps</button>
+              <button type="button" data-prompt="Quel est le statut du déploiement en dev ?">Déploiement</button>
+              <button type="button" data-prompt="Montre les logs de en dev">Logs</button>
+              <button type="button" data-prompt="Donne une recommandation FinOps pour en dev">FinOps</button>
             </div>
           </div>
           <div class="mcp-messages" data-messages></div>
         </section>
 
+        <div class="mcp-command-menu" id="mcp-commands" data-command-menu role="listbox" aria-label="Commandes disponibles" hidden>
+          <% commands.forEach(function(command) { %>
+            <button type="button" role="option" aria-selected="false" data-command="<%= command.command %>">
+              <strong><%= command.command %></strong><span><%= command.description %></span>
+            </button>
+          <% }); %>
+          <p>↑ ↓ pour choisir · Entrée pour insérer · Échap pour fermer</p>
+        </div>
         <form class="mcp-composer" data-composer>
           <label for="mcp-message" class="sr-only">Votre question</label>
-          <textarea id="mcp-message" name="message" maxlength="4000" rows="1" placeholder="Posez une question sur la plateforme..." required></textarea>
+          <textarea id="mcp-message" name="message" maxlength="4000" rows="1" aria-controls="mcp-commands" aria-haspopup="listbox" aria-expanded="false" placeholder="Posez une question ou tapez / pour les commandes..." required></textarea>
           <button type="submit" class="mcp-send" aria-label="Envoyer" title="Envoyer">
             <span aria-hidden="true">↑</span>
           </button>

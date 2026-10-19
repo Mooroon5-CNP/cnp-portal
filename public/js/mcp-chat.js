@@ -12,12 +12,40 @@
   const empty = root.querySelector('[data-empty-state]');
   const applicationSelect = root.querySelector('[data-context-application]');
   const environmentSelect = root.querySelector('[data-context-environment]');
+  const commandMenu = root.querySelector('[data-command-menu]');
+  const commandButtons = Array.from(commandMenu.querySelectorAll('[data-command]'));
+  let commandIndex = 0;
   let conversationId;
+
+  function refreshCommands() {
+    const value = input.value.trim();
+    const open = value.startsWith('/') && !value.includes(' ');
+    const visible = commandButtons.filter((button) => {
+      button.hidden = !button.dataset.command.startsWith(value.toLowerCase());
+      return !button.hidden;
+    });
+    commandMenu.hidden = !open || !visible.length;
+    input.setAttribute('aria-expanded', String(!commandMenu.hidden));
+    commandIndex = Math.min(commandIndex, Math.max(0, visible.length - 1));
+    commandButtons.forEach((button) => button.setAttribute('aria-selected', String(button === visible[commandIndex])));
+  }
+  function insertCommand(button) {
+    input.value = `${button.dataset.command} `;
+    commandMenu.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.focus();
+  }
+  commandButtons.forEach((button) => button.addEventListener('click', () => insertCommand(button)));
+  input.addEventListener('input', () => { commandIndex = 0; refreshCommands(); });
 
   async function loadCatalog() {
     try {
       const response = await fetch('/api/v1/mcp/catalog');
-      if (!response.ok) return;
+      if (!response.ok) {
+        const issue = await response.json().catch(() => ({}));
+        addMessage('notice', issue.message || 'Le catalogue MCP est indisponible.', 'mcp-message-warning');
+        return;
+      }
       const { applications } = await response.json();
       applications.forEach((application) => {
         const option = document.createElement('option');
@@ -132,9 +160,21 @@
     const message = input.value.trim();
     if (!message) return;
     input.value = '';
+    commandMenu.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
     send(message);
   });
   input.addEventListener('keydown', (event) => {
+    if (!commandMenu.hidden) {
+      const visible = commandButtons.filter((button) => !button.hidden);
+      if (event.key === 'Escape') { event.preventDefault(); commandMenu.hidden = true; input.setAttribute('aria-expanded', 'false'); return; }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        commandIndex = (commandIndex + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+        refreshCommands(); return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); insertCommand(visible[commandIndex]); return; }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       form.requestSubmit();

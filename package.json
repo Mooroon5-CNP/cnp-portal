@@ -7,12 +7,20 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "lint": "eslint src test apps packages public/js --ext .js",
-    "test": "jest --forceExit"
+    "test": "jest --forceExit",
+    "test:integration": "node scripts/test-mcp-integration.mjs",
+    "dev:integration": "node scripts/start-local-mcp.cjs",
+    "dev:integration:mock": "node scripts/start-local-mcp.cjs --mock",
+    "test:live-sources": "node scripts/check-live-sources.cjs",
+    "test:generation": "node scripts/test-generation.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.86",
     "@kubernetes/client-node": "^0.20.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@octokit/auth-app": "^6.0.0",
     "@octokit/rest": "^20.0.0",
+    "ai": "^7.0.130",
     "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.10.0",
@@ -50,6 +58,9 @@
     ],
     "setupFiles": [
       "./test/setup.js"
+    ],
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.kilo/"
     ]
   }
 }

@@ -381,3 +381,7 @@ docker run --env-file .env -p 3000:3000 cnp-portal:local
 kubectl apply -k k8s/overlays/dev
 kubectl apply -k k8s/overlays/prod
 ```
+
+## MCP integration
+
+Current state and repeatable cross-project tests: [MCP integration guide](documentation/MCP_INTEGRATION.md).

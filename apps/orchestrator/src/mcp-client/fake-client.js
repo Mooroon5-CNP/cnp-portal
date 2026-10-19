@@ -39,7 +39,7 @@ class FakeMcpClient {
         }, { sources: [{ source: 'mcp_contract_fixture', status: 'available', retrievedAt: new Date().toISOString() }] });
       case 'get_application_logs':
         return response(tool, correlationId, {
-          logs: [], truncated: false, redactedFields: 0,
+          logs: [], nextCursor: null, truncated: false, redactedFields: 0,
         }, { sources: [{ source: 'datadog_fixture', status: 'available', retrievedAt: new Date().toISOString() }] });
       case 'get_finops_recommendation':
         return response(tool, correlationId, {

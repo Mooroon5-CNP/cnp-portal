@@ -59,7 +59,9 @@
               },
               "correlationId": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9_.:-]+$"
               },
               "generatedAt": {
                 "type": "string",
@@ -301,7 +303,9 @@
               },
               "correlationId": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9_.:-]+$"
               },
               "generatedAt": {
                 "type": "string",
@@ -349,6 +353,7 @@
             "additionalProperties": false
           },
           "warnings": {
+            "minItems": 1,
             "type": "array",
             "items": {
               "type": "object",
@@ -543,7 +548,9 @@
               },
               "correlationId": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9_.:-]+$"
               },
               "generatedAt": {
                 "type": "string",

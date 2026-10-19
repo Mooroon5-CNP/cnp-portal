@@ -863,3 +863,13 @@ input:focus, select:focus, textarea:focus {
 .flex  { display: flex; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .flex-center  { display: flex; align-items: center; gap: 8px; }
+
+/* Slash command palette */
+.mcp-command-menu { background: var(--bg-secondary, #fff); border: 1px solid #d9e1e8; border-radius: 12px; padding: 8px; margin-bottom: 10px; }
+.mcp-command-menu[hidden], .mcp-command-menu button[hidden] { display: none; }
+.mcp-command-menu button { display: flex; gap: 14px; align-items: center; width: 100%; text-align: left; padding: 12px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; color: inherit; }
+.mcp-command-menu button:hover, .mcp-command-menu button[aria-selected="true"] { background: #eef4ff; color: #183b69; }
+.mcp-command-menu button strong { min-width: 120px; }
+.mcp-command-menu button span, .mcp-command-menu p { font-size: 13px; }
+.mcp-command-menu p { margin: 8px 12px; color: #64748b; }
+.mcp-message { white-space: pre-wrap; }

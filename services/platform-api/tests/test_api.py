@@ -44,7 +44,7 @@ async def test_lists_contract_shaped_applications(client):
 async def test_returns_application_detail(client):
     response = await client.get("/v1/applications/majoutes-api", headers=headers)
     assert response.status_code == 200
-    assert response.json()["workloadProfile"]["stateless"] is True
+    assert set(response.json()) == {"applicationId", "name", "team", "repositoryUrl", "environments"}
 
 
 @pytest.mark.anyio
@@ -63,3 +63,12 @@ async def test_invalid_limit_is_a_400(client):
     response = await client.get("/v1/applications?limit=101", headers=headers)
     assert response.status_code == 400
     assert response.json()["code"] == "INVALID_INPUT"
+
+
+@pytest.mark.anyio
+async def test_workload_matches_mcp_contract(client):
+    response = await client.get("/v1/applications/majoutes-api/dev/workload", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"platform": "cloud_run", "stateless": True, "http": True, "requiresKubernetes": False}
+    assert (await client.get("/v1/applications/unknown/dev/workload", headers=headers)).status_code == 404
+    assert (await client.get("/v1/applications/majoutes-api/dev/workload")).status_code == 401

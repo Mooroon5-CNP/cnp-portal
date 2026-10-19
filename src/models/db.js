@@ -34,6 +34,11 @@ db.exec(`
 
 // Migrations: add columns introduced after initial schema
 const cols = db.pragma('table_info(users)').map(c => c.name);
+if (!cols.includes('gitlab_id')) {
+  db.exec('ALTER TABLE users ADD COLUMN gitlab_id INTEGER');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_gitlab_id ON users(gitlab_id) WHERE gitlab_id IS NOT NULL');
+}
+
 if (!cols.includes('github_id')) {
   db.exec('ALTER TABLE users ADD COLUMN github_id INTEGER');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id) WHERE github_id IS NOT NULL');

@@ -39,6 +39,7 @@ const getApplicationLogsInputSchema = z.strictObject({
     .refine((value) => !/\b(?:AND|OR|NOT)\b/.test(value), 'Query operators are forbidden')
     .optional(),
   limit: z.number().int().min(1).max(200).default(50),
+  cursor: z.string().max(1000).optional(),
 }).refine((value) => {
   const duration = Date.parse(value.to) - Date.parse(value.from);
   return duration >= 0 && duration <= 24 * 60 * 60 * 1000;
@@ -84,7 +85,7 @@ const logSchema = z.strictObject({
   message: z.string(), service: z.string(), version: z.string().nullable(), correlationId: z.string().nullable(),
 });
 const getApplicationLogsDataSchema = z.strictObject({
-  logs: z.array(logSchema).max(200), truncated: z.boolean(), redactedFields: z.number().int().nonnegative(),
+  logs: z.array(logSchema).max(200), nextCursor: z.string().nullable(), truncated: z.boolean(), redactedFields: z.number().int().nonnegative(),
 });
 const getFinOpsRecommendationDataSchema = z.strictObject({
   recommendation: z.enum([
@@ -121,7 +122,7 @@ function responseSchema(tool, dataSchema) {
   const common = {
     meta: z.strictObject({
       tool: z.literal(tool), schemaVersion: z.literal(schemaVersion),
-      correlationId: z.string().min(1), generatedAt: timestampSchema,
+      correlationId: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/), generatedAt: timestampSchema,
       sources: z.array(sourceStatusSchema),
     }),
     warnings: z.array(toolIssueSchema),
@@ -129,7 +130,7 @@ function responseSchema(tool, dataSchema) {
   };
   return z.discriminatedUnion('status', [
     z.strictObject({ ...common, status: z.literal('success'), data: dataSchema }),
-    z.strictObject({ ...common, status: z.literal('partial'), data: dataSchema }),
+    z.strictObject({ ...common, status: z.literal('partial'), data: dataSchema, warnings: z.array(toolIssueSchema).min(1) }),
     z.strictObject({ ...common, status: z.literal('error'), data: z.null(), errors: z.array(toolIssueSchema).min(1) }),
   ]);
 }

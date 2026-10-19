@@ -7,3 +7,16 @@ npm-debug.log*
 *.log
 .DS_Store
 data/
+
+# Python runtime and test artifacts (all services)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+# Local configuration and build output
+.env.*
+!.env.example
+coverage/
+dist/
+*.sqlite*
