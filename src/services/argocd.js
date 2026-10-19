@@ -126,13 +126,8 @@ async function approveAccess(requestId, reviewerId) {
 
   const bcryptHash = bcrypt.hashSync(password, 10);
 
-  // Provision the account in the cluster (best-effort — log on failure but don't abort).
-  try {
-    await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
-  } catch (err) {
-    console.error('[argocd] provisionArgoCDLocalUser failed:', err.message);
-    // Still save the request as approved so the manager can communicate credentials manually.
-  }
+  // Persist approval only after the account exists in the target cluster.
+  await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
 
   return accessReqModel.approve(requestId, {
     argoCDUsername,
@@ -165,11 +160,7 @@ async function regenerateCredentials(userId) {
 
   const bcryptHash = bcrypt.hashSync(password, 10);
 
-  try {
-    await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
-  } catch (err) {
-    console.error('[argocd] regenerateCredentials provisionArgoCDLocalUser failed:', err.message);
-  }
+  await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
 
   return accessReqModel.updateCredentials(existing.id, {
     argoCDPassword: _encrypt(password),

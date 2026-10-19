@@ -4,6 +4,10 @@
   "description": "CNP Portal - Cloud Native Platform management interface",
   "main": "src/index.js",
   "scripts": {
+    "cloud:onboard": "node scripts/cloud/import-terraform.js",
+    "cloud:import": "node scripts/cloud/import-terraform.js",
+    "argocd:connect": "node scripts/cloud/connect-argocd.js",
+    "cloud:check": "node scripts/cloud/check-connection.js",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "lint": "eslint src test --ext .js",

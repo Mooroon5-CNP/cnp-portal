@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('./cloud-env').loadCloudEnv();
 
 const REQUIRED_VARS = [
   'GITHUB_APP_ID',
@@ -17,7 +18,10 @@ const REQUIRED_VARS = [
 ];
 
 function getMissingVars() {
-  return REQUIRED_VARS.filter(v => !process.env[v] || process.env[v].trim() === '');
+  return REQUIRED_VARS.filter(v => {
+    if (v === 'ARGOCD_TOKEN' && process.env.ARGOCD_USERNAME && process.env.ARGOCD_PASSWORD) return false;
+    return !process.env[v] || process.env[v].trim() === '';
+  });
 }
 
 // When run directly: validate and exit with the list of missing vars
@@ -59,6 +63,8 @@ const config = {
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,
     token: process.env.ARGOCD_TOKEN,
+    username: process.env.ARGOCD_USERNAME,
+    password: process.env.ARGOCD_PASSWORD,
     insecure: process.env.ARGOCD_INSECURE === 'true',
     // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
     // Falls back to serverUrl if not set.

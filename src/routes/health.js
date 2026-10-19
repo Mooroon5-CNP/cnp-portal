@@ -19,7 +19,7 @@ router.get('/health', async (req, res) => {
       run: () => require('../clients/github').checkConnectivity(),
     },
     argocd: {
-      vars: ['ARGOCD_SERVER_URL', 'ARGOCD_TOKEN'],
+      vars: ['ARGOCD_SERVER_URL', 'ARGOCD_TOKEN'], // getMissingVars accepts the Terraform login alternative
       run: () => require('../clients/argocd').checkConnectivity(),
     },
     datadog: {
