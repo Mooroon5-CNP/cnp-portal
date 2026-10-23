@@ -687,6 +687,15 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         await updateStatus('failed', 'GITHUB_CONFIG_REPO_TOKEN is not configured on the platform.');
         return;
     }
+    // configRepoToken (PAT) is only injected into the app repo for its CI (step 5). The portal's
+    // own config-repo writes use the GitHub App token so they are pushed as cnp-platform-bot[bot].
+    let configRepoWriteToken;
+    try {
+        configRepoWriteToken = await githubClient.getConfigRepoToken();
+    } catch (e) {
+        await updateStatus('failed', e.message);
+        return;
+    }
 
     const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
     const configRepoUrl = `https://github.com/${crOwner}/${crRepo}`;
@@ -719,31 +728,31 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         // Step 1: Create config-repo base manifests
         // ------------------------------------------------------------------
         const base = `apps/${appName}/base`;
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/deployment.yaml`, tplBaseDeployment(appName, appPort, persistentStorage), configRepoToken);
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/kustomization.yaml`, tplBaseKustomization(), configRepoToken);
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/service.yaml`, tplBaseService(appName, appPort), configRepoToken);
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-default-deny.yaml`, tplNetpolDefaultDeny(appName), configRepoToken);
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-allow-dns.yaml`, tplNetpolAllowDns(appName), configRepoToken);
-        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-allow-ingress-ctrl.yaml`, tplNetpolAllowIngress(appName, appPort), configRepoToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/deployment.yaml`, tplBaseDeployment(appName, appPort, persistentStorage), configRepoWriteToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/kustomization.yaml`, tplBaseKustomization(), configRepoWriteToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/service.yaml`, tplBaseService(appName, appPort), configRepoWriteToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-default-deny.yaml`, tplNetpolDefaultDeny(appName), configRepoWriteToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-allow-dns.yaml`, tplNetpolAllowDns(appName), configRepoWriteToken);
+        await writeConfigRepoFile(crOwner, crRepo, `${base}/netpol-allow-ingress-ctrl.yaml`, tplNetpolAllowIngress(appName, appPort), configRepoWriteToken);
 
         // ------------------------------------------------------------------
         // Step 2: Create config-repo overlay manifests (dev + prod)
         // ------------------------------------------------------------------
         for (const env of ['dev', 'prod']) {
             const overlay = `apps/${appName}/overlays/${env}`;
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage, targetCluster), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/kustomization.yaml`, tplOverlayKustomization(appName, env, teamOwner, appPort, persistentStorage, targetCluster), configRepoWriteToken);
             if (persistentStorage) {
-                await writeConfigRepoFile(crOwner, crRepo, `${overlay}/pvc.yaml`, tplOverlayPvc(appName, env), configRepoToken);
+                await writeConfigRepoFile(crOwner, crRepo, `${overlay}/pvc.yaml`, tplOverlayPvc(appName, env), configRepoWriteToken);
             }
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/namespace.yaml`, tplOverlayNamespace(appName, env), configRepoToken);
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/configmap.yaml`, tplOverlayConfigMap(appName, env), configRepoToken);
-            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/ingress.yaml`, await tplOverlayIngress(appName, env), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/namespace.yaml`, tplOverlayNamespace(appName, env), configRepoWriteToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/configmap.yaml`, tplOverlayConfigMap(appName, env), configRepoWriteToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${overlay}/ingress.yaml`, await tplOverlayIngress(appName, env), configRepoWriteToken);
         }
 
         // ------------------------------------------------------------------
         // Step 3: Register app in registry.yaml
         // ------------------------------------------------------------------
-        await updateRegistry(crOwner, crRepo, appName, appPort, githubRepoUrl, teamOwner, configRepoToken);
+        await updateRegistry(crOwner, crRepo, appName, appPort, githubRepoUrl, teamOwner, configRepoWriteToken);
 
         // ------------------------------------------------------------------
         // Step 3.5: Create ArgoCD ApplicationSet overlay in config-repo and
@@ -755,7 +764,7 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 crOwner, crRepo,
                 `argocd/overlays/${appName}/kustomization.yaml`,
                 tplArgocdOverlayKustomization(appName, teamOwner),
-                configRepoToken,
+                configRepoWriteToken,
             );
 
             const { dev: devAppSet, prod: prodAppSet } = buildApplicationSetManifests(appName, teamOwner, configRepoUrl);
@@ -780,16 +789,16 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 console.warn(`[onboarding] Could not apply cloudrun-autodiscovery AppSet: ${e.message}`);
             }
             const cpBase = `apps/${appName}/crossplane`;
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, appPort, persistentStorage), configRepoToken);
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-claim.yaml`, tplCrossplaneV2Service(appName, appPort, persistentStorage), configRepoWriteToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/cloudrun-iam.yaml`, tplCrossplaneIAM(appName), configRepoWriteToken);
             if (persistentStorage) {
-                await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/gcs-bucket.yaml`, tplCrossplaneGcsBucket(appName), configRepoToken);
+                await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/gcs-bucket.yaml`, tplCrossplaneGcsBucket(appName), configRepoWriteToken);
             }
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(persistentStorage), configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/kustomization.yaml`, tplCrossplaneKustomization(persistentStorage), configRepoWriteToken);
 
             const argoApp = tplCrossplaneArgocdApplication(appName, configRepoUrl);
             const argoAppYaml = yaml.dump(argoApp, { lineWidth: -1, noRefs: true });
-            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/application.yaml`, argoAppYaml, configRepoToken);
+            await writeConfigRepoFile(crOwner, crRepo, `${cpBase}/application.yaml`, argoAppYaml, configRepoWriteToken);
         }
 
         // ------------------------------------------------------------------
@@ -905,13 +914,18 @@ async function removeFromRegistry(owner, repo, appName, token) {
  *   5. Deletes CONFIG_REPO_TOKEN secret from the app repo (GitHub App).
  */
 async function offboardApp({ appName, githubRepoUrl }) {
-    const configRepoToken = config.github.configRepoToken;
     const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
     const parsed = githubService.parseRepoUrl(githubRepoUrl);
 
     const errors = [];
 
-    // Step 1 & 2: config-repo cleanup via PAT
+    // Step 1 & 2: config-repo cleanup via the GitHub App
+    let configRepoToken = null;
+    try {
+        configRepoToken = await githubClient.getConfigRepoToken();
+    } catch (e) {
+        errors.push(`config-repo: ${e.message}`);
+    }
     if (configRepoToken) {
         const paths = configRepoPaths(appName);
         for (const path of paths) {
@@ -1005,7 +1019,7 @@ async function offboardApp({ appName, githubRepoUrl }) {
  * Called automatically when the detail page detects a placeholder URL.
  */
 async function healIngressHostname(appName) {
-    const configRepoToken = config.github.configRepoToken;
+    const configRepoToken = await githubClient.getConfigRepoToken().catch(() => null);
     if (!configRepoToken) return;
 
     let baseDomain = config.cluster?.baseDomain || null;
@@ -1035,7 +1049,7 @@ async function healIngressHostname(appName) {
  * Called automatically from the deployment detail page — idempotent, no-op if already correct.
  */
 async function healGcsBucket(appName) {
-    const configRepoToken = config.github.configRepoToken;
+    const configRepoToken = await githubClient.getConfigRepoToken().catch(() => null);
     if (!configRepoToken) return;
 
     const { owner: crOwner, repo: crRepo } = parseConfigRepoName();

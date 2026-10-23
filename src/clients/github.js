@@ -23,6 +23,21 @@ async function getInstallationOctokit() {
   return _octokit;
 }
 
+// Installation access token used for every portal write to config-repo. Commits pushed with it
+// are attributed to cnp-platform-bot[bot], the only identity allowed to change
+// apps/*/crossplane/prod/** by config-repo's protect-prod-paths workflow — a PAT would be
+// attributed to its human owner and reverted. @octokit/auth-app caches it until near expiry.
+async function getConfigRepoToken() {
+  const octokit = await getInstallationOctokit();
+  try {
+    const { token } = await octokit.auth({ type: 'installation' });
+    return token;
+  } catch (err) {
+    if (err.status === 401) _octokit = null;
+    throw new Error(`GitHub App authentication failed for config-repo access: ${err.message}`);
+  }
+}
+
 async function setRepoSecret(owner, repo, secretName, secretValue) {
   const octokit = await getInstallationOctokit();
 
@@ -224,6 +239,7 @@ async function checkConnectivity() {
 
 module.exports = {
   getInstallationOctokit,
+  getConfigRepoToken,
   setRepoSecret,
   createOrUpdateFile,
   getFileSha,
