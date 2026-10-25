@@ -22,6 +22,14 @@ const { azureAppUrl } = azureTemplates;
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
 const SUPPORTED_CLOUDS = ['gcp', 'azure'];
 
+// Étapes de création côté Azure, après la CI : ce que l'utilisateur attend réellement.
+const AZURE_PROGRESS_MESSAGES = {
+    'waiting-argocd': 'Pipeline terminé. En attente de la synchronisation d\'Argo CD…',
+    server: 'Pipeline terminé. Création du serveur PostgreSQL privé en cours (5 à 10 minutes)…',
+    database: 'Serveur PostgreSQL prêt. Création de la base de données…',
+    containerapp: 'Base de données prête. Création de la Container App…',
+};
+
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
 // ---------------------------------------------------------------------------
@@ -381,6 +389,28 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
 
     if (run.status === 'completed') {
         const runUrl = `https://github.com/${parsed.owner}/${parsed.repo}/actions/runs/${run.id}`;
+        if (run.conclusion === 'success' && dep.targetCluster === 'azure') {
+            // Un run réussi = image construite et promue, pas application déployée : Crossplane crée encore le
+            // serveur PostgreSQL (5 à 10 min), la base puis la Container App. On attend leur état réel.
+            const names = azureTemplates.azureNames(dep.appName, config.azure);
+            const azure = await k8sClient.getAzureAppStatus(dep.appName, { serverName: names.server, databaseName: names.database })
+                .catch(() => null);
+            if (!azure) {
+                return res.json({ phase: 'running', message: 'Pipeline terminé. Vérification de l\'état des ressources Azure impossible pour le moment, nouvelle tentative…', runUrl });
+            }
+            if (azure.phase === 'failed') {
+                return res.json({ phase: 'failed', message: 'La création des ressources Azure a échoué.', detail: azure.failure, runUrl });
+            }
+            if (azure.phase !== 'ready') {
+                return res.json({ phase: 'running', message: AZURE_PROGRESS_MESSAGES[azure.phase], runUrl });
+            }
+            return res.json({
+                phase: 'success',
+                message: 'Votre application a été déployée avec succès.',
+                runUrl,
+                cloudRunUrl: azureAppUrl(dep.appName, config.azure),
+            });
+        }
         // Use cached URL from DB; only query K8s on cache miss and save on find.
         let cloudRunUrl = dep.cloudRunUrl || null;
         if (!cloudRunUrl) {

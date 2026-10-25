@@ -367,6 +367,56 @@ async function getV2ServiceStatus(appName) {
   }
 }
 
+// État d'une app Azure vue par Crossplane (providers Upbound : objets cluster-scoped, un par ressource Azure).
+// Fonction pure, séparée de l'appel API pour être testable. Une ressource absente est « pas encore créée » :
+// Argo CD ne crée la Container App (vague 2) qu'une fois le serveur et la base prêts.
+function conditionOf(body, type) {
+  return (body?.status?.conditions || []).find(c => c.type === type) || null;
+}
+
+function azureAppStatusFrom({ server, database, containerApp }) {
+  const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
+  if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
+    return { phase: 'ready', failure: null };
+  }
+  // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
+  // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
+  // réconciliation (ReconcileError) peut être passagère : on ne la déclare pas en échec.
+  for (const [name, body] of [['Container App', containerApp], ['base de données', database], ['serveur PostgreSQL', server]]) {
+    const op = conditionOf(body, 'LastAsyncOperation');
+    if (op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)) {
+      const detail = String(op.message || op.reason).replace(/\s+/g, ' ').trim();
+      return { phase: 'failed', failure: `${name} : ${detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}` };
+    }
+  }
+  if (!server) return { phase: 'waiting-argocd', failure: null };
+  if (!ready(server)) return { phase: 'server', failure: null };
+  if (!ready(database)) return { phase: 'database', failure: null };
+  return { phase: 'containerapp', failure: null };
+}
+
+async function getAzureObject(api, group, version, plural, name) {
+  try { return (await api.getClusterCustomObject(group, version, plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+async function getAzureAppStatus(appName, { serverName, databaseName }) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const [server, database, containerApp] = await Promise.all([
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', serverName),
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
+      getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', appName),
+    ]);
+    return azureAppStatusFrom({ server, database, containerApp });
+  } catch (err) {
+    handleError(err, `getAzureAppStatus(${appName})`);
+  }
+}
+
 // Cache the ingress IP for the lifetime of the process — it almost never changes.
 let _ingressIpCache = null;
 
@@ -480,6 +530,6 @@ module.exports = {
   applyApplicationSet, deleteApplicationSet,
   applyArgocdApplication, deleteArgocdApplication,
   deleteNamespace,
-  getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getAzureAppStatus, azureAppStatusFrom, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

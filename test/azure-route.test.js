@@ -1,10 +1,11 @@
 'use strict';
 
 jest.mock('../src/config/env', () => ({
-  config: { github: { configRepoName: 'team/config', configRepoToken: 'test-token' }, gcp: {}, azure: { environmentDomain: 'env.example.io' } },
+  config: { github: { configRepoName: 'team/config', configRepoToken: 'test-token' }, gcp: {},
+    azure: { namePrefix: 'cnp-sov', regionKey: 'fr', nameSuffix: 'abc123', environmentDomain: 'env.example.io' } },
 }));
 jest.mock('../src/clients/github', () => ({ getLatestRun: jest.fn(), getRuns: jest.fn(), getRunJobs: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ getV2ServiceUrl: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ getV2ServiceUrl: jest.fn(), getAzureAppStatus: jest.fn() }));
 jest.mock('../src/services/github', () => ({
   ...jest.requireActual('../src/services/github'), getFileContent: jest.fn(), getPullRequestStatus: jest.fn(),
 }));
@@ -21,6 +22,9 @@ const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
 const environmentService = require('../src/services/environment-deployment');
 const onboarding = require('../src/services/onboarding');
+const githubClient = require('../src/clients/github');
+const k8sClient = require('../src/clients/kubernetes');
+const { azureAppStatusFrom } = jest.requireActual('../src/clients/kubernetes');
 
 const managerId = db.prepare("SELECT id FROM users WHERE username = 'admin'").get().id;
 const app = express();
@@ -69,4 +73,88 @@ test('GCP garde le service d\'environnements', async () => {
   await request(app).post('/deployments').type('form').send({ ...form, targetCluster: 'gcp' });
   expect(environmentService.onboard).toHaveBeenCalled();
   expect(onboarding.onboardApp).not.toHaveBeenCalled();
+});
+
+describe('statut d\'un déploiement Azure après la CI', () => {
+  function azureDeployment() {
+    const dep = deployments.create({
+      appName: 'todo-az', githubRepoUrl: 'https://github.com/team/todo', appPort: 8080,
+      targetCluster: 'azure', environment: 'legacy', ownerUserId: managerId,
+    });
+    deployments.updateOnboardingStatus(dep.id, 'ready');
+    return dep;
+  }
+  const status = id => request(app).get(`/deployments/${id}/status`);
+
+  beforeEach(() => githubClient.getLatestRun.mockResolvedValue({ id: 7, status: 'completed', conclusion: 'success' }));
+
+  test('CI réussie mais serveur PostgreSQL pas prêt : pas « déployée »', async () => {
+    k8sClient.getAzureAppStatus.mockResolvedValue({ phase: 'server', failure: null });
+    const dep = azureDeployment();
+    const res = await status(dep.id);
+    expect(res.body.phase).toBe('running');
+    expect(res.body.message).toContain('serveur PostgreSQL');
+    expect(k8sClient.getAzureAppStatus).toHaveBeenCalledWith('todo-az', {
+      serverName: 'cnp-sov-fr-todo-az-dev-abc123', databaseName: 'todo-az-appdb',
+    });
+  });
+
+  test('Container App prête : succès avec l\'URL Azure', async () => {
+    k8sClient.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null });
+    const res = await status(azureDeployment().id);
+    expect(res.body.phase).toBe('success');
+    expect(res.body.cloudRunUrl).toBe('https://todo-az.env.example.io');
+  });
+
+  test('échec de création côté Azure : failed avec la cause', async () => {
+    k8sClient.getAzureAppStatus.mockResolvedValue({ phase: 'failed', failure: 'Container App : image introuvable' });
+    const res = await status(azureDeployment().id);
+    expect(res.body.phase).toBe('failed');
+    expect(res.body.detail).toContain('image introuvable');
+  });
+
+  test('API Kubernetes indisponible : on continue d\'attendre, on ne déclare rien', async () => {
+    k8sClient.getAzureAppStatus.mockRejectedValue(new Error('timeout'));
+    const res = await status(azureDeployment().id);
+    expect(res.body.phase).toBe('running');
+  });
+
+  test('CI en cours : Crossplane n\'est même pas interrogé', async () => {
+    githubClient.getLatestRun.mockResolvedValue({ id: 7, status: 'in_progress' });
+    const res = await status(azureDeployment().id);
+    expect(res.body.phase).toBe('running');
+    expect(k8sClient.getAzureAppStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('azureAppStatusFrom (lecture des conditions Crossplane)', () => {
+  const cond = (type, status, extra = {}) => ({ type, status, ...extra });
+  const obj = (...conditions) => ({ status: { conditions: conditions } });
+  const ok = obj(cond('Ready', 'True'), cond('Synced', 'True'));
+  const creating = obj(cond('Ready', 'False', { reason: 'Creating' }), cond('Synced', 'True'));
+
+  test('aucune ressource : en attente d\'Argo CD', () => {
+    expect(azureAppStatusFrom({}).phase).toBe('waiting-argocd');
+  });
+  test('étapes dans l\'ordre serveur, base, Container App', () => {
+    expect(azureAppStatusFrom({ server: creating }).phase).toBe('server');
+    expect(azureAppStatusFrom({ server: ok, database: creating }).phase).toBe('database');
+    expect(azureAppStatusFrom({ server: ok, database: ok, containerApp: creating }).phase).toBe('containerapp');
+    expect(azureAppStatusFrom({ server: ok, database: ok }).phase).toBe('containerapp');
+  });
+  test('tout prêt', () => {
+    expect(azureAppStatusFrom({ server: ok, database: ok, containerApp: ok }).phase).toBe('ready');
+  });
+  test('échec de création asynchrone : failed avec le message (tronqué)', () => {
+    const failed = obj(cond('Ready', 'False'), cond('Synced', 'False', { reason: 'ReconcileError' }),
+      cond('LastAsyncOperation', 'False', { reason: 'AsyncCreateFailure', message: `manifest tagged by placeholder ${'x'.repeat(600)}` }));
+    const res = azureAppStatusFrom({ server: ok, database: ok, containerApp: failed });
+    expect(res.phase).toBe('failed');
+    expect(res.failure).toContain('Container App');
+    expect(res.failure.length).toBeLessThan(450);
+  });
+  test('une simple ReconcileError passagère n\'est pas un échec', () => {
+    const transient = obj(cond('Ready', 'False'), cond('Synced', 'False', { reason: 'ReconcileError' }));
+    expect(azureAppStatusFrom({ server: ok, database: ok, containerApp: transient }).phase).toBe('containerapp');
+  });
 });
