@@ -103,20 +103,23 @@ function manifests(dep, revision) {
   return files;
 }
 
-function applicationSet() {
+function applicationSet(environment = 'dev', paths = []) {
+  if (!Object.hasOwn(branches, environment)) throw new Error('Environnement invalide.');
   const repoURL = `https://github.com/${config.github.configRepoName || 'Mooroon5-CNP/config-repo'}.git`;
-  return { apiVersion: 'argoproj.io/v1alpha1', kind: 'ApplicationSet', metadata: { name: 'cloudrun-environments', namespace: 'argocd' },
-    spec: { generators: [{ git: { repoURL, revision: 'main',
-      directories: [{ path: 'apps/*/crossplane/dev' }, { path: 'apps/*/crossplane/prod' }] } }],
-    template: { metadata: { name: '{{path[1]}}-{{path.basename}}-cloudrun', finalizers: ['resources-finalizer.argocd.argoproj.io'] },
-      spec: { project: 'default', source: { repoURL, targetRevision: 'main', path: '{{path}}' },
+  const set = { apiVersion: 'argoproj.io/v1alpha1', kind: 'ApplicationSet', metadata: { name: `crossplane-autodiscovery-${environment}`, namespace: 'argocd' },
+    spec: { generators: [{ git: { repoURL, revision: 'main', directories: [...new Set(paths)].sort().map(path => ({ path })) } }],
+    template: { metadata: { name: `{{path[1]}}-${environment}` },
+      spec: { project: `team-cnp-${environment}`, source: { repoURL, targetRevision: 'main', path: '{{path}}' },
         destination: { server: 'https://kubernetes.default.svc', namespace: 'crossplane-system' },
         syncPolicy: { automated: { selfHeal: true, prune: true }, syncOptions: ['CreateNamespace=true'] } } } } };
+  if (environment === 'dev') set.spec.syncPolicy = { preserveResourcesOnDeletion: true };
+  return set;
 }
 
 function current(dep) {
   const row = deployments.get(dep.id);
-  return row && row.environment === dep.environment && row.onboardingStatus === 'ready';
+  return row && row.environment === dep.environment && row.onboardingStatus === 'ready'
+    && releases.get(dep.id, '__registration__')?.state === 'registered';
 }
 
 async function prepareOnboarding(dep) {
@@ -135,6 +138,33 @@ async function prepareOnboarding(dep) {
     return (app.app_name !== dep.appName && registeredKey === key) || (app.app_name === dep.appName && registeredKey !== key);
   });
   if (conflict) throw new Error(`Ce dépôt ou nom d'application est déjà enregistré : ${conflict.app_name}.`);
+  // Réutiliser les projets et scanners canoniques ; aucun second propriétaire Argo.
+  let project;
+  try { project = await argo.getProject(`team-cnp-${dep.environment}`); }
+  catch (_) {
+    throw new Error(`Projet Argo CD team-cnp-${dep.environment} absent ou inaccessible. Un opérateur doit appliquer argocd/projects/team-cnp-${dep.environment}.yaml avant ce déploiement.`);
+  }
+  if (project.metadata?.name !== `team-cnp-${dep.environment}`) throw new Error('AppProject environnement indisponible.');
+  const rootPath = `apps/${dep.appName}/crossplane/kustomization.yaml`;
+  const selectedPath = `${identity(dep).path}/kustomization.yaml`;
+  if (await readFile(api, destination, selectedPath)) {
+    const registered = releases.get(dep.id, '__registration__')?.state === 'registered';
+    if (!registered || !releases.list(dep.id).some(release => release.state === 'published')) {
+      throw new Error('Un environnement GitOps existe déjà à ce chemin. Son adoption doit être validée par un opérateur.');
+    }
+  }
+  const ensureEmptyRootAllowed = async (ref = 'main') => {
+    try {
+      const { data } = await api.request('GET /repos/{owner}/{repo}/contents/{path}', { ...destination, path: `apps/${dep.appName}/crossplane`, ref });
+      if (Array.isArray(data) && data.some(entry => entry.type === 'file' && /\.(ya?ml|json)$/.test(entry.name))) {
+        throw new Error('Des manifests historiques existent à la racine. Leur adoption doit être validée par un opérateur.');
+      }
+    } catch (err) { if (err.status !== 404) throw err; }
+    if (await argo.getApplicationIfExists(`${dep.appName}-cloudrun`)) {
+      throw new Error('Une application historique existe sans son manifeste racine. Restaurez sa configuration avant de créer un environnement.');
+    }
+  };
+  if (!(await readFile(api, destination, rootPath))) await ensureEmptyRootAllowed();
   await github.checkActionsEnabled(source.owner, source.repo);
   await github.setRepoSecret(source.owner, source.repo, 'CONFIG_REPO_TOKEN', config.github.configRepoToken);
   for (const [keyName, value] of [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]]) {
@@ -158,14 +188,28 @@ async function prepareOnboarding(dep) {
       return files;
     }, `ci(${dep.appName}): configure dev/prod [skip ci]`, branch);
   }
-  await kubernetes.applyApplicationSet(applicationSet());
+  const registrationToken = releases.acquire(dep.id, '__registration__', 0);
+  if (!registrationToken) throw new Error('Enregistrement du déploiement déjà en cours. Réessayez.');
+  try { releases.save(dep.id, '__registration__', registrationToken, 'registered'); }
+  finally { releases.release(dep.id, '__registration__', registrationToken); }
+  const registeredPaths = deployments.listForUser(null)
+    .filter(row => row.deployment_environment === dep.environment && releases.get(row.id, '__registration__')?.state === 'registered')
+    .map(row => `apps/${row.app_name}/crossplane/${dep.environment}`);
+  await kubernetes.applyApplicationSet(applicationSet(dep.environment, registeredPaths));
   await commitFiles(api, destination, async head => {
     const doc = yaml.load(await readFile(api, destination, 'apps/registry.yaml', head) || 'apps: []');
     doc.apps ||= [];
     let app = doc.apps.find(item => item.app_name === dep.appName);
     if (!app) { app = { app_name: dep.appName, repo_url: dep.githubRepoUrl, environments: [] }; doc.apps.push(app); }
     app.environments = [...new Set([...(app.environments || []), dep.environment])];
-    return { 'apps/registry.yaml': yaml.dump(doc) };
+    const files = { 'apps/registry.yaml': yaml.dump(doc) };
+    if (!(await readFile(api, destination, rootPath, head))) {
+      await ensureEmptyRootAllowed(head);
+      // Le scanner historique peut voir ce parent, mais il ne gère aucune ressource.
+      // Ne jamais remplacer un vrai manifeste historique : cela en déclencherait le prune.
+      files[rootPath] = yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: [] });
+    }
+    return files;
   }, `chore(${dep.appName}): register ${dep.environment}`);
   await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
@@ -203,6 +247,27 @@ async function readiness(dep, revision) {
   return { phase: 'deploying', message: 'CI terminée ; attente de Cloud Run.', cloudRunUrl: null };
 }
 
+async function interruptedApproval(api, dep, release) {
+  const { data: pr } = await api.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number });
+  if (pr.base.ref !== 'main' || pr.head.sha !== release.head_sha) {
+    return { phase: 'failed', message: 'Le candidat GitHub a changé depuis la validation.' };
+  }
+  if (!pr.merged) {
+    return pr.state === 'open'
+      ? { phase: 'approval', message: 'Validation interrompue ; un manager peut réessayer.', prUrl: release.pr_url }
+      : { phase: 'rejected', message: 'Le candidat de production a été fermé.' };
+  }
+  const { data: app } = await api.request('GET /app');
+  if (!app.slug || pr.merged_by?.login !== `${app.slug}[bot]`) {
+    return { phase: 'failed', message: 'Merge effectué hors du portail ; vérification manager requise.' };
+  }
+  const token = releases.acquire(dep.id, release.revision, release.run_id);
+  if (!token) return { phase: 'deploying', message: 'Vérification de la publication en cours.' };
+  try { releases.save(dep.id, release.revision, token, 'published'); }
+  finally { releases.release(dep.id, release.revision, token); }
+  return readiness(dep, release.revision);
+}
+
 async function reconcile(dep) {
   if (locks.has(dep.id)) return locks.get(dep.id);
   const work = (async () => {
@@ -216,6 +281,7 @@ async function reconcile(dep) {
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
     const revision = run.head_sha;
     const release = releases.get(dep.id, revision);
+    if (release?.state === 'approving') return { ...result, ...await interruptedApproval(api, dep, release) };
     if (release?.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') return { ...result, ...await readiness(dep, revision) };
     if (!(await sourceIsCurrent(dep, revision))) return { ...result, phase: 'waiting', message: 'La branche a changé ; attente du nouveau pipeline.' };
@@ -228,6 +294,11 @@ async function reconcile(dep) {
       }
     };
     try {
+      // Un autre processus a pu terminer entre la lecture et l'acquisition du bail.
+      const fresh = releases.get(dep.id, revision);
+      if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
+      if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
+      if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
       const files = manifests(dep, revision);
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
@@ -258,7 +329,7 @@ async function reconcile(dep) {
 async function review(dep, revision, approve, { reviewedBy } = {}) {
   if (dep.environment !== 'prod' || !current(dep)) throw new Error('Validation réservée à une production active.');
   const release = releases.get(dep.id, revision);
-  if (!release || release.state !== 'pending') throw new Error('Candidat non disponible.');
+  if (!release || !['pending', 'approving'].includes(release.state)) throw new Error('Candidat non disponible.');
   const api = await github.getInstallationOctokit();
   const run = await latest(api, dep);
   if (!run || run.head_sha !== revision || run.conclusion !== 'success' || !(await sourceIsCurrent(dep, revision))) {
@@ -267,14 +338,22 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   const token = releases.acquire(dep.id, revision, run.id);
   if (!token) throw new Error('Une validation est déjà en cours.');
   try {
+    const fresh = releases.get(dep.id, revision);
+    if (!['pending', 'approving'].includes(fresh.state) || fresh.head_sha !== release.head_sha || fresh.pr_number !== release.pr_number) {
+      throw new Error('Cette validation a déjà été traitée.');
+    }
     if (approve) {
       const { data: pr } = await api.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number });
       if (pr.base.ref !== 'main' || pr.head.sha !== release.head_sha || pr.state !== 'open') throw new Error('Le candidat GitHub a changé. Préparez un nouveau candidat.');
       if (!current(dep) || !(await sourceIsCurrent(dep, revision))) throw new Error('La production a changé pendant la validation.');
+      releases.save(dep.id, revision, token, 'approving', { reviewedBy });
       const { data } = await api.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', { ...target(), pull_number: release.pr_number,
         sha: release.head_sha, merge_method: 'squash' });
-      if (!data.merged) throw new Error('Le merge GitHub a été refusé.');
-      releases.save(dep.id, revision, token, 'published', { reviewedBy });
+      if (!data.merged) {
+        releases.save(dep.id, revision, token, 'pending');
+        throw new Error('Le merge GitHub a été refusé.');
+      }
+      releases.save(dep.id, revision, token, 'published');
     } else {
       await api.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number, state: 'closed' });
       releases.save(dep.id, revision, token, 'rejected', { reviewedBy });
@@ -283,11 +362,15 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
 }
 
 async function remove(dep) {
+  if (onboardingLocks.has(dep.id)) await onboardingLocks.get(dep.id).catch(() => {});
   if (locks.has(dep.id)) await locks.get(dep.id).catch(() => {});
+  // Une préflight échouée ne donne aucun droit sur des manifests historiques.
+  if (releases.get(dep.id, '__registration__')?.state !== 'registered') return;
   const api = await github.getInstallationOctokit();
   for (const release of releases.list(dep.id)) {
-    if (release.state === 'pending' && release.pr_number) {
-      await api.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number, state: 'closed' });
+    if (['pending', 'approving'].includes(release.state) && release.pr_number) {
+      const { data: pr } = await api.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number });
+      if (pr.state === 'open') await api.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number, state: 'closed' });
     }
   }
   const { path, name } = identity(dep);
@@ -295,8 +378,25 @@ async function remove(dep) {
   for (const file of ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'kustomization.yaml']) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
-  if (Object.keys(files).length) await commitFiles(api, target(), files, `chore(${dep.appName}): remove ${dep.environment}`);
-  await argo.deleteApplication(`${name}-cloudrun`, { cascade: true });
+  // La cascade explicite pose le finalizer AVANT que le scanner dev ne retire
+  // l'Application avec preserveResourcesOnDeletion=true. Sans cet ordre, les CR
+  // cloud pourraient rester orphelines après la disparition du dossier GitOps.
+  await argo.deleteApplication(name, { cascade: true });
+  const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
+  await commitFiles(api, target(), async head => {
+    const result = { ...files };
+    const raw = !hasLegacy && await readFile(api, target(), 'apps/registry.yaml', head);
+    if (raw) {
+      const registry = yaml.load(raw);
+      const app = registry.apps?.find(item => item.app_name === dep.appName);
+      if (app) {
+        app.environments = (app.environments || []).filter(environment => environment !== dep.environment);
+        if (!app.environments.length) registry.apps = registry.apps.filter(item => item !== app);
+        result['apps/registry.yaml'] = yaml.dump(registry);
+      }
+    }
+    return result;
+  }, `chore(${dep.appName}): remove ${dep.environment}`);
   // Secrets et workflow restent partagés avec l'autre environnement.
 }
 
@@ -310,8 +410,12 @@ function startReconciler() {
         const dep = deployments.get(row.id);
         if (!dep || dep.environment === 'legacy') continue;
         if (dep.onboardingStatus === 'configuring') {
-          try { await onboard(dep); deployments.updateOnboardingStatus(dep.id, 'ready'); }
-          catch (err) { deployments.updateOnboardingStatus(dep.id, 'failed', err.message); }
+          try {
+            await onboard(dep);
+            if (deployments.get(dep.id)?.onboardingStatus === 'configuring') deployments.updateOnboardingStatus(dep.id, 'ready');
+          } catch (err) {
+            if (deployments.get(dep.id)?.onboardingStatus === 'configuring') deployments.updateOnboardingStatus(dep.id, 'failed', err.message);
+          }
         } else if (dep.onboardingStatus === 'ready') {
           await reconcile(dep).catch(err => console.warn(`[deployment:${dep.id}] ${err.message}`));
         }

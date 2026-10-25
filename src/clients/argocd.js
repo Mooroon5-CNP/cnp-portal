@@ -90,6 +90,22 @@ async function getApplicationStatus(appName) {
   }
 }
 
+// Préflight de l'onboarding : les projets dédiés restent provisionnés par l'opérateur.
+async function getProject(name) {
+  const client = await makeClient();
+  try { return (await client.get(`/projects/${encodeURIComponent(name)}`)).data; }
+  catch (err) { handleError(err, `getProject(${name})`); }
+}
+
+async function getApplicationIfExists(name) {
+  const client = await makeClient();
+  try { return (await client.get(`/applications/${encodeURIComponent(name)}`)).data; }
+  catch (err) {
+    if (err.response?.status === 404) return null;
+    handleError(err, `getApplicationIfExists(${name})`);
+  }
+}
+
 async function syncApplication(appName) {
   const client = await makeClient();
   try {
@@ -138,4 +154,4 @@ async function deleteApplicationSet(name) {
   }
 }
 
-module.exports = { listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
+module.exports = { getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
