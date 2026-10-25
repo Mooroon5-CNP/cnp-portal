@@ -347,6 +347,15 @@ function observedServiceStatus(body) {
   };
 }
 
+async function getComputeResource(plural, name) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try { return (await api.getClusterCustomObject('compute.gcp.upbound.io', 'v1beta1', plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    handleError(err, `getComputeResource(${plural}/${name})`);
+  }
+}
+
 async function getV2ServiceStatus(appName) {
   const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
   try {
@@ -471,6 +480,6 @@ module.exports = {
   applyApplicationSet, deleteApplicationSet,
   applyArgocdApplication, deleteArgocdApplication,
   deleteNamespace,
-  observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

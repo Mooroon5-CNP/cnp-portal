@@ -55,6 +55,42 @@ autre projet sans les recalculer. Aucun secret ne doit être ajouté à ce fichi
 
 ## Configuration du portail et du CI après changement de projet
 
+### Routage partagé et ordre des dépendances
+
+Dans `config-repo`, `platform/application-routing/urlmap.yaml` importe le
+load balancer existant et conserve son backend historique par défaut.
+`argocd/apps/cnp-application-routing.yaml` définit son unique propriétaire Argo.
+Avant de reprendre ces fichiers dans un autre projet, lire l'URLMap réellement
+présente, préserver toutes ses routes, et remplacer le projet et les URLs des
+backends. La politique `Observe, Update, LateInitialize` exclut Create/Delete et
+`deletionPolicy: Orphan` protège le load balancer partagé.
+
+Après fusion de la configuration, appliquer uniquement l'Application :
+
+```bash
+kubectl apply -f argocd/apps/cnp-application-routing.yaml
+kubectl patch configmap argocd-cm -n argocd --type=merge \
+  --patch-file argocd/config/crossplane-storage-health.patch.json
+```
+
+Le patch ne modifie que les contrôles de santé Bucket et BucketIAMMember ;
+il préserve les autres paramètres Argo. Il est nécessaire pour attendre les
+conditions Crossplane Ready et Synced entre les vagues : bucket 0, accès au
+bucket 1, Cloud Run 2, accès public 3, NEG 4 et backend 5.
+
+Les NEGs/backends sont générés dans chaque environnement publié. Le portail
+ajoute/supprime seulement ses propres routes du manifeste partagé, conserve
+les routes voisines et n'ajoute pas un candidat de production avant validation.
+L'URL n'est disponible dans l'interface qu'après observation du service, de sa
+révision, des ressources de routage et d'une réponse HTTPS réussie.
+
+Le rôle Kubernetes du portail nécessite aussi la lecture des ressources
+compute. Source reproductible : `scripts/cloud/portal-rbac.yaml` ; appliquer ce
+fichier après avoir vérifié le contexte du nouveau cluster. Toute définition
+Terraform équivalente de ce rôle doit conserver la règle
+`compute.gcp.upbound.io` / `regionnetworkendpointgroups, backendservices, urlmaps`
+avec `get, list, watch`.
+
 ### Permission GCP supplémentaire pour le routage
 
 Le compte Crossplane doit disposer de `roles/compute.loadBalancerAdmin` dans le
@@ -117,7 +153,9 @@ Orphan nécessitent un nettoyage explicite et vérifié.
 - Provider compute installé : Installed=True, Healthy=True.
 - Permission loadBalancerAdmin demandée au propriétaire : ajout opérateur refusé.
 - DNS wildcard dev et CNAME d'autorisation : Ready/Synced.
-- Certificat dev créé ; activation HTTPS à vérifier après propagation.
+- Certificat dev : ACTIVE.
+- Patch de santé stockage Argo appliqué ; RBAC de lecture compute appliqué.
+- Baseline URLMap et Application de routage ajoutées dans config-repo (PR #37).
 - Hébergement du portail inchangé ; base existante sauvegardée avant migration.
 - L'intégration des routes, les merges restants et le test complet Pixel Cam
   doivent être enregistrés ci-dessous une fois vérifiés.

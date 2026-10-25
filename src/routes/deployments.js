@@ -423,7 +423,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
 
     // Une URL existante ne prouve pas que la nouvelle révision est prête.
     let cloudRunUrl = usesEnvironment(dep)
-        ? (selectedStatus?.phase === 'success' ? selectedStatus.cloudRunUrl || null : null)
+        ? (selectedStatus?.phase === 'success' ? selectedStatus.applicationUrl || null : null)
         : dep.cloudRunUrl || null;
     if (!usesEnvironment(dep) && !cloudRunUrl && dep.targetCluster === 'gcp') {
         cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);

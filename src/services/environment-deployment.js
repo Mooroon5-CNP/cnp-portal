@@ -9,6 +9,8 @@ const deployments = require('../models/deployment');
 const releases = require('../models/deployment_release');
 const kubernetes = require('../clients/kubernetes');
 const argo = require('../clients/argocd');
+const routing = require('./application-routing');
+const addresses = require('./application-address');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -72,7 +74,7 @@ function manifests(dep, revision) {
   const { name, path } = identity(dep);
   const hash = createHash('sha256').update(`${config.gcp.project}/${name}`).digest('hex').slice(0, 8);
   const bucket = `cnp-${name}-${hash}-data`;
-  const metadata = resourceName => ({ name: resourceName, labels: { 'cnp.io/environment': dep.environment, 'cnp.io/application': dep.appName } });
+  const metadata = resourceName => ({ name: resourceName, annotations: { 'argocd.argoproj.io/sync-wave': resourceName === name ? '2' : resourceName.endsWith('-runtime') ? '1' : resourceName.endsWith('-public') ? '3' : '0' }, labels: { 'cnp.io/environment': dep.environment, 'cnp.io/application': dep.appName } });
   const container = { image: image(dep, revision), ports: { containerPort: dep.appPort }, env: [
     { name: 'DATA_DIR', value: dep.persistentStorage ? '/data' : '/tmp' },
     { name: 'DD_ENV', value: dep.environment }, { name: 'DD_SERVICE', value: dep.appName },
@@ -90,7 +92,8 @@ function manifests(dep, revision) {
   const iam = resource('cloudrun.gcp.upbound.io/v1beta2', 'ServiceIAMMember', `${name}-public`,
     { project: config.gcp.project, location: config.gcp.region, service: name, role: 'roles/run.invoker', member: 'allUsers' });
   const files = { [`${path}/cloudrun-claim.yaml`]: yaml.dump(claim), [`${path}/cloudrun-iam.yaml`]: yaml.dump(iam) };
-  const resources = ['cloudrun-claim.yaml', 'cloudrun-iam.yaml'];
+  files[`${path}/application-network.yaml`] = routing.network(dep);
+  const resources = ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'application-network.yaml'];
   if (dep.persistentStorage) {
     const storage = resource('storage.gcp.upbound.io/v1beta1', 'Bucket', bucket,
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
@@ -241,7 +244,12 @@ async function sourceIsCurrent(dep, revision) {
 async function readiness(dep, revision) {
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
   if (observed.ready && observed.image === image(dep, revision)) {
-    return { phase: 'success', message: 'Application déployée.', cloudRunUrl: observed.url };
+    const api = await github.getInstallationOctokit();
+    await routing.sync(dep, { api, repo: target(), commitFiles, beforePublish: async () => {
+      if (!current(dep)) throw new Error('Le déploiement a changé pendant la préparation du routage.');
+    } });
+    if (!(await routing.status(dep))) return { phase: 'deploying', message: 'Cloud Run disponible ; attente du routage HTTPS.', cloudRunUrl: null };
+    return { phase: 'success', message: 'Application déployée.', cloudRunUrl: observed.url, applicationUrl: addresses.url(dep) };
   }
   if (observed.failure) return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
   return { phase: 'deploying', message: 'CI terminée ; attente de Cloud Run.', cloudRunUrl: null };
@@ -374,8 +382,10 @@ async function remove(dep) {
     }
   }
   const { path, name } = identity(dep);
+  await routing.sync(dep, { api, repo: target(), commitFiles }, true);
+  if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
   const files = {};
-  for (const file of ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'kustomization.yaml']) {
+  for (const file of ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml']) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
   // La cascade explicite pose le finalizer AVANT que le scanner dev ne retire

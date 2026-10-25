@@ -9,6 +9,8 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
 jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
+jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
+
 const yaml = require('js-yaml');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
@@ -294,4 +296,27 @@ test('deleting a failed historical-path adoption never removes or touches live r
   expect(api.request).not.toHaveBeenCalled();
   expect(argo.deleteApplication).not.toHaveBeenCalled();
   expect(published).toHaveLength(0);
+});
+
+test('persistent storage sync waits for bucket and IAM before starting the Cloud Run revision', () => {
+  const files = service.manifests(dep, revision);
+  const path = `apps/${dep.appName}/crossplane/dev`;
+  const [bucket, binding] = yaml.loadAll(files[`${path}/gcs-bucket.yaml`]);
+  const runtime = yaml.load(files[`${path}/cloudrun-claim.yaml`]);
+  const publicIam = yaml.load(files[`${path}/cloudrun-iam.yaml`]);
+  const wave = resource => Number(resource.metadata.annotations['argocd.argoproj.io/sync-wave']);
+  expect(wave(bucket)).toBeLessThan(wave(binding));
+  expect(wave(binding)).toBeLessThan(wave(runtime));
+  expect(wave(runtime)).toBeLessThan(wave(publicIam));
+});
+
+test('a ready runtime stays deploying while friendly routing is unavailable and production candidates publish no host', async () => {
+  const routing = require('../src/services/application-routing');
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://runtime.test' });
+  routing.status.mockResolvedValueOnce(false);
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'deploying', cloudRunUrl: null });
+  expect(routing.sync).toHaveBeenCalledTimes(1);
+  production(); db.prepare("DELETE FROM deployment_releases WHERE revision != ?").run("__registration__"); routing.sync.mockClear();
+  expect((await service.reconcile(dep)).phase).toBe('approval');
+  expect(routing.sync).not.toHaveBeenCalled();
 });
