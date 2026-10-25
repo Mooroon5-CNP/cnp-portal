@@ -10,7 +10,7 @@ const dep = { appName: 'pixelcam', environment: 'dev' };
 function baseline() {
   return { apiVersion: 'compute.gcp.upbound.io/v1beta1', kind: 'URLMap', metadata: {
     name: 'cnp-application-routing', annotations: { 'crossplane.io/external-name': 'cnp-apps-urlmap' },
-  }, spec: { deletionPolicy: 'Orphan', forProvider: { project: 'test-project', defaultService: 'legacy-backend',
+  }, spec: { deletionPolicy: 'Orphan', managementPolicies: ['Observe', 'Update'], forProvider: { project: 'test-project', defaultService: 'legacy-backend',
     hostRule: [{ hosts: ['existing.example.test'], pathMatcher: 'existing' }],
     pathMatcher: [{ name: 'existing', defaultService: 'existing-backend' }], description: 'Keep this field' } } };
 }
@@ -74,4 +74,13 @@ test('sync uses current Git head atomically and only adds networking to an exist
   expect(api.request.mock.calls.every(([,args]) => args.ref === 'latest-head')).toBe(true);
   expect(yaml.load(files['apps/pixelcam/crossplane/dev/kustomization.yaml']).resources).toEqual(['cloudrun-claim.yaml', 'application-network.yaml']);
   expect(files['apps/pixelcam/crossplane/dev/cloudrun-claim.yaml']).toBeUndefined();
+});
+
+// The imported map must remain update-only; unsupported combinations block all reconcile.
+test('shared routing accepts only the supported Observe/Update import policy', () => {
+  for (const policy of [['Observe', 'Update', 'LateInitialize'], ['*'], ['Observe', 'Create', 'Update'], ['Observe', 'Update', 'Delete']]) {
+    const doc = baseline(); doc.spec.managementPolicies = policy;
+    expect(() => routing.updateMap(doc, dep)).toThrow(/incompatible/);
+  }
+  expect(routing.updateMap(baseline(), dep).spec.managementPolicies).toEqual(['Observe', 'Update']);
 });

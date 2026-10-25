@@ -62,7 +62,7 @@ load balancer existant et conserve son backend historique par défaut.
 `argocd/apps/cnp-application-routing.yaml` définit son unique propriétaire Argo.
 Avant de reprendre ces fichiers dans un autre projet, lire l'URLMap réellement
 présente, préserver toutes ses routes, et remplacer le projet et les URLs des
-backends. La politique `Observe, Update, LateInitialize` exclut Create/Delete et
+backends. La politique `Observe, Update` exclut Create/Delete et la late-initialization et
 `deletionPolicy: Orphan` protège le load balancer partagé.
 
 Après fusion de la configuration, appliquer uniquement l'Application :

@@ -31,6 +31,8 @@ function network(dep) {
 function updateMap(document, dep, remove = false) {
   if (document?.kind !== 'URLMap' || document.metadata?.name !== MAP_NAME
     || document.metadata.annotations?.['crossplane.io/external-name'] !== 'cnp-apps-urlmap'
+    || document.spec?.deletionPolicy !== 'Orphan'
+    || JSON.stringify([...(document.spec?.managementPolicies || [])].sort()) !== JSON.stringify(['Observe', 'Update'])
     || document.spec?.forProvider?.project !== config.gcp.project || !document.spec.forProvider.defaultService) {
     throw new Error('Shared application URL map baseline missing or incompatible; operator bootstrap required.');
   }
