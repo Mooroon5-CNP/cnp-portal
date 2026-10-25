@@ -293,9 +293,13 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
     environmentService.onboard(dep).then(() => {
-        deploymentModel.updateOnboardingStatus(dep.id, 'ready');
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
+            deploymentModel.updateOnboardingStatus(dep.id, 'ready');
+        }
     }).catch(err => {
-        deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
+            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+        }
     });
 
     return res.redirect(`/deployments/${dep.id}`);

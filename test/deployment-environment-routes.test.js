@@ -10,7 +10,7 @@ jest.mock('../src/services/environment-deployment', () => ({
     validate: jest.fn((environment) => { if (!['dev', 'prod'].includes(environment)) throw new Error('Environnement invalide'); }),
     workflowName: appName => `cnp-${appName}.yml`,
     onboard: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
-}), { virtual: true });
+}));
 
 const request = require('supertest');
 const express = require('express');
@@ -115,6 +115,7 @@ test('production detail only renders manager approval controls for managers', as
     const dev = await request(app).get(`/deployments/${dep.id}`).set('X-role', 'dev');
     expect(dev.status).toBe(200);
     expect(dev.text).not.toContain('Approuver la production');
+    expect(manager.text).toContain("L'autre environnement, le pipeline et les secrets partagés seront conservés.");
 });
 
 test('a developer cannot bypass approval by calling the production endpoint directly', async () => {
@@ -182,6 +183,34 @@ test('failed cleanup retains the record so deletion can be retried', async () =>
     service.remove.mockRejectedValueOnce(new Error('Provider unavailable'));
     await request(app).post(`/deployments/${dep.id}/delete`);
     expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'failed' });
+});
+
+test.each(['success', 'failure'])('late setup %s cannot overwrite an in-progress deletion', async outcome => {
+    let finishSetup;
+    let failSetup;
+    service.onboard.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        finishSetup = resolve;
+        failSetup = reject;
+    }));
+    const created = await request(app).post('/deployments').type('form').send({ ...input, environment: 'dev' });
+    const id = created.headers.location.split('/').pop();
+    let beginRemoval;
+    let finishRemoval;
+    const removalStarted = new Promise(resolve => { beginRemoval = resolve; });
+    const removalFinished = new Promise(resolve => { finishRemoval = resolve; });
+    service.remove.mockImplementationOnce(async () => {
+        beginRemoval();
+        await removalFinished;
+    });
+    const deleting = request(app).post(`/deployments/${id}/delete`).then(response => response);
+    await removalStarted;
+    if (outcome === 'success') finishSetup();
+    else failSetup(new Error('Setup finished with an error'));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(deployments.get(id).onboardingStatus).toBe('deleting');
+    finishRemoval();
+    expect((await deleting).status).toBe(302);
+    expect(deployments.get(id)).toBeNull();
 });
 
 test('legacy records retain their original service and branch identity', () => {
