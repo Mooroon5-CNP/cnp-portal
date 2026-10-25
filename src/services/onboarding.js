@@ -1,11 +1,12 @@
 'use strict';
 
 const yaml = require('js-yaml');
-const { config } = require('../config/env');
+const { config, getMissingAzureVars } = require('../config/env');
 const githubClient = require('../clients/github');
 const githubService = require('./github');
 const k8sClient = require('../clients/kubernetes');
 const argoCDClient = require('../clients/argocd');
+const azureTemplates = require('./azure-templates');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -660,6 +661,101 @@ async function updateRegistry(owner, repo, appName, appPort, repoUrl, teamOwner,
 }
 
 // ---------------------------------------------------------------------------
+// Azure (tier souveraineté UE) : onboarding à plat, comme les apps GCP
+// ---------------------------------------------------------------------------
+
+/**
+ * Déploiement sur Azure : même schéma que GCP (claims Crossplane à plat dans le config-repo, repris par
+ * l'ApplicationSet cloudrun-autodiscovery), avec en plus un serveur PostgreSQL par app. Pas de manifestes
+ * Kubernetes (base/overlays), pas d'ApplicationSets dev/prod et pas de branche prod : un seul environnement.
+ * Gabarits : ./azure-templates.js. Pipeline : ci-templates/pipeline-azure.yml.
+ */
+async function onboardAzure({
+    appName, appPort, githubRepoUrl, teamOwner, updateStatus, configRepoToken,
+    crOwner, crRepo, configRepoUrl, appOwner, appRepo,
+}) {
+    const missing = getMissingAzureVars(config.azure);
+    if (missing.length > 0) {
+        await updateStatus('failed',
+            `Le déploiement Azure n'est pas configuré sur la plateforme. Variables manquantes : ${missing.join(', ')}.`);
+        return;
+    }
+    try {
+        // Génère tout avant d'écrire quoi que ce soit : un nom invalide échoue ici, sans fichier à nettoyer.
+        const crossplaneFiles = azureTemplates.azureCrossplaneFiles(appName, appPort, config.azure);
+
+        try {
+            await githubClient.checkActionsEnabled(appOwner, appRepo);
+        } catch (e) {
+            await updateStatus('failed',
+                `GitHub Actions est désactivé sur le dépôt ${appOwner}/${appRepo}. ` +
+                `Allez dans Settings → Actions → General et activez "Allow all actions".`
+            );
+            return;
+        }
+
+        // Step A1: claims Crossplane à plat dans le config-repo (comme apps/<app>/crossplane/ côté GCP).
+        for (const [name, content] of Object.entries(crossplaneFiles)) {
+            await writeConfigRepoFile(crOwner, crRepo, `apps/${appName}/crossplane/${name}`, content, configRepoToken);
+        }
+
+        // Step A2: registry.yaml
+        await updateRegistry(crOwner, crRepo, appName, appPort, githubRepoUrl, teamOwner, configRepoToken);
+
+        // Step A3: s'assurer que l'ApplicationSet qui synchronise apps/*/crossplane tourne (idempotent).
+        let appSetWarning = null;
+        try {
+            await k8sClient.applyApplicationSet(CLOUDRUN_AUTODISCOVERY_APPSET);
+        } catch (e) {
+            console.warn(`[onboarding] Could not apply cloudrun-autodiscovery AppSet: ${e.message}`);
+            appSetWarning = `⚠️ ApplicationSet non appliqué : ${e.message}`;
+        }
+
+        // Step A4: ci.yml dans le dépôt de l'app (appelle pipeline-azure.yml).
+        const ciPath = '.github/workflows/ci.yml';
+        const ciSha = await githubClient.getFileSha(appOwner, appRepo, ciPath);
+        await githubClient.createOrUpdateFile(
+            appOwner, appRepo, ciPath,
+            azureTemplates.tplAzureCiWorkflow(appName, appPort, configRepoUrl),
+            `ci: add CNP Azure pipeline via CNP Portal [ci skip]`,
+            ciSha,
+        );
+
+        // Step A5: secret CONFIG_REPO_TOKEN + variables AZURE_* (non secrètes) sur le dépôt de l'app.
+        try {
+            await githubClient.setRepoSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN', configRepoToken);
+        } catch (e) {
+            throw new Error(
+                `Impossible d'injecter CONFIG_REPO_TOKEN sur ${appOwner}/${appRepo}: ${e.message}. ` +
+                `Vérifiez que le GitHub App a la permission "secrets: write" sur ce dépôt.`
+            );
+        }
+        for (const [name, value] of azureTemplates.azureRepoVariables(config.azure)) {
+            try {
+                await githubClient.setRepoVariable(appOwner, appRepo, name, value);
+            } catch (e) {
+                // Sans ces variables, la CI Azure échoue au démarrage : on le dit, on ne l'avale pas.
+                throw new Error(`Impossible de poser la variable ${name} sur ${appOwner}/${appRepo}: ${e.message}`);
+            }
+        }
+
+        // Step A6: commit de déclenchement (le ci.yml ci-dessus portait [ci skip]).
+        const triggerPath = '.cnp-platform';
+        const triggerSha = await githubClient.getFileSha(appOwner, appRepo, triggerPath);
+        await githubClient.createOrUpdateFile(
+            appOwner, appRepo, triggerPath,
+            `Managed by CNP Portal. Do not delete.\nOnboarded: ${new Date().toISOString()}\n`,
+            `chore: trigger initial CNP pipeline run`,
+            triggerSha,
+        );
+
+        await updateStatus('ready', appSetWarning);
+    } catch (err) {
+        await updateStatus('failed', err.message);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main onboarding function
 // ---------------------------------------------------------------------------
 
@@ -697,6 +793,13 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
         return;
     }
     const { owner: appOwner, repo: appRepo } = parsed;
+
+    if (targetCluster === 'azure') {
+        return onboardAzure({
+            appName, appPort, githubRepoUrl, teamOwner, updateStatus, configRepoToken,
+            crOwner, crRepo, configRepoUrl, appOwner, appRepo,
+        });
+    }
 
     let appSetWarning = null;
     try {
@@ -873,6 +976,8 @@ function configRepoPaths(appName) {
     paths.push(`argocd/overlays/${appName}/kustomization.yaml`);
     const cp = `apps/${appName}/crossplane`;
     paths.push(`${cp}/cloudrun-claim.yaml`, `${cp}/cloudrun-iam.yaml`, `${cp}/gcs-bucket.yaml`, `${cp}/kustomization.yaml`, `${cp}/application.yaml`);
+    // Apps Azure (tier souveraineté) : fichiers à plat dans le même dossier ; les chemins absents sont ignorés.
+    paths.push(...azureTemplates.azureConfigRepoPaths(appName));
     return paths;
 }
 

@@ -16,6 +16,10 @@ const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
+const { azureAppUrl } = require('../services/azure-templates');
+
+// Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
+const SUPPORTED_CLOUDS = ['gcp', 'azure'];
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -231,7 +235,9 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
-    const hasPersistentStorage = persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true;
+    // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
+    const hasPersistentStorage = targetCluster !== 'azure'
+        && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
     if (!appName || !githubRepoUrl) {
         req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
@@ -260,8 +266,8 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
-    if (targetCluster && targetCluster !== 'gcp') {
-        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seul GCP est supporté pour le moment.');
+    if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
         return res.redirect('/deployments');
     }
 
@@ -431,7 +437,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
     let ingressUrl = null;
     // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
-    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp') {
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp' && dep.targetCluster !== 'azure') {
         // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
@@ -453,7 +459,10 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
             }
         }
     }
-    const appUrl = cloudRunUrl || ingressUrl;
+    // Azure : domaine par défaut de l'environnement Container Apps (<app>.<domaine de l'environnement>).
+    const azureUrl = dep.targetCluster === 'azure' && dep.onboardingStatus === 'ready'
+        ? azureAppUrl(dep.appName, config.azure) : null;
+    const appUrl = cloudRunUrl || ingressUrl || azureUrl;
 
     const safeDeployment = {
         id: dep.id,
