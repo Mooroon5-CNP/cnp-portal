@@ -8,21 +8,26 @@ jest.mock('../src/clients/github', () => ({
   createOrUpdateFile: jest.fn().mockResolvedValue({}),
   setRepoSecret: jest.fn().mockResolvedValue({}),
   setRepoVariable: jest.fn().mockResolvedValue({}),
+  deleteFile: jest.fn().mockResolvedValue({}),
+  deleteSecret: jest.fn().mockResolvedValue({}),
 }));
 jest.mock('../src/services/github', () => ({
   ...jest.requireActual('../src/services/github'),
   getFileSha: jest.fn().mockResolvedValue(null),
   getFileContent: jest.fn().mockResolvedValue(null),
   createOrUpdateFileWithToken: jest.fn().mockResolvedValue({}),
+  deleteFileWithToken: jest.fn().mockResolvedValue({}),
 }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn().mockResolvedValue({}) }));
-jest.mock('../src/clients/argocd', () => ({}));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn().mockResolvedValue({}), deleteNamespace: jest.fn() }));
+jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), deleteApplicationSet: jest.fn() }));
 
 const { config, getMissingAzureVars } = require('../src/config/env');
 const githubClient = require('../src/clients/github');
 const githubService = require('../src/services/github');
 const t = require('../src/services/azure-templates');
-const { onboardApp } = require('../src/services/onboarding');
+const { onboardApp, offboardApp } = require('../src/services/onboarding');
+const argoCDClient = require('../src/clients/argocd');
+const k8sClient = require('../src/clients/kubernetes');
 
 const AZURE = {
   namePrefix: 'cnp-sov', regionKey: 'fr', location: 'francecentral',
@@ -158,5 +163,52 @@ describe('onboarding Azure', () => {
     expect(updateStatus.mock.calls[0][0]).toBe('failed');
     expect(updateStatus.mock.calls[0][1]).toContain('AZURE_');
     expect(githubClient.createOrUpdateFile.mock.calls.map(c => c[2])).not.toContain('.cnp-platform');
+  });
+});
+
+describe('démontage Azure', () => {
+  const saved = config.github.configRepoToken;
+  beforeEach(() => {
+    jest.clearAllMocks();
+    config.github.configRepoToken = 'test-token';
+    // clearAllMocks garde les implémentations : sans reset, le rejet d'un test fuit sur le suivant.
+    githubService.deleteFileWithToken.mockReset().mockResolvedValue({});
+    githubClient.deleteFile.mockReset().mockResolvedValue({});
+    githubService.getFileSha.mockResolvedValue('blobsha');
+    githubService.getFileContent.mockResolvedValue(null);
+    githubClient.getFileSha.mockResolvedValue('cisha');
+  });
+  afterAll(() => { config.github.configRepoToken = saved; });
+  const run = () => offboardApp({ appName: 'todo', githubRepoUrl: 'https://github.com/Mooroon5-CNP/todo', targetCluster: 'azure' });
+
+  test('supprime les 5 fichiers, le ci.yml et le secret, sans toucher à l\'API Argo ni aux namespaces', async () => {
+    await run();
+    const deleted = githubService.deleteFileWithToken.mock.calls.map(c => c[2]).sort();
+    expect(deleted).toEqual(t.azureConfigRepoPaths('todo').sort());
+    expect(githubClient.deleteFile).toHaveBeenCalledWith('Mooroon5-CNP', 'todo', '.github/workflows/ci.yml', 'cisha', expect.any(String));
+    expect(githubClient.deleteSecret).toHaveBeenCalledWith('Mooroon5-CNP', 'todo', 'CONFIG_REPO_TOKEN');
+    expect(argoCDClient.deleteApplication).not.toHaveBeenCalled();
+    expect(argoCDClient.deleteApplicationSet).not.toHaveBeenCalled();
+    expect(k8sClient.deleteNamespace).not.toHaveBeenCalled();
+  });
+
+  test('un 409 (commit concurrent d\'un bot) est réessayé avec un sha relu', async () => {
+    const conflict = Object.assign(new Error('Request failed with status code 409'), { status: 409 });
+    githubService.deleteFileWithToken.mockRejectedValueOnce(conflict).mockResolvedValue({});
+    githubClient.deleteFile.mockRejectedValueOnce(new Error('is at 4e2e7fedba2e5f85ead7e4c1f1ba26863d2c6014 but expected 2176248c8407a8172407e5a7a4210f5aeeafecef')).mockResolvedValue({});
+    await expect(run()).resolves.toBeUndefined();
+    expect(githubClient.deleteFile).toHaveBeenCalledTimes(2);
+    expect(githubClient.getFileSha).toHaveBeenCalledTimes(2); // le sha est relu à chaque tentative
+  });
+
+  test('une erreur qui n\'est pas un conflit n\'est pas réessayée et remonte', async () => {
+    githubService.deleteFileWithToken.mockRejectedValue(new Error('403 forbidden'));
+    await expect(run()).rejects.toThrow('Nettoyage partiel');
+    expect(githubService.deleteFileWithToken).toHaveBeenCalledTimes(5); // une fois par fichier, sans retry
+  });
+
+  test('GCP garde l\'ancien chemin (appels Argo)', async () => {
+    await offboardApp({ appName: 'todo', githubRepoUrl: 'https://github.com/Mooroon5-CNP/todo' });
+    expect(argoCDClient.deleteApplication).toHaveBeenCalled();
   });
 });

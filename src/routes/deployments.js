@@ -616,7 +616,7 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
             await environmentService.remove(dep);
         } else {
-            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
         }
     } catch (e) {
         // Log partial-cleanup warnings but don't block the deletion.
@@ -679,7 +679,7 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
             await environmentService.remove(dep);
         } else {
-            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
         }
     } catch (e) {
         req.flash('error', `Nettoyage partiel : ${e.message}`);

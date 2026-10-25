@@ -1001,6 +1001,87 @@ async function removeFromRegistry(owner, repo, appName, token) {
     );
 }
 
+// Le config-repo reçoit en continu des commits de bots (promotions d'image des CI, routage) : une suppression
+// lancée en même temps qu'un de ces commits échoue en 409 (sha ou tête de branche périmés). Relire et réessayer.
+function isConflict(err) {
+    const text = `${err?.status || ''} ${err?.response?.status || ''} ${err?.message || ''}`;
+    return /\b409\b/.test(text) || /is at [0-9a-f]{40} but expected/.test(text);
+}
+
+async function withConflictRetry(fn, attempts = 5) {
+    for (let attempt = 1; ; attempt++) {
+        try { return await fn(); }
+        catch (err) {
+            if (attempt >= attempts || !isConflict(err)) throw err;
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+        }
+    }
+}
+
+/**
+ * Démontage d'une app Azure. Ne passe PAS par l'API Argo CD ni par les namespaces : une app Azure n'a ni
+ * Applications -dev-local/-prod-local, ni ApplicationSets par app, ni namespace. Supprimer ses fichiers du
+ * config-repo suffit : l'ApplicationSet cloudrun-autodiscovery retire l'Application, qui supprime en cascade
+ * les ressources Crossplane (donc Azure) quelques minutes plus tard. Les appels à l'API Argo échouaient de
+ * toute façon : serveur 3.x qui exige Content-Type: application/json (415), et compte cnp-portal en lecture
+ * seule côté Argo (403).
+ */
+async function offboardAzure({ appName, githubRepoUrl }) {
+    const configRepoToken = config.github.configRepoToken;
+    const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
+    const parsed = githubService.parseRepoUrl(githubRepoUrl);
+    const errors = [];
+
+    if (configRepoToken) {
+        for (const path of azureTemplates.azureConfigRepoPaths(appName)) {
+            try {
+                await withConflictRetry(async () => {
+                    const sha = await githubService.getFileSha(crOwner, crRepo, path, configRepoToken);
+                    if (sha) {
+                        await githubService.deleteFileWithToken(
+                            crOwner, crRepo, path, sha,
+                            `chore: remove ${path} (app deleted via CNP Portal)`, configRepoToken,
+                        );
+                    }
+                });
+            } catch (e) {
+                errors.push(`config-repo ${path}: ${e.message}`);
+            }
+        }
+        try {
+            await withConflictRetry(() => removeFromRegistry(crOwner, crRepo, appName, configRepoToken));
+        } catch (e) {
+            errors.push(`registry.yaml: ${e.message}`);
+        }
+    }
+
+    if (parsed) {
+        const { owner: appOwner, repo: appRepo } = parsed;
+        try {
+            await withConflictRetry(async () => {
+                const ciSha = await githubClient.getFileSha(appOwner, appRepo, '.github/workflows/ci.yml');
+                if (ciSha) {
+                    await githubClient.deleteFile(
+                        appOwner, appRepo, '.github/workflows/ci.yml', ciSha,
+                        'chore: remove CNP pipeline (app deleted via CNP Portal)',
+                    );
+                }
+            });
+        } catch (e) {
+            errors.push(`ci.yml: ${e.message}`);
+        }
+        try {
+            await githubClient.deleteSecret(appOwner, appRepo, 'CONFIG_REPO_TOKEN');
+        } catch (e) {
+            errors.push(`secret: ${e.message}`);
+        }
+    }
+
+    if (errors.length > 0) {
+        throw new Error(`Nettoyage partiel — des éléments n'ont pas pu être retirés :\n${errors.join('\n')}`);
+    }
+}
+
 /**
  * Removes everything the platform created for an app:
  *   1. Deletes all K8s manifests from config-repo (including argocd overlay).
@@ -1009,7 +1090,8 @@ async function removeFromRegistry(owner, repo, appName, token) {
  *   4. Deletes .github/workflows/ci.yml from the app repo (GitHub App).
  *   5. Deletes CONFIG_REPO_TOKEN secret from the app repo (GitHub App).
  */
-async function offboardApp({ appName, githubRepoUrl }) {
+async function offboardApp({ appName, githubRepoUrl, targetCluster = 'gcp' }) {
+    if (targetCluster === 'azure') return offboardAzure({ appName, githubRepoUrl });
     const configRepoToken = config.github.configRepoToken;
     const { owner: crOwner, repo: crRepo } = parseConfigRepoName();
     const parsed = githubService.parseRepoUrl(githubRepoUrl);
