@@ -8,6 +8,7 @@ const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
 const environmentService = require('../services/environment-deployment');
+const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
 const teamService = require('../services/teams');
@@ -217,6 +218,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         pendingDeletionCount: pendingRequests.length,
         allTeams,
         userTeams,
+        applicationsBaseDomain: applicationAddress.baseDomain(),
         filterTeam,
         user: req.user,
         can: (p) => can(req.user, p),
@@ -505,6 +507,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         environmentStatus: selectedStatus,
+        applicationUrl: applicationAddress.url(dep),
         runs,
         latest,
         jobs,

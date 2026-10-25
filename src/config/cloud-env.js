@@ -11,6 +11,7 @@ const CLOUD_KEYS = [
   'ARGOCD_SERVER_URL', 'ARGOCD_UI_URL', 'ARGOCD_USERNAME', 'ARGOCD_PASSWORD', 'ARGOCD_TOKEN', 'ARGOCD_INSECURE',
   'CLUSTER_BASE_DOMAIN',
 ];
+const OPTIONAL_CLOUD_KEYS = ['APPLICATIONS_BASE_DOMAIN'];
 
 function loadCloudEnv(file = process.env.CLOUD_ENV_FILE || path.resolve('.env.cloud'), target = process.env) {
   if (!fs.existsSync(file)) {
@@ -18,10 +19,10 @@ function loadCloudEnv(file = process.env.CLOUD_ENV_FILE || path.resolve('.env.cl
     return;
   }
   const values = dotenv.parse(fs.readFileSync(file));
-  for (const key of CLOUD_KEYS) {
+  for (const key of [...CLOUD_KEYS, ...OPTIONAL_CLOUD_KEYS]) {
     // An empty ARGOCD_TOKEN intentionally switches a legacy setup to login auth.
     if (Object.prototype.hasOwnProperty.call(values, key)) target[key] = values[key];
   }
 }
 
-module.exports = { CLOUD_KEYS, loadCloudEnv };
+module.exports = { CLOUD_KEYS, OPTIONAL_CLOUD_KEYS, loadCloudEnv };

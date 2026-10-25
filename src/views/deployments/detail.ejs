@@ -42,6 +42,16 @@
                 </div>
               </div>
 
+              <% if (applicationUrl) { %>
+                <div class="card" id="application-address" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Adresse de l’environnement</span></div>
+                  <div class="card-body">
+                    <code><%= applicationUrl %></code>
+                    <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement.</div>
+                  </div>
+                </div>
+              <% } %>
+
               <% if (pendingDeletion && can('deployments:delete')) { %>
                 <div class="flash flash-error" style="margin-bottom:16px;">
                   <strong>Demande de suppression en attente</strong> — soumise le <%= new Date(pendingDeletion.createdAt).toLocaleString('fr-FR') %><% if (pendingDeletion.reason) { %> : "<%= pendingDeletion.reason %>"<% } %>.

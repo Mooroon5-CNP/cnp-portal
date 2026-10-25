@@ -65,6 +65,20 @@ test('the form exposes dev/main and prod/approval choices', async () => {
     expect(response.text).toContain('name="environment"');
     expect(response.text).toContain('automatique depuis main');
     expect(response.text).toContain('depuis prod, après validation manager');
+    expect(response.text).toContain('.dev.apps.mooroon5.fr');
+});
+
+test('environment addresses never advertise DNS readiness from runtime readiness alone', async () => {
+    const dep = create('prod');
+    service.reconcile.mockResolvedValue({ phase: 'success', revision, cloudRunUrl: 'https://sample-app-prod.run.app' });
+    const response = await request(app).get(`/deployments/${dep.id}`);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('https://sample-app.apps.mooroon5.fr');
+    expect(response.text).not.toContain('href="https://sample-app.apps.mooroon5.fr"');
+    expect(response.text).toContain('href="https://sample-app-prod.run.app"');
+    const dev = create('dev');
+    const devResponse = await request(app).get(`/deployments/${dev.id}`);
+    expect(devResponse.text).toContain('https://sample-app.dev.apps.mooroon5.fr');
 });
 
 test('selection is persisted and passed to onboarding', async () => {

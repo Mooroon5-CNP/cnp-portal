@@ -4,15 +4,16 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
-const { CLOUD_KEYS } = require('../../src/config/cloud-env');
+const { CLOUD_KEYS, OPTIONAL_CLOUD_KEYS } = require('../../src/config/cloud-env');
 
 function writeContract(values, output) {
-  for (const key of CLOUD_KEYS) {
+  const keys = [...CLOUD_KEYS, ...OPTIONAL_CLOUD_KEYS.filter(key => Object.hasOwn(values, key))];
+  for (const key of keys) {
     if (typeof values[key] !== 'string') throw new Error(`Terraform output is missing ${key}`);
     if (/[\r\n]/.test(values[key])) throw new Error(`Unexpected multiline value for ${key}`);
   }
   if (!values.KUBE_TOKEN || !values.ARGOCD_PASSWORD || values.ARGOCD_TOKEN) throw new Error('Invalid Terraform authentication contract');
-  const text = CLOUD_KEYS.map(key => `${key}=${JSON.stringify(values[key])}`).join('\n') + '\n';
+  const text = keys.map(key => `${key}=${JSON.stringify(values[key])}`).join('\n') + '\n';
   const temporary = `${output}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, text, { flag: 'wx', mode: 0o600 });
