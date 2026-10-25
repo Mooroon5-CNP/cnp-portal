@@ -93,6 +93,7 @@ app.use((err, req, res, _next) => {
 });
 
 if (require.main === module) {
+  require('./services/environment-deployment').startReconciler();
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     logger.info({ message: `CNP Portal started on port ${PORT}`, env: process.env.NODE_ENV || 'development' });
