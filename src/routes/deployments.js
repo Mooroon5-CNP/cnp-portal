@@ -16,7 +16,8 @@ const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
-const { azureAppUrl } = require('../services/azure-templates');
+const azureTemplates = require('../services/azure-templates');
+const { azureAppUrl } = azureTemplates;
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
 const SUPPORTED_CLOUDS = ['gcp', 'azure'];
@@ -244,8 +245,13 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
-    try { environmentService.validate(environment, appName); }
-    catch (err) {
+    // Azure : un seul environnement et pas de branche prod ; le dossier à plat apps/<app>/crossplane/ est écrit
+    // par onboardApp (onboardAzure), pas par le service d'environnements dev/prod, propre à GCP (WIF, projets Argo).
+    const isAzure = targetCluster === 'azure';
+    try {
+        if (isAzure) azureTemplates.validateAzureAppName(appName);
+        else environmentService.validate(environment, appName);
+    } catch (err) {
         req.flash('error', err.message);
         return res.redirect('/deployments');
     }
@@ -292,11 +298,28 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             ownerTeamId: resolvedTeamId,
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
-            environment,
+            environment: isAzure ? 'legacy' : environment,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
+    }
+
+    if (isAzure) {
+        // Même schéma que l'ancien onboarding (statut mis à jour par rappel) : onboardApp aiguille vers onboardAzure.
+        onboardingService.onboardApp({
+            appName,
+            githubRepoUrl,
+            appPort: port,
+            teamOwner: 'platform',
+            targetCluster: 'azure',
+            updateStatus: async (status, error) => {
+                deploymentModel.updateOnboardingStatus(dep.id, status, error);
+            },
+        }).catch((err) => {
+            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+        });
+        return res.redirect(`/deployments/${dep.id}`);
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.

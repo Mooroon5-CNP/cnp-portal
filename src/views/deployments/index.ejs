@@ -318,6 +318,10 @@
                   storage.disabled = value === 'azure';
                   if (value === 'azure') storage.checked = false;
                   storage.closest('.form-group').style.opacity = value === 'azure' ? '.5' : '';
+                  // Azure n'a qu'un environnement (pas de branche prod ni de validation manager).
+                  const env = document.getElementById('environment');
+                  env.disabled = value === 'azure';
+                  env.closest('.form-group').style.opacity = value === 'azure' ? '.5' : '';
                   document.getElementById('cloudWarning').style.display = unsupported ? 'block' : 'none';
                   document.getElementById('cloudWarningName').textContent = CLOUD_LABELS[value] || value;
                   const btn = document.getElementById('deploySubmitBtn');
