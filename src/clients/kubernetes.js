@@ -323,6 +323,50 @@ async function getV2ServiceUrl(appName) {
   }
 }
 
+// L'état observé de GCP évite de confondre une nouvelle spec avec une révision prête.
+function observedServiceStatus(body) {
+  const observed = body.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const terminal = Array.isArray(observed.terminalCondition) ? observed.terminalCondition : [observed.terminalCondition].filter(Boolean);
+  const readyCondition = terminal.find(item => item.type === 'Ready');
+  const succeeded = condition => condition && (condition.state === 'CONDITION_SUCCEEDED' || condition.status === 'True');
+  const managed = body.status?.conditions || [];
+  const providerReady = ['Ready', 'Synced'].every(type => managed.some(item => item.type === type && item.status === 'True'));
+  let generationObserved = false;
+  try {
+    generationObserved = observed.generation != null && observed.observedGeneration != null
+      && BigInt(observed.observedGeneration) >= BigInt(observed.generation);
+  } catch (_) { /* Une génération mal formée ne prouve pas la disponibilité. */ }
+  const ready = providerReady && succeeded(readyCondition) && generationObserved && observed.reconciling === false
+    && Boolean(observed.latestCreatedRevision) && observed.latestCreatedRevision === observed.latestReadyRevision;
+  return {
+    ready,
+    url: observed.uri || null,
+    image: template?.containers?.[0]?.image || null,
+    failure: readyCondition?.state === 'CONDITION_FAILED' ? readyCondition.message || 'Révision Cloud Run en échec.' : null,
+  };
+}
+
+async function getComputeResource(plural, name) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try { return (await api.getClusterCustomObject('compute.gcp.upbound.io', 'v1beta1', plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    handleError(err, `getComputeResource(${plural}/${name})`);
+  }
+}
+
+async function getV2ServiceStatus(appName) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body } = await api.getClusterCustomObject('cloudrun.gcp.upbound.io', 'v1beta2', 'v2services', appName);
+    return observedServiceStatus(body);
+  } catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return { ready: false, url: null, image: null, failure: null };
+    handleError(err, `getV2ServiceStatus(${appName})`);
+  }
+}
+
 // Cache the ingress IP for the lifetime of the process — it almost never changes.
 let _ingressIpCache = null;
 
@@ -436,6 +480,6 @@ module.exports = {
   applyApplicationSet, deleteApplicationSet,
   applyArgocdApplication, deleteArgocdApplication,
   deleteNamespace,
-  getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

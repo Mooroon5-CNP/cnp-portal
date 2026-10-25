@@ -87,6 +87,9 @@ const config = {
   cluster: {
     baseDomain: process.env.CLUSTER_BASE_DOMAIN || 'cnp.example.com',
   },
+  applications: {
+    baseDomain: process.env.APPLICATIONS_BASE_DOMAIN || 'apps.mooroon5.fr',
+  },
   gcp: {
     project:       process.env.GCP_PROJECT        || 'cnp-terraform-500015',
     region:        process.env.GCP_REGION         || 'europe-west9',

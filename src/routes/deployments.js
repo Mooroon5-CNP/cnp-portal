@@ -7,6 +7,8 @@ const { requirePermission, can } = require('../middleware/rbac');
 const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
+const environmentService = require('../services/environment-deployment');
+const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
 const teamService = require('../services/teams');
@@ -40,6 +42,44 @@ async function syncMrsFromGitHub(mrs) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function usesEnvironment(dep) {
+    return dep.environment === 'dev' || dep.environment === 'prod';
+}
+
+function sourceBranch(dep) {
+    return dep.sourceBranch || (dep.environment === 'prod' ? 'prod' : 'main');
+}
+
+function workflowId(dep) {
+    return usesEnvironment(dep) ? environmentService.workflowName(dep.appName) : null;
+}
+
+function canViewDeployment(user, dep) {
+    return deploymentModel.listForUser(user).some(row => row.id === dep.id);
+}
+
+async function environmentStatus(dep) {
+    try {
+        return await environmentService.reconcile(dep);
+    } catch (_) {
+        return { phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.' };
+    }
+}
+
+function environmentBadge(status) {
+    const labels = {
+        success: ['Déployé', 'badge-success'],
+        approval: ['Validation manager', 'badge-warning'],
+        running: ['CI en cours', 'badge-warning'],
+        deploying: ['Déploiement en cours', 'badge-warning'],
+        failed: ['Échec du déploiement', 'badge-danger'],
+        rejected: ['Production refusée', 'badge-danger'],
+        deleting: ['Suppression en cours', 'badge-warning'],
+    };
+    const [label, badge] = labels[status.phase] || ['En attente', 'badge-gray'];
+    return { label, badge };
+}
 
 function mapRunToStatus(run) {
     if (!run) return { label: 'En attente', badge: 'badge-gray' };
@@ -104,22 +144,32 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
     const enriched = await Promise.all(rows.map(async (r) => {
         const d = deploymentModel.get(r.id);
         let run = null;
+        let selectedStatus = null;
         let status = { label: 'Configuration...', badge: 'badge-warning' };
 
         if (d.onboardingStatus === 'configuring') {
             status = { label: 'Configuration...', badge: 'badge-warning' };
+        } else if (d.onboardingStatus === 'deleting') {
+            status = environmentBadge({ phase: 'deleting' });
         } else if (d.onboardingStatus === 'failed') {
             status = { label: 'Erreur setup', badge: 'badge-danger' };
         } else {
             const parsed = githubService.parseRepoUrl(d.githubRepoUrl);
             if (parsed) {
-                run = await githubClient.getLatestRun(parsed.owner, parsed.repo).catch(() => null);
+                run = await githubClient.getLatestRun(parsed.owner, parsed.repo, sourceBranch(d), workflowId(d)).catch(() => null);
             }
-            status = mapRunToStatus(run);
+            if (usesEnvironment(d)) {
+                selectedStatus = await environmentStatus(d);
+                status = environmentBadge(selectedStatus);
+            } else {
+                status = mapRunToStatus(run);
+            }
         }
 
         const lastRunTime = run ? (run.updated_at || run.run_started_at || run.created_at) : null;
-        const deployedTag = d.onboardingStatus === 'ready' ? await readDeployedTag(d.appName) : null;
+        const deployedTag = usesEnvironment(d)
+            ? (selectedStatus?.phase === 'success' ? selectedStatus.revision?.slice(0, 7) : null)
+            : (d.onboardingStatus === 'ready' ? await readDeployedTag(d.appName) : null);
         const ownerTeam = d.ownerTeamId ? (teamById[d.ownerTeamId] || null) : null;
         const accessTeamIds = deploymentModel.getAccessibleTeamIds(d.id);
         const accessTeams = accessTeamIds.map(id => teamById[id]).filter(Boolean);
@@ -127,12 +177,13 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         return {
             id: d.id,
             appName: d.appName,
+            environment: d.environment || 'legacy',
             githubRepoUrl: d.githubRepoUrl,
             appPort: d.appPort,
             onboardingStatus: d.onboardingStatus,
             persistentStorage: d.persistentStorage,
             status,
-            branch: run ? (run.head_branch || 'main') : 'main',
+            branch: sourceBranch(d),
             lastRunTime,
             deployedTag,
             ownerUserId: d.ownerUserId,
@@ -167,6 +218,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         pendingDeletionCount: pendingRequests.length,
         allTeams,
         userTeams,
+        applicationsBaseDomain: applicationAddress.baseDomain(),
         filterTeam,
         user: req.user,
         can: (p) => can(req.user, p),
@@ -178,11 +230,22 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // ---------------------------------------------------------------------------
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage } = req.body;
+    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
     const hasPersistentStorage = persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true;
 
     if (!appName || !githubRepoUrl) {
         req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
+        return res.redirect('/deployments');
+    }
+
+    try { environmentService.validate(environment, appName); }
+    catch (err) {
+        req.flash('error', err.message);
+        return res.redirect('/deployments');
+    }
+    const port = Number(appPort || 8080);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        req.flash('error', 'Le port applicatif doit être compris entre 1 et 65535.');
         return res.redirect('/deployments');
     }
 
@@ -202,6 +265,12 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    // Un nom d'application partagé entre environnements garde les mêmes droits d'accès.
+    const visibleIds = new Set(deploymentModel.listForUser(req.user).map(row => row.id));
+    if (deploymentModel.listForUser(null).some(row => row.app_name === appName && !visibleIds.has(row.id))) {
+        return res.status(403).send('Application non accessible.');
+    }
+
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
 
@@ -211,31 +280,28 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         dep = deploymentModel.create({
             appName,
             githubRepoUrl,
-            appPort: parseInt(appPort, 10) || 8080,
+            appPort: port,
             configRepoToken: null,
             ownerUserId: req.user.id,
             ownerTeamId: resolvedTeamId,
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
+            environment,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
     }
 
-    // Run onboarding asynchronously — do not await so the response returns immediately.
-    onboardingService.onboardApp({
-        appName,
-        githubRepoUrl,
-        appPort: parseInt(appPort, 10) || 8080,
-        teamOwner: 'platform',
-        targetCluster: targetCluster || 'gcp',
-        persistentStorage: hasPersistentStorage,
-        updateStatus: async (status, error) => {
-            deploymentModel.updateOnboardingStatus(dep.id, status, error);
-        },
-    }).catch((err) => {
-        deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+    // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
+    environmentService.onboard(dep).then(() => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
+            deploymentModel.updateOnboardingStatus(dep.id, 'ready');
+        }
+    }).catch(err => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
+            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+        }
     });
 
     return res.redirect(`/deployments/${dep.id}`);
@@ -248,9 +314,14 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
 router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
     const dep = deploymentModel.get(req.params.id);
     if (!dep) return res.status(404).json({ error: 'Déploiement introuvable' });
+    if (!canViewDeployment(req.user, dep)) return res.status(403).json({ error: 'Accès refusé' });
 
     if (dep.onboardingStatus === 'configuring') {
         return res.json({ phase: 'configuring', message: 'Configuration de la plateforme en cours...' });
+    }
+
+    if (dep.onboardingStatus === 'deleting') {
+        return res.json({ phase: 'deleting', message: 'Suppression de cet environnement en cours...' });
     }
 
     if (dep.onboardingStatus === 'failed') {
@@ -259,6 +330,11 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
             message: 'Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.',
             detail: dep.onboardingError,
         });
+    }
+
+    if (usesEnvironment(dep)) {
+        try { return res.json(await environmentService.reconcile(dep)); }
+        catch (_) { return res.status(503).json({ phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.' }); }
     }
 
     // Onboarding done — check actual CI run status.
@@ -308,6 +384,7 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
 router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
     const dep = deploymentModel.get(req.params.id);
     if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé');
 
     let runs = [];
     let latest = null;
@@ -318,7 +395,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     if (dep.onboardingStatus === 'ready') {
         const parsed = githubService.parseRepoUrl(dep.githubRepoUrl);
         if (parsed) {
-            runs = await githubClient.getRuns(parsed.owner, parsed.repo, 5).catch(() => []);
+            runs = await githubClient.getRuns(parsed.owner, parsed.repo, 5, sourceBranch(dep), workflowId(dep)).catch(() => []);
             latest = runs && runs.length > 0 ? runs[0] : null;
             if (latest) {
                 jobs = await githubClient.getRunJobs(parsed.owner, parsed.repo, latest.id).catch(() => []);
@@ -335,15 +412,20 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
 
     // Auto-heal gcs-bucket.yaml if it's missing uniformBucketLevelAccess (fire-and-forget).
-    if (dep.targetCluster === 'gcp' && dep.persistentStorage && dep.onboardingStatus === 'ready') {
+    if (!usesEnvironment(dep) && dep.targetCluster === 'gcp' && dep.persistentStorage && dep.onboardingStatus === 'ready') {
         onboardingService.healGcsBucket(dep.appName).catch(e =>
             console.warn(`[detail] healGcsBucket(${dep.appName}): ${e.message}`)
         );
     }
 
-    // Use cached URL from DB first; live K8s query only on cache miss.
-    let cloudRunUrl = dep.cloudRunUrl || null;
-    if (!cloudRunUrl && dep.targetCluster === 'gcp') {
+    const selectedStatus = usesEnvironment(dep) && dep.onboardingStatus === 'ready'
+        ? await environmentStatus(dep) : null;
+
+    // Une URL existante ne prouve pas que la nouvelle révision est prête.
+    let cloudRunUrl = usesEnvironment(dep)
+        ? (selectedStatus?.phase === 'success' ? selectedStatus.applicationUrl || null : null)
+        : dep.cloudRunUrl || null;
+    if (!usesEnvironment(dep) && !cloudRunUrl && dep.targetCluster === 'gcp') {
         cloudRunUrl = await k8sClient.getV2ServiceUrl(dep.appName).catch(() => null);
         if (cloudRunUrl) deploymentModel.updateCloudRunUrl(dep.id, cloudRunUrl);
     }
@@ -382,6 +464,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         onboardingError: dep.onboardingError,
         ownerUserId: dep.ownerUserId,
         targetCluster: dep.targetCluster || 'gcp',
+        environment: dep.environment || 'legacy',
+        sourceBranch: sourceBranch(dep),
         createdAt: dep.createdAt,
         updatedAt: dep.updatedAt,
     };
@@ -422,6 +506,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        environmentStatus: selectedStatus,
+        applicationUrl: applicationAddress.url(dep),
         runs,
         latest,
         jobs,
@@ -439,6 +525,19 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     });
 });
 
+// Une validation manager publie exactement le candidat de production sélectionné.
+for (const action of ['approve', 'reject']) {
+    router.post(`/:id/releases/:revision/${action}`, requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
+        const dep = deploymentModel.get(req.params.id);
+        if (!dep) return res.status(404).send('Déploiement introuvable');
+        try {
+            await environmentService.review(dep, req.params.revision, action === 'approve', { reviewedBy: req.user.id });
+            req.flash('success', action === 'approve' ? 'Production approuvée ; déploiement en cours.' : 'Production refusée.');
+        } catch (err) { req.flash('error', err.message); }
+        return res.redirect(`/deployments/${dep.id}`);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // POST /deployments/:id/delete — manager only, triggers full cleanup
 // ---------------------------------------------------------------------------
@@ -451,13 +550,19 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
     }
 
     try {
-        await onboardingService.offboardApp({
-            appName: dep.appName,
-            githubRepoUrl: dep.githubRepoUrl,
-        });
+        if (usesEnvironment(dep)) {
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            await environmentService.remove(dep);
+        } else {
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+        }
     } catch (e) {
         // Log partial-cleanup warnings but don't block the deletion.
         req.flash('error', `Nettoyage partiel : ${e.message}`);
+        if (usesEnvironment(dep)) {
+            deploymentModel.updateOnboardingStatus(dep.id, 'failed', `Nettoyage partiel : ${e.message}`);
+            return res.redirect(`/deployments/${dep.id}`);
+        }
     }
 
     deletionRequestModel.deleteByDeployment(dep.id);
@@ -508,12 +613,18 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
     if (request) deletionRequestModel.approve(request.id, req.user.id);
 
     try {
-        await onboardingService.offboardApp({
-            appName: dep.appName,
-            githubRepoUrl: dep.githubRepoUrl,
-        });
+        if (usesEnvironment(dep)) {
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            await environmentService.remove(dep);
+        } else {
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+        }
     } catch (e) {
         req.flash('error', `Nettoyage partiel : ${e.message}`);
+        if (usesEnvironment(dep)) {
+            deploymentModel.updateOnboardingStatus(dep.id, 'failed', `Nettoyage partiel : ${e.message}`);
+            return res.redirect(`/deployments/${dep.id}`);
+        }
     }
 
     deletionRequestModel.deleteByDeployment(dep.id);

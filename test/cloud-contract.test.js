@@ -29,3 +29,15 @@ test('an incomplete Terraform output does not replace the working imported envir
   expect(() => writeContract({ GCP_PROJECT: 'new-project' }, file)).toThrow('missing');
   expect(fs.readFileSync(file, 'utf8')).toBe('existing');
 });
+
+test('the applications domain imports when provided without requiring older Terraform outputs to add it', () => {
+  const values = Object.fromEntries(CLOUD_KEYS.map(key => [key, 'example']));
+  Object.assign(values, { ARGOCD_TOKEN: '', APPLICATIONS_BASE_DOMAIN: 'apps.mooroon5.fr' });
+  const file = path.join(dir, '.env.cloud');
+  writeContract(values, file);
+  const target = { APPLICATIONS_BASE_DOMAIN: 'stale.example.org' };
+  loadCloudEnv(file, target);
+  expect(target.APPLICATIONS_BASE_DOMAIN).toBe('apps.mooroon5.fr');
+  delete values.APPLICATIONS_BASE_DOMAIN;
+  expect(() => writeContract(values, file)).not.toThrow();
+});
