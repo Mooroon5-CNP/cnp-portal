@@ -59,7 +59,9 @@
                         <tr>
                           <td><strong><a href="/deployments/<%= dep.id %>">
                                 <%= dep.appName %>
-                              </a></strong></td>
+                              </a></strong>
+                              <span class="badge badge-gray"><%= dep.environment === 'legacy' ? 'Historique' : dep.environment %></span>
+                            </td>
                           <td>
                             <% if (dep.ownerTeam) { %>
                               <a href="/deployments?team=<%= dep.ownerTeam.id %>" class="badge badge-gray" style="text-decoration:none;"><%= dep.ownerTeam.name %></a>
@@ -146,7 +148,16 @@
                         placeholder="mon-app" required
                         pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
                         title="Minuscules, chiffres et tirets uniquement">
-                      <div class="form-hint">Minuscules et tirets uniquement (ex: mon-app). Doit être unique dans la plateforme.</div>
+                      <div class="form-hint">Minuscules et tirets uniquement (ex: mon-app). Réutilisez ce nom pour les environnements dev et prod du même dépôt.</div>
+                    </div>
+
+                    <div class="form-group">
+                      <label for="environment">Environnement</label>
+                      <select name="environment" id="environment" required>
+                        <option value="dev">Développement — automatique depuis main</option>
+                        <option value="prod">Production — depuis prod, après validation manager</option>
+                      </select>
+                      <div class="form-hint">Chaque environnement possède son service et ses données. La production attend l'approbation d'un manager dans le portail.</div>
                     </div>
 
                     <div class="form-group">

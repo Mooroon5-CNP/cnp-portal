@@ -14,6 +14,7 @@
                   <div class="page-title"><%= deployment.appName %></div>
                   <div class="page-subtitle" style="display:flex;align-items:center;gap:8px;">
                     Détails du pipeline
+                    <span class="badge badge-gray"><%= deployment.environment === 'legacy' ? 'Historique' : deployment.environment %> · <%= deployment.sourceBranch %></span>
                     <% if (ownerTeam) { %>
                     <a href="/deployments?team=<%= ownerTeam.id %>" class="badge badge-gray" style="text-decoration:none;font-size:12px;"><%= ownerTeam.name %></a>
                     <% } %>
@@ -109,8 +110,27 @@
                     </div>
                   </div>
                 <% } %>
+                <% if (environmentStatus) { %>
+                  <div class="card" style="margin-bottom:16px;" id="environment-status-card" data-phase="<%= environmentStatus.phase %>">
+                    <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
+                    <div class="card-body">
+                      <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
+                      <% if (environmentStatus.phase === 'approval') { %>
+                        <p><a href="<%= environmentStatus.prUrl %>" target="_blank" rel="noreferrer">Consulter le candidat</a>. La validation se fait ici, dans le portail.</p>
+                        <% if (can('k8s:manifest:approve')) { %>
+                          <form method="POST" action="/deployments/<%= deployment.id %>/releases/<%= environmentStatus.revision %>/approve" class="inline-form">
+                            <button type="submit" class="btn btn-primary">Approuver la production</button>
+                          </form>
+                          <form method="POST" action="/deployments/<%= deployment.id %>/releases/<%= environmentStatus.revision %>/reject" class="inline-form">
+                            <button type="submit" class="btn btn-danger">Refuser</button>
+                          </form>
+                        <% } %>
+                      <% } %>
+                    </div>
+                  </div>
+                <% } %>
                 <!-- Final status banner (shown once CI has a result) -->
-                <% if (latest && latest.status === 'completed') { %>
+                <% if (deployment.environment === 'legacy' && latest && latest.status === 'completed') { %>
                   <% if (latest.conclusion === 'success') { %>
                     <% if (cloudRunUrl) { %>
                     <div class="flash flash-success" style="margin-bottom:16px;">
@@ -393,6 +413,29 @@
     <!-- ── Polling script ────────────────────────────────────────────────── -->
     <script>
       (function () {
+        const selectedEnvironment = '<%= deployment.environment %>';
+        if (selectedEnvironment !== 'legacy') {
+          const initialPhase = '<%= environmentStatus ? environmentStatus.phase : deployment.onboardingStatus %>';
+          const initialRevision = '<%= environmentStatus ? (environmentStatus.revision || "") : "" %>';
+          const initialHasUrl = <%= cloudRunUrl ? 'true' : 'false' %>;
+          const pollEnvironment = async () => {
+            try {
+              const response = await fetch('/deployments/<%= deployment.id %>/status');
+              if (response.ok) {
+                const data = await response.json();
+                if (data.phase !== initialPhase || (data.revision || '') !== initialRevision || Boolean(data.cloudRunUrl) !== initialHasUrl) {
+                  window.location.reload();
+                  return;
+                }
+                const message = document.getElementById('environment-status-message');
+                if (message) message.textContent = data.message;
+              }
+            } catch (_) { /* le prochain poll retente */ }
+            window.setTimeout(pollEnvironment, 5000);
+          };
+          window.setTimeout(pollEnvironment, 5000);
+          return;
+        }
         const depId    = '<%= deployment.id %>';
         const cluster  = '<%= deployment.targetCluster || "gcp" %>';
         const status0  = '<%= deployment.onboardingStatus %>';
