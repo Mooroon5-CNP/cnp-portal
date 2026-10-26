@@ -6,8 +6,9 @@ const github = require('../../../../src/services/github');
 const argo = require('../../../../src/clients/argocd');
 const datadog = require('../../../../src/clients/datadog');
 const k8s = require('@kubernetes/client-node');
+const runtime = require('../../../../src/clients/kubernetes');
 
-function createNativeAdapters({ SourceError, githubClient = github, argoClient = argo, datadogClient = datadog, settings = config } = {}) {
+function createNativeAdapters({ SourceError, githubClient = github, argoClient = argo, datadogClient = datadog, runtimeClient = runtime, settings = config } = {}) {
   const fail = (code, source) => { throw new SourceError(code, source); };
   const [owner, repo] = (settings.github.configRepoName || '').split('/');
   let cachedRegistry, cachedAt = 0;
@@ -38,11 +39,14 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
     }
   }
   async function resolveDeployment(id, env) {
-    if (!await get(id)) return fail('APPLICATION_NOT_FOUND', 'git');
+    const app = await get(id);
+    if (!app) return fail('APPLICATION_NOT_FOUND', 'git');
+    if (!app.environments.some(entry => entry.name === env && entry.enabled)) return fail('ENVIRONMENT_NOT_FOUND', 'git');
     // A shared Cloud Run claim is the dev resource. Never mislabel it as a prod deployment.
-    const claim = await document(`apps/${id}/crossplane/${env}/cloudrun-claim.yaml`)
-      || (env === 'dev' ? await document(`apps/${id}/crossplane/cloudrun-claim.yaml`) : null);
+    const selected = await document(`apps/${id}/crossplane/${env}/cloudrun-claim.yaml`);
+    const claim = selected || (env === 'dev' ? await document(`apps/${id}/crossplane/cloudrun-claim.yaml`) : null);
     if (claim) return { platform: 'cloud_run', manifest: claim,
+      legacy: !selected, runtimeName: claim.metadata?.name || (selected ? `${id}-${env}` : id),
       image: claim.spec?.forProvider?.template?.containers?.[0]?.image || null };
     const overlay = await document(`apps/${id}/overlays/${env}/kustomization.yaml`);
     if (!overlay) return fail('ENVIRONMENT_NOT_FOUND', 'git');
@@ -59,15 +63,22 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
   const versionOf = (image) => image && !image.includes('@') && /:[^/]+$/.test(image) ? image.slice(image.lastIndexOf(':') + 1) : null;
   const digestOf = (image) => image?.match(/@(sha256:[a-f0-9]{64})$/i)?.[1] || null;
   async function observed(id, env) {
+    const deployment = await resolveDeployment(id, env);
     const explicit = JSON.parse(process.env.MCP_ARGO_APPLICATIONS || '{}')[`${id}/${env}`];
-    const application = env === 'dev' ? await document(`apps/${id}/crossplane/application.yaml`, 'argo') : null;
+    const application = deployment.legacy ? await document(`apps/${id}/crossplane/application.yaml`, 'argo') : null;
     const name = explicit || application?.metadata?.name || `${id}-${env}`;
     try {
       const raw = await argoClient.getApplicationDetails(name);
       const images = raw.status?.summary?.images || [];
       const syncStatus = ['Synced', 'OutOfSync'].includes(raw.status?.sync?.status) ? raw.status.sync.status : 'Unknown';
       const healthStatus = ['Healthy', 'Progressing', 'Degraded'].includes(raw.status?.health?.status) ? raw.status.health.status : 'Unknown';
-      return { version: versionOf(images[0]), imageDigest: digestOf(images[0]), syncStatus, healthStatus,
+      // Argo's summary is desired managed-resource state, not Cloud Run's serving revision.
+      // Use the observed runtime and withhold its version until it is actually ready.
+      const cloud = deployment.platform === 'cloud_run'
+        ? await runtimeClient.getV2ServiceStatus(deployment.runtimeName) : null;
+      const observedImage = deployment.platform === 'cloud_run' ? (cloud?.ready ? cloud.image : null) : images[0];
+      const runtimeHealth = cloud?.failure ? 'Degraded' : cloud && !cloud.ready ? 'Progressing' : healthStatus;
+      return { version: versionOf(observedImage), imageDigest: digestOf(observedImage), syncStatus, healthStatus: runtimeHealth,
         lastDeploymentAt: raw.status?.operationState?.finishedAt || null };
     } catch { return fail('SOURCE_UNAVAILABLE', 'argo'); }
   }

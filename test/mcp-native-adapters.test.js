@@ -38,3 +38,43 @@ test('source outages are errors and never silently become mock or empty data', a
   const failing = createNativeAdapters({ SourceError, settings, githubClient: { getFileWithSha: async () => { throw error; } } });
   await expect(failing.platform.list({ limit: 20 })).rejects.toMatchObject({ code: 'SOURCE_UNAVAILABLE' });
 });
+
+test('environment claims and runtimes take precedence over a preserved legacy Argo application', async () => {
+  const git = { getFileWithSha: jest.fn(async (_owner, _repo, path) => {
+    if (path === 'apps/registry.yaml') return { content: registry };
+    const env = path.match(/crossplane\/(dev|prod)\/cloudrun-claim.yaml$/)?.[1];
+    if (env) return { content: claim.replace('kind: V2Service', `kind: V2Service\nmetadata:\n  name: real-app-${env}`) };
+    if (path.endsWith('crossplane/application.yaml')) return { content: 'metadata:\n  name: legacy-app' };
+    const error = new Error('missing'); error.response = { status: 404 }; throw error;
+  }) };
+  const argoClient = { getApplicationDetails: jest.fn(async () => ({ status: {
+    summary: { images: ['registry.test/wrong:desired-only'] }, sync: { status: 'Synced' }, health: { status: 'Healthy' },
+  } })) };
+  const runtimeClient = { getV2ServiceStatus: jest.fn(async name => ({ ready: true,
+    image: `registry.test/app:${name}-serving`, failure: null })) };
+  const adapter = createNativeAdapters({ SourceError, settings, githubClient: git, argoClient, runtimeClient });
+  for (const env of ['dev', 'prod']) {
+    expect(await adapter.argo.observed('real-app', env)).toMatchObject({ version: `real-app-${env}-serving`, healthStatus: 'Healthy' });
+    expect(argoClient.getApplicationDetails).toHaveBeenLastCalledWith(`real-app-${env}`);
+    expect(runtimeClient.getV2ServiceStatus).toHaveBeenLastCalledWith(`real-app-${env}`);
+  }
+  expect(git.getFileWithSha.mock.calls.some(call => call[2].endsWith('crossplane/application.yaml'))).toBe(false);
+  runtimeClient.getV2ServiceStatus.mockResolvedValue({ ready: false, image: 'registry.test/app:desired-only', failure: 'Container failed' });
+  expect(await adapter.argo.observed('real-app', 'dev')).toMatchObject({ version: null, healthStatus: 'Degraded' });
+});
+
+test('legacy dev uses its declared Argo owner and never grants an unregistered environment', async () => {
+  const argoClient = { getApplicationDetails: jest.fn(async () => ({ status: {} })) };
+  const runtimeClient = { getV2ServiceStatus: jest.fn(async () => ({ ready: true, image: 'registry.test/app:serving' })) };
+  const githubClient = { getFileWithSha: async (_owner, _repo, path) => {
+    if (path === 'apps/registry.yaml') return { content: registry.replace('[dev, prod]', '[dev]') };
+    if (path.endsWith('crossplane/cloudrun-claim.yaml')) return { content: claim };
+    if (path.endsWith('crossplane/application.yaml')) return { content: 'metadata:\n  name: real-app-cloudrun' };
+    const error = new Error('missing'); error.response = { status: 404 }; throw error;
+  } };
+  const adapter = createNativeAdapters({ SourceError, settings, githubClient, argoClient, runtimeClient });
+  expect(await adapter.argo.observed('real-app', 'dev')).toMatchObject({ version: 'serving' });
+  expect(argoClient.getApplicationDetails).toHaveBeenCalledWith('real-app-cloudrun');
+  expect(runtimeClient.getV2ServiceStatus).toHaveBeenCalledWith('real-app');
+  await expect(adapter.git.desired('real-app', 'prod')).rejects.toMatchObject({ code: 'ENVIRONMENT_NOT_FOUND' });
+});

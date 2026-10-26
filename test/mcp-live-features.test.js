@@ -46,7 +46,7 @@ test('slash help does not contact a source or classifier and explicit commands r
 });
 
 test('scoped catalog and tool response exclude another team and deny direct target', async () => {
-  const app = (applicationId) => ({ applicationId });
+  const app = (applicationId) => ({ applicationId, environments: [{ name: 'dev', enabled: true }] });
   const client = { callTool: jest.fn(async () => ({ status: 'success', data: { applications: [app('mine'), app('other')], nextCursor: null } })) };
   const catalog = { listApplications: async () => [app('mine'), app('other')] };
   const scope = createUserScope(client, catalog, { listForUser: () => [{ app_name: 'mine' }] })({ id: 'user', role: 'dev' });

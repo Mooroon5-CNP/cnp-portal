@@ -1,3 +1,17 @@
+# Reprise du 26 octobre 2026
+
+La branche isolée `feat/mcp-environment-integration` intègre main après les
+changements dev/prod. Le checkout original et ses changements non commités
+sont conservés. La suite combinée et les observations live sont détaillées à
+la fin de ce document ; les notes du 19 octobre ci-dessous décrivent le point
+de départ, pas un statut de livraison actuel.
+
+Les spécifications de fonctionnement complet sont dans `MCP-CNP/specs/README.md`
+(dossier du dépôt MCP voisin). Elles couvrent les droits serveur, la conversation,
+les sources, le FinOps par équipe/coûts et la portabilité. FinOps V2 et
+l’autorisation autonome multiutilisateur du serveur ne sont pas implémentés par
+les correctifs de cette reprise.
+
 # Intégration MCP-CNP / cnp-portal
 
 État vérifié le 19 octobre 2026. Branche portail : `feat/MCPapi`.
@@ -274,3 +288,55 @@ Cette commande lit Git/Argo/Kubernetes/Datadog, sans Jev ni génération IA.
 Un statut `partial` peut aussi correspondre à un champ manquant (digest, version,
 coût), pas uniquement à une source totalement inaccessible. Les sources non
 configurées sont signalées ; elles ne sont jamais remplacées par un mock.
+
+
+## Compatibilité avec les déploiements dev/prod
+
+Le filtre du portail vérifie désormais l’accès à l’environnement, avant de
+consulter un outil ciblé ; les listes et propositions masquent les environnements
+non accessibles. Les accès sont relus à chaque tour. Un enregistrement historique
+conserve seulement sa compatibilité dev ; il ne donne pas prod.
+
+Le lien « Analyser avec MCP » transmet l’application et l’environnement du
+déploiement choisi. Le claim isolé d’environnement prime sur le claim historique.
+Pour Cloud Run, la version observée vient du runtime effectivement prêt, jamais
+du seul résumé d’images Argo. Une version ou un digest manquant reste inconnu.
+La santé Argo peut être dégradée pour une route en échec alors que le runtime
+sert correctement ; ces deux preuves ne doivent pas être confondues.
+
+La recette suivante ouvre un serveur MCP loopback éphémère et une base SQLite
+locale temporaire. Elle utilise la vraie connexion du portail, le contrôle CSRF,
+le flux SSE et les adaptateurs natifs. Elle ne démarre aucun réconciliateur de
+déploiement, n’écrit pas dans le cloud et n’appelle pas de service IA payant.
+
+```bash
+MCP_PROJECT_DIR=/chemin/MCP-CNP \
+MCP_PORTAL_ENV_FILE=/chemin/cnp-portal/.env \
+CLOUD_ENV_FILE=/chemin/cnp-portal/.env.cloud \
+npm run test:live-environments -- app4-pixelcam
+```
+
+Les credentials sont chargés côté serveur et ne sont pas imprimés. La recette
+exige des versions désirée/servie identiques et un runtime prêt pour dev/prod.
+Un utilisateur dev seul est créé dans la base temporaire pour vérifier que prod
+n’apparaît pas et qu’aucun outil de déploiement ne s’exécute pour cette cible.
+Ce contrôle ne prouve pas l’autorisation autonome du serveur partagé : SPEC-02
+reste nécessaire. Les sources Datadog/Billing et la qualité d’une réponse IA
+réelle restent à vérifier séparément avant d’annoncer ces fonctionnalités.
+
+
+### Résultats de recette du 26 octobre 2026
+
+- Suite combinée portail/MCP/dev-prod : 20 suites, 151 tests réussis ; lint réussi.
+- Dépôt MCP : typecheck et lint réussis, 58 tests réussis.
+- Intégration croisée existante : transport HTTP MCP, quatre outils, contrats,
+  Platform API HTTPS et refus de credentials réussis sur sources synthétiques.
+- Génération et résolution de contexte : vrai SDK, réponses API simulées,
+  vérifications de confidentialité réussies ; aucun appel IA payant.
+- Recette live à 15:51 UTC : login, CSRF, SSE et MCP HTTP réels ; dev
+  `566a33ac3d152eb07ab053df8bb1a179d8f4b33e` et prod
+  `7050ee1f84fe69738011952ad0cfdbe263245026` correspondent aux images
+  désirées et réellement prêtes. Le compte de recette dev seul ne voit pas prod
+  et n’exécute pas d’outil de déploiement pour cette cible.
+- Argo reste OutOfSync/Degraded pour les deux environnements ; les résultats
+  sont partiels. Aucun changement cloud n’a été effectué pour ces tests.
