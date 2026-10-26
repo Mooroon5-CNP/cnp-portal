@@ -143,15 +143,4 @@ async function deleteApplication(name, { cascade = true } = {}) {
   }
 }
 
-// Delete an ArgoCD ApplicationSet via the ArgoCD REST API.
-async function deleteApplicationSet(name) {
-  const client = await makeClient();
-  try {
-    await client.delete(`/applicationsets/${encodeURIComponent(name)}`);
-  } catch (err) {
-    if (err.response && err.response.status === 404) return;
-    handleError(err, `deleteApplicationSet(${name})`);
-  }
-}
-
-module.exports = { getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
+module.exports = { getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication };
