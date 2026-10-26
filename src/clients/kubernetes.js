@@ -246,8 +246,13 @@ async function applyApplicationSet(manifest) {
   }
 }
 
+// ApplicationSets shared by every app: an offboarding must never delete them,
+// whatever app name it was given.
+const SHARED_APPLICATIONSETS = new Set(['cloudrun-autodiscovery', 'crossplane-autodiscovery-dev', 'crossplane-autodiscovery-prod']);
+
 // Delete an ArgoCD ApplicationSet from the argocd namespace (idempotent).
 async function deleteApplicationSet(name) {
+  if (SHARED_APPLICATIONSETS.has(name)) throw new Error(`ApplicationSet partagé ${name} : suppression refusée.`);
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
   try {

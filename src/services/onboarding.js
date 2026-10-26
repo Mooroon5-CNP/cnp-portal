@@ -955,10 +955,11 @@ async function offboardApp({ appName, githubRepoUrl }) {
         errors.push(`argocd application ${appName}-cloudrun: ${e.message}`);
     }
 
-    // Delete ApplicationSets via ArgoCD REST API (admin token, no RBAC issue).
+    // Delete per-app ApplicationSets through the Kubernetes API, which refuses the shared ones.
+    // The Argo CD account no longer needs (nor has) delete rights on every ApplicationSet.
     for (const env of ['dev', 'prod']) {
         try {
-            await argoCDClient.deleteApplicationSet(`${appName}-${env}`);
+            await k8sClient.deleteApplicationSet(`${appName}-${env}`);
         } catch (e) {
             errors.push(`applicationset ${appName}-${env}: ${e.message}`);
         }
