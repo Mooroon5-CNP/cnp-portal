@@ -117,11 +117,11 @@ async function createBranch(owner, repo, branchName, sha) {
 }
 
 // Get the latest workflow run on main via GitHub App auth.
-async function getLatestRun(owner, repo) {
+async function getLatestRun(owner, repo, branch = 'main', workflowId = null) {
   const octokit = await getInstallationOctokit();
   try {
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/runs', {
-      owner, repo, per_page: 1, branch: 'main',
+    const { data } = await octokit.request(workflowId ? 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs' : 'GET /repos/{owner}/{repo}/actions/runs', {
+      owner, repo, per_page: 1, branch, ...(workflowId ? { workflow_id: workflowId } : {}),
     });
     return (data.workflow_runs || [])[0] || null;
   } catch (e) {
@@ -130,11 +130,11 @@ async function getLatestRun(owner, repo) {
 }
 
 // Get the last N workflow runs via GitHub App auth.
-async function getRuns(owner, repo, perPage = 5) {
+async function getRuns(owner, repo, perPage = 5, branch = 'main', workflowId = null) {
   const octokit = await getInstallationOctokit();
   try {
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/runs', {
-      owner, repo, per_page: perPage,
+    const { data } = await octokit.request(workflowId ? 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs' : 'GET /repos/{owner}/{repo}/actions/runs', {
+      owner, repo, per_page: perPage, branch, ...(workflowId ? { workflow_id: workflowId } : {}),
     });
     return data.workflow_runs || [];
   } catch (e) {

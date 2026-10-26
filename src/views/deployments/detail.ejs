@@ -14,6 +14,7 @@
                   <div class="page-title"><%= deployment.appName %></div>
                   <div class="page-subtitle" style="display:flex;align-items:center;gap:8px;">
                     Détails du pipeline
+                    <span class="badge badge-gray"><%= deployment.environment === 'legacy' ? 'Historique' : deployment.environment %> · <%= deployment.sourceBranch %></span>
                     <% if (ownerTeam) { %>
                     <a href="/deployments?team=<%= ownerTeam.id %>" class="badge badge-gray" style="text-decoration:none;font-size:12px;"><%= ownerTeam.name %></a>
                     <% } %>
@@ -40,6 +41,16 @@
                   <a href="/deployments" class="btn btn-secondary">← Retour</a>
                 </div>
               </div>
+
+              <% if (applicationUrl) { %>
+                <div class="card" id="application-address" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Adresse de l’environnement</span></div>
+                  <div class="card-body">
+                    <code><%= applicationUrl %></code>
+                    <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement.</div>
+                  </div>
+                </div>
+              <% } %>
 
               <% if (pendingDeletion && can('deployments:delete')) { %>
                 <div class="flash flash-error" style="margin-bottom:16px;">
@@ -105,12 +116,39 @@
                     <div class="card-header"><span class="card-title">Application</span></div>
                     <div class="card-body" id="url-card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
                       <span id="url-card-spinner" style="font-size:18px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
-                      <span id="url-card-msg">Provisionnement Cloud Run en cours...</span>
+                      <span id="url-card-msg"><%= environmentStatus?.phase === 'approval'
+                        ? 'L’application sera disponible après validation du manager.'
+                        : environmentStatus?.phase === 'rejected'
+                          ? 'La production a été refusée.'
+                          : environmentStatus?.phase === 'running'
+                            ? 'Le pipeline prépare l’application.'
+                            : environmentStatus?.phase === 'failed'
+                              ? 'La dernière version n’a pas été déployée.'
+                              : 'Provisionnement Cloud Run en cours...' %></span>
+                    </div>
+                  </div>
+                <% } %>
+                <% if (environmentStatus) { %>
+                  <div class="card" style="margin-bottom:16px;" id="environment-status-card" data-phase="<%= environmentStatus.phase %>">
+                    <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
+                    <div class="card-body">
+                      <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
+                      <% if (environmentStatus.phase === 'approval') { %>
+                        <p><a href="<%= environmentStatus.prUrl %>" target="_blank" rel="noreferrer">Consulter le candidat</a>. La validation se fait ici, dans le portail.</p>
+                        <% if (can('k8s:manifest:approve')) { %>
+                          <form method="POST" action="/deployments/<%= deployment.id %>/releases/<%= environmentStatus.revision %>/approve" class="inline-form">
+                            <button type="submit" class="btn btn-primary">Approuver la production</button>
+                          </form>
+                          <form method="POST" action="/deployments/<%= deployment.id %>/releases/<%= environmentStatus.revision %>/reject" class="inline-form">
+                            <button type="submit" class="btn btn-danger">Refuser</button>
+                          </form>
+                        <% } %>
+                      <% } %>
                     </div>
                   </div>
                 <% } %>
                 <!-- Final status banner (shown once CI has a result) -->
-                <% if (latest && latest.status === 'completed') { %>
+                <% if (deployment.environment === 'legacy' && latest && latest.status === 'completed') { %>
                   <% if (latest.conclusion === 'success') { %>
                     <% if (cloudRunUrl) { %>
                     <div class="flash flash-success" style="margin-bottom:16px;">
@@ -341,10 +379,14 @@
     <!-- ── Delete modal (manager) ──────────────────────────────────────── -->
     <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
-        <h3 style="margin:0 0 8px;">Supprimer l'application</h3>
-        <p style="color:var(--text-muted);margin-bottom:12px;">Supprimer "<strong><%= deployment.appName %></strong>" et toutes ses ressources ?</p>
+        <h3 style="margin:0 0 8px;"><%= deployment.environment === 'legacy' ? "Supprimer l’application" : "Supprimer l’environnement " + deployment.environment %></h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;">Supprimer "<strong><%= deployment.appName %></strong>"<%= deployment.environment === 'legacy' ? " et toutes ses ressources" : " — environnement " + deployment.environment %> ?</p>
         <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
-          Les manifests Kubernetes dans config-repo, le pipeline CI/CD et les secrets GitHub seront définitivement supprimés.
+          <% if (deployment.environment === 'legacy') { %>
+          Les manifests, le pipeline CI/CD et les secrets GitHub de cette application seront supprimés.
+          <% } else { %>
+          Les ressources de cet environnement seront supprimées. L'autre environnement, le pipeline et les secrets partagés seront conservés.
+          <% } %>
         </div>
         <form action="/deployments/<%= deployment.id %>/delete" method="POST">
           <div style="display:flex;gap:10px;">
@@ -361,7 +403,7 @@
         <h3 style="margin:0 0 8px;">Approuver la suppression</h3>
         <p style="color:var(--text-muted);margin-bottom:12px;">Approuver la demande de suppression de "<strong><%= deployment.appName %></strong>" ?</p>
         <div class="flash flash-error" style="margin-bottom:16px;font-size:13px;">
-          Cela supprimera définitivement l'application et toutes ses ressources.
+          <%= deployment.environment === 'legacy' ? 'Cela supprimera cette application et toutes ses ressources.' : 'Cela supprimera uniquement cet environnement. L’autre environnement et le pipeline partagé seront conservés.' %>
         </div>
         <form action="/deployments/<%= deployment.id %>/approve-delete" method="POST">
           <div style="display:flex;gap:10px;">
@@ -376,7 +418,7 @@
     <div id="requestDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
         <h3 style="margin:0 0 8px;">Demander la suppression</h3>
-        <p style="color:var(--text-muted);margin-bottom:16px;">Un manager devra valider cette demande avant que l'application soit supprimée.</p>
+        <p style="color:var(--text-muted);margin-bottom:16px;">Un manager devra valider cette demande avant la suppression <%= deployment.environment === 'legacy' ? 'de l’application' : 'de cet environnement' %>.</p>
         <form action="/deployments/<%= deployment.id %>/request-delete" method="POST">
           <div class="form-group">
             <label for="deleteReason">Raison (optionnel)</label>
@@ -393,6 +435,29 @@
     <!-- ── Polling script ────────────────────────────────────────────────── -->
     <script>
       (function () {
+        const selectedEnvironment = '<%= deployment.environment %>';
+        if (selectedEnvironment !== 'legacy') {
+          const initialPhase = '<%= environmentStatus ? environmentStatus.phase : deployment.onboardingStatus %>';
+          const initialRevision = '<%= environmentStatus ? (environmentStatus.revision || "") : "" %>';
+          const initialHasUrl = <%= cloudRunUrl ? 'true' : 'false' %>;
+          const pollEnvironment = async () => {
+            try {
+              const response = await fetch('/deployments/<%= deployment.id %>/status');
+              if (response.ok) {
+                const data = await response.json();
+                if (data.phase !== initialPhase || (data.revision || '') !== initialRevision || Boolean(data.cloudRunUrl) !== initialHasUrl) {
+                  window.location.reload();
+                  return;
+                }
+                const message = document.getElementById('environment-status-message');
+                if (message) message.textContent = data.message;
+              }
+            } catch (_) { /* le prochain poll retente */ }
+            window.setTimeout(pollEnvironment, 5000);
+          };
+          window.setTimeout(pollEnvironment, 5000);
+          return;
+        }
         const depId    = '<%= deployment.id %>';
         const cluster  = '<%= deployment.targetCluster || "gcp" %>';
         const status0  = '<%= deployment.onboardingStatus %>';

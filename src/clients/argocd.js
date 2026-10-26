@@ -93,10 +93,23 @@ async function getApplicationStatus(appName) {
 // Read-only raw status for the MCP contract adapter.
 async function getApplicationDetails(appName) {
   const client = await makeClient();
-  try {
-    return (await client.get(`/applications/${encodeURIComponent(appName)}`)).data;
-  } catch (err) {
-    handleError(err, `getApplicationDetails(${appName})`);
+  try { return (await client.get(`/applications/${encodeURIComponent(appName)}`)).data; }
+  catch (err) { handleError(err, `getApplicationDetails(${appName})`); }
+}
+
+// Préflight de l'onboarding : projets provisionnés par l'opérateur.
+async function getProject(name) {
+  const client = await makeClient();
+  try { return (await client.get(`/projects/${encodeURIComponent(name)}`)).data; }
+  catch (err) { handleError(err, `getProject(${name})`); }
+}
+
+async function getApplicationIfExists(name) {
+  const client = await makeClient();
+  try { return (await client.get(`/applications/${encodeURIComponent(name)}`)).data; }
+  catch (err) {
+    if (err.response?.status === 404) return null;
+    handleError(err, `getApplicationIfExists(${name})`);
   }
 }
 
@@ -148,4 +161,4 @@ async function deleteApplicationSet(name) {
   }
 }
 
-module.exports = { getApplicationDetails, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
+module.exports = { getApplicationDetails, getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
