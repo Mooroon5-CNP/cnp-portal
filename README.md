@@ -1,390 +1,170 @@
-# CNP Portal — Internal Developer Platform
+# CNP Portal
 
-A web portal that lets developers deploy GitHub-hosted apps to **Cloud Run on GCP** via GitOps (ArgoCD + Crossplane + Kustomize). The portal manages the full lifecycle: onboarding, CI wiring, Crossplane Cloud Run provisioning, and offboarding.
+Internal Developer Platform for deploying GitHub applications to GCP Cloud Run
+through CI, Argo CD and Crossplane, with a read-only MCP assistant.
 
-Changing GCP project or region? Follow the [Cloud onboarding runbook](documentation/Cloud/README.md)
-and run `npm run cloud:import -- --help` to import the Terraform-managed connection settings.
+## Current status
 
----
+The dev/prod deployment feature is merged into `main`. The latest MCP fixes are
+committed locally on **`feat/mcp-environment-integration`**; they are not yet
+pushed or merged. The original `feat/MCPapi` checkout does not contain these fixes.
 
-## What it does
+| Feature | What works | Requirement or limit |
+| --- | --- | --- |
+| App deployments | Select dev or prod; separate services and optional storage | Configured GCP/GitHub/Argo access |
+| Dev publication | App `main` → successful CI → automatic publication | Running portal reconciler |
+| Production publication | App `prod` → successful CI → manager approval in portal | GitHub App merges the approved candidate |
+| MCP `/applications` | Lists apps and environments accessible to the user | Real-source integration launcher |
+| MCP `/deploiement` | Desired and observed serving versions for dev/prod | Git, Argo and Kubernetes/Crossplane access |
+| MCP permissions | Dev-only portal access cannot query prod | Standalone MCP server authorization is still future work |
+| MCP `/logs` | Read-only, bounded, redacted logs | Datadog credentials and matching service/environment tags |
+| MCP `/finops` | Single-app utilization recommendations or explicit insufficient-data result | Metrics required; actual costs remain `null` |
+| AI summaries and app descriptions | Optional generation and semantic resolution | Server-side `GENAI_*` configuration |
+| Team FinOps and real billing | Specified, not implemented | Versioned contracts, authorization and billing source needed |
 
-A user submits a GitHub repo URL through the UI. The portal then automatically:
+Live read-only verification on **26 October 2026** passed real portal login,
+CSRF, SSE, MCP HTTP and Pixel Cam dev/prod serving-version checks. Argo reported
+`OutOfSync/Degraded`, so results were correctly **partial**. This is not proof
+that custom domains, Route53 failover, Datadog or billing are working.
 
-1. Writes K8s manifests into `config-repo` (`base/`, `overlays/dev/`, `overlays/prod/`) — stored as GitOps reference, not applied directly for GCP apps
-2. Writes Crossplane manifests into `config-repo/apps/{app}/crossplane/` (`cloudrun-claim.yaml`, `cloudrun-iam.yaml`, optionally `gcs-bucket.yaml`)
-3. Registers the app in `config-repo/apps/registry.yaml`
-4. Applies the `cloudrun-autodiscovery` ArgoCD `ApplicationSet` on the cluster (idempotent — watches all `apps/*/crossplane/` dirs)
-5. Commits `.github/workflows/ci.yml` to the app repo, wiring it to the reusable pipeline in [ci-templates](https://github.com/Mooroon5-CNP/ci-templates)
-6. Injects into the app repo: `CONFIG_REPO_TOKEN` secret + `WIF_PROVIDER`, `GCP_SA_EMAIL`, `REGISTRY_URL` variables
-7. Creates the `prod` branch in the app repo
-8. Commits a trigger file (`.cnp-platform`) to fire the first CI run
+## Start the portal with the MCP assistant
 
-If **DB persistante** is checked at onboarding, the portal also writes a `gcs-bucket.yaml` Crossplane manifest and configures the Cloud Run service to mount the bucket at `/data`.
+Use Node.js **24** for the tested setup; MCP-CNP requires Node.js 22 or later.
+The repositories are normally siblings: `CNP/cnp-portal` and `CNP/MCP-CNP`.
 
-When an app is deleted, the portal:
-1. Removes all config-repo files (manifests, overlays, crossplane dir)
-2. Calls the ArgoCD REST API with `cascade=true` to delete the ArgoCD `Application` — this prunes the Crossplane CRs, which triggers Crossplane to delete the Cloud Run service and GCS bucket (if `forceDestroy: true`)
-3. Deletes the ArgoCD `Application` object
-
----
-
-## Stack
-
-- **Runtime**: Node.js 20, Express, EJS templates (SSR)
-- **Auth**: Local password + GitHub OAuth, session-based
-- **Database**: SQLite via `better-sqlite3` at `data/cnp-portal.sqlite`
-- **External integrations**: GitHub App (app-repo operations), GitHub PAT (config-repo writes), ArgoCD API, Kubernetes API (`@kubernetes/client-node`), Datadog API
-- **Port**: 3000 (default)
-
----
-
-## File map
-
-```
-src/
-├── index.js                    Entry point — Express setup, route mounting, health endpoints (/healthz /ready)
-├── config/
-│   └── env.js                  All env-var validation and the config object; run directly to check missing vars
-├── models/
-│   ├── db.js                   SQLite init, schema migrations, default admin seed (admin/admin)
-│   ├── user.js                 User CRUD (SQLite)
-│   ├── deployment.js           Deployment records + team-access junction table
-│   ├── deletion_request.js     Pending deletion requests (dev/devops → manager approval)
-│   ├── argocd_access_request.js ArgoCD access requests (dev/devops → manager approval → auto-provisioning)
-│   └── tokenStore.js           OAuth state token storage
-├── middleware/
-│   ├── auth.js                 populateUser (session → req.user), requireAuth, requirePending
-│   ├── rbac.js                 PERMISSIONS map + can() / requirePermission() / requireRole()
-│   └── logger.js               Pino-based structured logger + request middleware
-├── clients/
-│   ├── github.js               GitHub App client — createOrUpdateFile, setRepoSecret, createBranch, getRef, getLatestRun, getRuns, getRunJobs
-│   ├── argocd.js               ArgoCD REST client — listApplications, syncApplication
-│   ├── kubernetes.js           k8s API client — pods, events, quotas, Crossplane V2Service status,
-│   │                           applyApplicationSet, deleteApplicationSet,
-│   │                           provisionArgoCDLocalUser (patches argocd-cm + argocd-secret)
-│   └── datadog.js              Datadog metrics/logs/alerts client
-├── services/
-│   ├── onboarding.js           ★ Core logic — all config-repo writes + cloudrun-autodiscovery AppSet apply
-│   │                           Contains all tpl* template functions for config-repo manifests.
-│   ├── github.js               GitHub PAT helpers for config-repo reads/writes + CI run/job queries
-│   ├── argocd.js               ArgoCD service layer (listApps, syncApp, requestAccess, approveAccess → auto-provisions ArgoCD local user)
-│   ├── k8s.js                  K8s service layer (wraps kubernetes client for routes)
-│   ├── teams.js                Team management (persists to SQLite)
-│   └── datadog.js              Datadog service layer
-├── routes/
-│   ├── deployments.js          ★ Deployment CRUD — onboarding trigger, status polling, deletion workflow, team access
-│   ├── auth.js                 Login/logout, GitHub OAuth callback
-│   ├── dashboard.js            Home page
-│   ├── admin.js                User management (manager only)
-│   ├── teams.js                Team management routes
-│   ├── argocd.js               ArgoCD — app listing, sync, access-request workflow (request / approve / reject / regenerate)
-│   ├── k8s.js                  Pod/quota/event views + YAML editor (DevOps only)
-│   ├── observability.js        Datadog metrics, logs, alerts
-│   ├── profile.js              User profile
-│   ├── health.js               /api/health JSON endpoint
-│   └── documentation.js        In-app docs viewer
-└── views/                      EJS templates (one per route, partials in views/partials/)
-k8s/                            The portal's own Kubernetes manifests (base + dev/prod overlays)
-data/                           SQLite database files (not committed)
-```
-
----
-
-## Key flow: deploying a new app (GCP Cloud Run)
-
-```
-POST /deployments
-  └─ routes/deployments.js
-       └─ onboardingService.onboardApp()               ← services/onboarding.js
-            ├─ writeConfigRepoFile() ×10+              ← base + overlays + crossplane via githubService (PAT)
-            ├─ updateRegistry()                        ← apps/registry.yaml
-            ├─ k8sClient.applyApplicationSet()         ← cloudrun-autodiscovery AppSet (idempotent)
-            ├─ githubClient.createOrUpdateFile()       ← .github/workflows/ci.yml in app repo (GitHub App)
-            ├─ githubClient.setRepoSecret()            ← CONFIG_REPO_TOKEN secret in app repo
-            ├─ githubClient.setRepoVariable() ×3       ← WIF_PROVIDER, GCP_SA_EMAIL, REGISTRY_URL
-            ├─ githubClient.createBranch()             ← prod branch in app repo
-            └─ githubClient.createOrUpdateFile()       ← .cnp-platform trigger commit → fires first CI run
-```
-
-After onboarding, CI takes over on every push to `main`:
-
-```
-push to main (app repo)
-  └─ .github/workflows/ci.yml → ci-templates/pipeline.yml
-       ├─ lint (eslint, hadolint)
-       ├─ test
-       ├─ scan-secrets (Gitleaks) / scan-deps (Trivy fs)
-       ├─ build → push to europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry/{app}:{sha}
-       ├─ scan-image (Trivy image) — fails on CRITICAL CVE
-       └─ update-cloudrun-claim
-            └─ sed image tag in config-repo/apps/{app}/crossplane/cloudrun-claim.yaml
-                 └─► ArgoCD (cloudrun-autodiscovery AppSet) detects change
-                       └─► Crossplane reconciles → Cloud Run service updated (~10 min)
-                             └─► URL appears in portal once service is ready
-```
-
----
-
-## ArgoCD access workflow
-
-Managers have ArgoCD access by default. DevOps and dev users must request it through the portal.
-
-```
-User visits /argocd
-  └─ clicks "Demander un accès" (fills in reason + optional app name)
-       └─ request saved to SQLite (argocd_access_requests table)
-
-Manager visits /argocd
-  └─ sees all pending requests
-       └─ clicks "Approuver"
-            └─ services/argocd.js → approveAccess()
-                 ├─ generates ArgoCD username (sanitised portal username)
-                 ├─ generates random 16-char password
-                 ├─ bcrypt-hashes the password
-                 ├─ patches argocd-cm  (accounts.<username>: apiKey,login)  via k8s API
-                 ├─ patches argocd-secret (accounts.<username>.password)    via k8s API
-                 └─ saves encrypted credentials to SQLite (AES-256-GCM)
-
-User revisits /argocd
-  └─ sees credentials (username + cleartext password + ArgoCD URL)
-  └─ can regenerate credentials at any time via "Régénérer mes identifiants"
-```
-
-**Kubernetes RBAC requirement** — the portal's service account (`KUBE_TOKEN`) must be able to `get` and `patch` the following resources in the `argocd` namespace:
-
-```yaml
-- apiGroups: [""]
-  resources: ["configmaps"]
-  resourceNames: ["argocd-cm"]
-  verbs: ["get", "patch"]
-- apiGroups: [""]
-  resources: ["secrets"]
-  resourceNames: ["argocd-secret"]
-  verbs: ["get", "patch"]
-```
-
-If the RBAC permission is missing, provisioning is logged as an error but the request is still marked approved and credentials are shown — a manager can create the ArgoCD account manually with those credentials.
-
----
-
-## Roles and permissions
-
-| Role | What they can do |
-|---|---|
-| `dev` | Deploy apps, view own pipelines and pods, request deletion |
-| `devops` | Everything dev can + edit K8s manifests (YAML editor), manage team access |
-| `manager` | Everything devops can + delete apps, approve users, modify roles |
-
-The full permission map is in `src/middleware/rbac.js:PERMISSIONS`.
-
-Default admin: username `admin`, password `admin`, role `manager`. Change the password in production.
-
----
-
-## Environment variables
-
-All read via `src/config/env.js`. Run `node src/config/env.js` to validate.
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `GITHUB_APP_ID` | ✅ | GitHub App ID — used for app-repo operations (ci.yml, secrets, branches) |
-| `GITHUB_APP_PRIVATE_KEY` | ✅ | GitHub App private key (PEM; `\n`-escaped single-line is accepted) |
-| `GITHUB_APP_INSTALLATION_ID` | ✅ | GitHub App installation ID on the org |
-| `GITHUB_CONFIG_REPO_NAME` | ✅ | `owner/repo` of the GitOps config-repo (default: `Mooroon5-CNP/config-repo`) |
-| `GITHUB_CONFIG_REPO_TOKEN` | ✅ | Fine-grained PAT with Contents:write on config-repo |
-| `ARGOCD_SERVER_URL` | ✅ | ArgoCD API base URL (in-cluster or external) |
-| `ARGOCD_UI_URL` | — | Browser-accessible ArgoCD URL (falls back to `ARGOCD_SERVER_URL`) |
-| `ARGOCD_TOKEN` | ✅ | ArgoCD bearer token |
-| `ARGOCD_INSECURE` | — | `true` to skip TLS verification |
-| `KUBE_API_URL` | ✅ | Kubernetes API server URL |
-| `KUBE_TOKEN` | ✅ | Service account token — needs ApplicationSet RBAC in `argocd` namespace + Crossplane V2Service read |
-| `KUBE_CA_CERT` | ✅ | Base64-encoded cluster CA certificate |
-| `KUBE_NAMESPACE_PREFIX` | — | Filter namespaces shown in the portal (optional) |
-| `DD_API_KEY` | ✅ | Datadog API key |
-| `DD_APP_KEY` | ✅ | Datadog application key |
-| `DD_SITE` | — | Datadog site (default: `datadoghq.com`) |
-| `GCP_PROJECT` | — | GCP project ID (default: `cnp-terraform-500015`) |
-| `GCP_REGION` | — | GCP region (default: `europe-west9`) |
-| `GCP_IMAGE_REGISTRY` | — | Artifact Registry prefix (default: `europe-west9-docker.pkg.dev/cnp-terraform-500015/cnp-registry`) |
-| `GCP_CLOUD_RUN_SA` | — | Cloud Run service account email |
-| `GITHUB_WIF_PROVIDER` | — | Workload Identity Federation provider resource name |
-| `GITHUB_GCP_SA_EMAIL` | — | GCP SA email injected as `GCP_SA_EMAIL` into app repos |
-| `SESSION_SECRET` | — | Express session secret |
-| `DB_PATH` | — | SQLite file path (default: `data/cnp-portal.sqlite`) |
-| `PORT` | — | HTTP port (default: 3000) |
-
-Copy `.env.example` to `.env` to get started locally.
-
----
-
-## Changing GCP account or cluster — what to update
-
-When you create a new cluster (Terraform re-apply), update these values in `.env` and in the portal's K8s ConfigMap:
-
-### 1. Find `KUBE_API_URL`, `KUBE_CA_CERT`, `KUBE_TOKEN`
+Install dependencies once in each checkout if they are missing, then build MCP:
 
 ```bash
-# API URL
-kubectl cluster-info | grep "Kubernetes control plane"
-
-# CA cert
-kubectl config view --raw -o jsonpath=\
-'{.clusters[?(@.name=="<CONTEXT>")].cluster.certificate-authority-data}'
-
-# Service account token
-kubectl get secret cnp-portal-token -n cnp-portal \
-  -o jsonpath='{.data.token}' | base64 -d
+cd ../MCP-CNP
+npm ci
+npm run build
+cd ../cnp-portal
+npm ci
 ```
 
-### 2. Find `ARGOCD_SERVER_URL` and `ARGOCD_UI_URL`
+Create `.env` from `.env.example` only if absent, and configure the real sources.
+Keep an existing `.env` and `.env.cloud`; never overwrite credentials as part of
+setup. See the [MCP guide](documentation/MCP_INTEGRATION.md) for configuration.
+
+From a normal portal checkout containing the latest MCP changes:
 
 ```bash
-kubectl get svc -n argocd | grep argocd-server
+npm run dev:integration
 ```
 
-### 3. Find GCP-specific vars
+Open **http://localhost:3001/mcp-chat**. The launcher starts MCP on
+`127.0.0.1:3000`, checks its authenticated catalog, and starts the portal on 3001.
+It refreshes local JWTs on calls. Ctrl+C stops both child services. If a port is
+occupied, the launcher stops; it does not terminate another process.
+
+In the current isolated MCP worktree, use the worktree startup instructions in
+[the guide](documentation/MCP_INTEGRATION.md#démarrer-la-branche-isolée-actuelle).
+Set `MCP_PROJECT_DIR` explicitly there: the sibling-path default does not point
+to the MCP repository from a nested worktree.
+
+Other modes:
 
 ```bash
-gcloud config get-value project
-# → GCP_PROJECT=cnp-terraform-500015
-
-gcloud artifacts repositories list --project=<PROJECT_ID>
-# → GCP_IMAGE_REGISTRY=europe-west9-docker.pkg.dev/<PROJECT>/cnp-registry
+npm start                       # Portal only; does not start an MCP server
+npm run dev:integration:mock     # Explicit synthetic integration demo
 ```
 
----
+The checked-in MCP client default is `fake`; `npm start` alone is not a live MCP
+integration. The real-source launcher supplies the HTTP client configuration.
+Normal portal startup also runs the deployment reconciler against its configured
+DB/cloud; the chat tools themselves remain read-only.
 
-## Cluster bootstrap (one-time per cluster)
+## Deploy an application
+
+1. Submit the repository, application name, port, environment and storage choice.
+2. The portal checks access and the environment's Argo project, configures CI
+   credentials and installs the app-specific workflow for `main` and `prod`.
+3. CI builds the image and runs lint, tests and security scans. A failed pipeline
+   publishes no environment manifests.
+4. Successful dev CI publishes automatically. Successful prod CI creates a
+   candidate; a manager approves or rejects it in the portal.
+5. Scoped Argo ApplicationSets reconcile the selected environment through
+   Crossplane. Storage and its access binding become healthy before Cloud Run.
+6. The portal waits for the expected runtime image and verified HTTPS routing
+   before showing the application as available.
+
+Environment paths are `apps/<app>/crossplane/dev/` and `prod/`. Runtime names
+are `<app>-dev` and `<app>-prod`; image names remain `<registry>/<app>:<SHA>`.
+The public names are `<app>.dev.apps.mooroon5.fr` and `<app>.apps.mooroon5.fr`
+(or the configured `APPLICATIONS_BASE_DOMAIN`). DNS, certificates and load
+balancer permissions must be ready; constructing a name does not enable it.
+
+Historical deployments keep their original paths. Deletion of a new deployment
+removes only the chosen environment and retains its sibling's shared CI setup.
+Storage cleanup is subject to the bucket's deletion policy and contents.
+
+See [deployment details](documentation/Cloud/DEPLOYMENT_ENVIRONMENTS.md),
+[cloud setup and migration](documentation/Cloud/README.md), and
+[recorded infrastructure changes](documentation/Cloud/UpdatedCloudThings.md).
+
+## Authentication and roles
+
+Local password and GitHub OAuth login use portal sessions. SQLite stores users,
+teams, deployments and release decisions. The default local account is
+`admin` / `admin`; change it before shared use.
+
+| Role | Main capabilities |
+| --- | --- |
+| `dev` | Deploy and inspect accessible apps; request deletion |
+| `devops` | Dev capabilities, manifest editing and team access management |
+| `manager` | User/role management, deletion and production approvals |
+
+MCP catalog entries and targeted calls are filtered by the current user's
+application **and environment** access. The model cannot grant permissions.
+For shared MCP exposure, independent server-side authorization remains required;
+a JWT with the global read scope alone is not an app/environment access policy.
+
+## Configuration and persistence
+
+- `.env`: portal/GitHub credentials, session settings and optional AI/Datadog config.
+- `.env.cloud`: imported cloud connection settings; `CLOUD_ENV_FILE` selects another file.
+- `DB_PATH`: SQLite location, otherwise `data/cnp-portal.sqlite` in the checkout.
+- `MCP_PROJECT_DIR`: MCP-CNP checkout containing the built runtime.
+- `GENAI_ENABLED`, `GENAI_API_KEY`, `GENAI_MODEL`: optional summaries/app resolution.
+- `TYPESAFE_*`: optional Jev routing for ambiguous free text; slash commands work without it.
+
+Keep the database durable for release reconciliation and restart recovery. Running
+from a different worktree without `DB_PATH` can create another database. The local
+launcher is not a shared-hosting deployment strategy. Infrastructure and IAM
+changes belong in Terraform/GitOps or the cloud runbook, including migration and
+rollback instructions. No project/account migration happens automatically.
+
+## Validation
+
+From the portal checkout:
 
 ```bash
-# 1. Create the ArgoCD AppProject
-kubectl apply -f config-repo/argocd/projects/default-project.yaml
-
-# 2. Install Crossplane (required for Cloud Run provisioning)
-kubectl apply -f config-repo/infra/crossplane/application.yaml
-
-# 3. Grant the portal's service account permissions to manage ApplicationSets
-#    and read Crossplane V2Service status (for Cloud Run URL detection)
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: cnp-portal-applicationsets
-  namespace: argocd
-rules:
-- apiGroups: ["argoproj.io"]
-  resources: ["applicationsets"]
-  verbs: ["get","list","create","update","patch","delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: cnp-portal-applicationsets
-  namespace: argocd
-subjects:
-- kind: ServiceAccount
-  name: cnp-portal
-  namespace: cnp-portal
-roleRef:
-  kind: Role
-  name: cnp-portal-applicationsets
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cnp-portal-crossplane-read
-rules:
-- apiGroups: ["cloudrun.gcp.upbound.io"]
-  resources: ["v2services"]
-  verbs: ["get","list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: cnp-portal-crossplane-read
-subjects:
-- kind: ServiceAccount
-  name: cnp-portal
-  namespace: cnp-portal
-roleRef:
-  kind: ClusterRole
-  name: cnp-portal-crossplane-read
-  apiGroup: rbac.authorization.k8s.io
-EOF
+npm run lint
+npm test -- --runInBand
+npm run test:generation
+npm run test:context
+npm run test:integration
+npm run test:live-environments -- app4-pixelcam
 ```
 
-The `cnp-portal-crossplane-read` ClusterRole is required for the portal to read the Cloud Run URL from the Crossplane `V2Service` status. Without it, `getV2ServiceUrl()` silently fails (catches 403) and the URL never appears in the portal.
+The cross-repository integration test needs a built MCP checkout and the existing
+Platform API test Python environment. The live recipe needs real source access;
+it uses an isolated temporary DB, performs no cloud writes and makes no paid AI
+calls. SDK generation/context tests simulate model responses.
 
----
+Verified on 26 October: **151 portal tests**, **58 MCP tests**, lint/type checks,
+synthetic cross-repository integration, and the live dev/prod recipe passed.
+These results apply to the documented revisions, not every future configuration.
+Unauthenticated health endpoints are `/healthz` and `/ready`.
 
-## GCP IAM requirements
+## Code and specifications
 
-| Service Account | Role needed | Why |
-|---|---|---|
-| `github-ci-sa` | `roles/artifactregistry.writer` | CI pushes built images to Artifact Registry |
-| `crossplane-gcp-sa` | `roles/run.admin` + `roles/iam.serviceAccountUser` | Crossplane manages Cloud Run services |
-| `crossplane-gcp-sa` | `roles/storage.admin` | Crossplane manages GCS buckets (if persistent storage used) |
-| `cloud-run-sa` | `roles/storage.objectAdmin` on bucket | Cloud Run mounts the GCS bucket at `/data` |
+- `src/`: Express, sessions/RBAC, SQLite, cloud clients, deployment lifecycle and views.
+- `apps/orchestrator/`: MCP chat, conversation, authorized context and native adapters.
+- `packages/contracts/`: portal-side tool and SSE contracts.
+- `public/js/`: chat interaction and structured result rendering.
+- `scripts/`: local launcher, verification commands and cloud setup helpers.
+- `MCP-CNP/specs/`: six specifications for full functionality in the sibling repository.
 
----
-
-## Config-repo structure written by the portal
-
-```
-apps/{appName}/base/
-  deployment.yaml               K8s Deployment (reference — not applied for GCP Cloud Run apps)
-  service.yaml
-  kustomization.yaml
-  netpol-*.yaml
-apps/{appName}/overlays/dev/    (reference — not applied for GCP Cloud Run apps)
-apps/{appName}/overlays/prod/   (reference — not applied for GCP Cloud Run apps)
-apps/{appName}/crossplane/      ← what actually deploys on GCP
-  cloudrun-claim.yaml           Crossplane V2Service → Cloud Run service
-  cloudrun-iam.yaml             Public IAM binding (allUsers → roles/run.invoker)
-  kustomization.yaml
-  application.yaml              ArgoCD Application pointing to this crossplane/ dir
-  gcs-bucket.yaml               (only when "DB persistante" is checked)
-```
-
-All templates are in `src/services/onboarding.js`.
-
----
-
-## Running locally
-
-```bash
-npm install
-cp .env.example .env   # fill in required vars
-npm start              # http://localhost:3000
-```
-
-Health endpoints (no auth): `GET /healthz`, `GET /ready`
-
----
-
-## Tests
-
-```bash
-npm test
-```
-
-Tests live in `test/index.test.js`. The CI pipeline runs them on every push.
-
----
-
-## Docker / K8s (the portal itself)
-
-```bash
-docker build -t cnp-portal:local .
-docker run --env-file .env -p 3000:3000 cnp-portal:local
-
-# Deploy the portal to cluster
-kubectl apply -k k8s/overlays/dev
-kubectl apply -k k8s/overlays/prod
-```
-
-## MCP integration
-
-Current state and repeatable cross-project tests: [MCP integration guide](documentation/MCP_INTEGRATION.md).
+Full MCP configuration, troubleshooting and remaining work:
+[MCP integration guide](documentation/MCP_INTEGRATION.md).
