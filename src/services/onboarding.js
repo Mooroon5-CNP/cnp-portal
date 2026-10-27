@@ -562,32 +562,8 @@ function buildApplicationSetManifests(appName, teamOwner, configRepoUrl) {
 }
 
 function tplCiWorkflow(appName, appPort, configRepoUrl, targetCluster = 'gcp') {
-    // GCP apps deploy via Crossplane Cloud Run — update cloudrun-claim.yaml on every main push
-    // so ArgoCD picks up the new image and Crossplane reconciles the Cloud Run service.
-    const cloudRunJob = targetCluster === 'gcp' ? `
-  update-cloudrun-claim:
-    needs: pipeline
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: Mooroon5-CNP/config-repo
-          token: \${{ secrets.CONFIG_REPO_TOKEN }}
-      - name: Update Cloud Run image tag
-        run: |
-          sed -i "s|image: ${IMAGE_REGISTRY}/${appName}:.*|image: ${IMAGE_REGISTRY}/${appName}:\${{ github.sha }}|" \\
-            apps/${appName}/crossplane/cloudrun-claim.yaml
-          git config user.email "ci-bot@cnp"
-          git config user.name "CI Bot"
-          git add apps/${appName}/crossplane/cloudrun-claim.yaml
-          git diff --staged --quiet && exit 0
-          git commit -m "ci(${appName}): cloud run → \${{ github.sha }}"
-          for i in 1 2 3; do
-            git pull --rebase && git push && break || sleep 5
-          done
-` : '';
-
+    // Le pipeline réutilisable publie l'image et met à jour le claim Cloud Run.
+    // Un second job de promotion ici écraserait les mises à jour GitOps en parallèle.
     return `name: CI
 
 on:
@@ -608,7 +584,7 @@ jobs:
       target_cloud: "${targetCluster === 'aws' ? 'aws' : 'gcp'}"
     secrets:
       CONFIG_REPO_TOKEN: \${{ secrets.CONFIG_REPO_TOKEN }}
-${cloudRunJob}`;
+`;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +689,25 @@ async function onboardApp({ appName, githubRepoUrl, appPort, teamOwner = 'platfo
                 `Allez dans Settings → Actions → General et activez "Allow all actions".`
             );
             return;
+        }
+
+        // Un dépôt applicatif possède un seul workflow et un seul jeu de secrets.
+        // Refuser un second nom avant toute écriture évite d'écraser le CI existant.
+        let registryContent;
+        try {
+            registryContent = await githubService.getFileContent(crOwner, crRepo, 'apps/registry.yaml', configRepoToken);
+        } catch (err) {
+            if (err.response?.status !== 404) throw err;
+        }
+        const registeredApps = registryContent ? yaml.load(registryContent)?.apps || [] : [];
+        const repositoryKey = `${appOwner}/${appRepo}`.toLowerCase();
+        const conflict = registeredApps.find(app => {
+            const repository = githubService.parseRepoUrl(app.repo_url || '');
+            return app.app_name !== appName && repository
+                && `${repository.owner}/${repository.repo}`.toLowerCase() === repositoryKey;
+        });
+        if (conflict) {
+            throw new Error(`Repository ${appOwner}/${appRepo} is already registered as ${conflict.app_name}. Use that application instead of creating a second name.`);
         }
 
         // ------------------------------------------------------------------
