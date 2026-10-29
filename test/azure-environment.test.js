@@ -25,6 +25,7 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
 jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
+  getArgocdApplicationIfExists: jest.fn(),
 }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -76,6 +77,7 @@ beforeEach(() => {
   github.getRef.mockImplementation(async (_owner, repo) => repo === 'todo' ? sourceHead : 'config-head');
   kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'server', failure: null });
   kubernetes.cascadeDeleteArgocdApplication.mockResolvedValue(true);
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue(null);
   argo.getProject.mockImplementation(async name => ({ metadata: { name } }));
   argo.getApplicationIfExists.mockResolvedValue(null);
 });
@@ -195,6 +197,20 @@ describe('publication et disponibilité', () => {
     expect(trees[0].tree.every(file => file.path.startsWith('apps/todo/crossplane/prod/'))).toBe(true);
     expect(trees[0].tree.some(file => file.path.endsWith('flexibleserver.yaml'))).toBe(true);
     expect(routing.sync).not.toHaveBeenCalled();
+  });
+});
+
+describe('vérification de l\'ancienne application', () => {
+  test('Azure lit l\'Application historique par Kubernetes, jamais par l\'API Argo CD (403 pour une application absente)', async () => {
+    await service.onboard(dep);
+    expect(kubernetes.getArgocdApplicationIfExists).toHaveBeenCalledWith('todo-cloudrun');
+    expect(argo.getApplicationIfExists).not.toHaveBeenCalled();
+  });
+
+  test('une Application historique existante bloque la préparation, sans écriture', async () => {
+    kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { name: 'todo-cloudrun' } });
+    await expect(service.onboard(dep)).rejects.toThrow('application historique');
+    expect(github.setRepoSecret).not.toHaveBeenCalled();
   });
 });
 

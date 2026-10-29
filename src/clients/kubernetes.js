@@ -297,6 +297,20 @@ async function deleteArgocdApplication(name) {
   }
 }
 
+// Lit une Application Argo CD par l'API Kubernetes (le compte cnp-portal y a get/list dans le namespace argocd).
+// L'API Argo CD répond 403 « permission denied » à ce compte pour une application qui n'existe pas (il n'a pas le
+// droit de lecture sur toutes les applications), alors que Kubernetes répond proprement 404. Renvoie null si absente.
+async function getArgocdApplicationIfExists(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    return (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+  } catch (err) {
+    if (err.response?.statusCode === 404 || err.statusCode === 404) return null;
+    handleError(err, `getArgocdApplicationIfExists(${name})`);
+  }
+}
+
 // Supprime une Application Argo CD EN CASCADE : on pose d'abord le finalizer, puis on supprime ; Argo supprime alors
 // les ressources de l'Application (donc, pour Azure, les objets Crossplane et leurs ressources dans Azure) avant de
 // retirer l'Application. Passe par l'API Kubernetes (le compte cnp-portal y a le droit de supprimer dans le namespace
@@ -571,7 +585,7 @@ module.exports = {
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
-  applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication,
+  applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,

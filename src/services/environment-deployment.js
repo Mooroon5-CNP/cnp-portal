@@ -168,7 +168,11 @@ async function prepareOnboarding(dep) {
         throw new Error('Des manifests historiques existent à la racine. Leur adoption doit être validée par un opérateur.');
       }
     } catch (err) { if (err.status !== 404) throw err; }
-    if (await argo.getApplicationIfExists(`${dep.appName}-cloudrun`)) {
+    // Azure : par l'API Kubernetes (l'API Argo CD répond 403 au compte du portail pour une application absente).
+    const legacyApplication = azure.isAzure(dep)
+      ? await kubernetes.getArgocdApplicationIfExists(`${dep.appName}-cloudrun`)
+      : await argo.getApplicationIfExists(`${dep.appName}-cloudrun`);
+    if (legacyApplication) {
       throw new Error('Une application historique existe sans son manifeste racine. Restaurez sa configuration avant de créer un environnement.');
     }
   };
