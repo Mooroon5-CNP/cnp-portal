@@ -542,7 +542,11 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         environmentStatus: selectedStatus,
-        applicationUrl: applicationAddress.url(dep),
+        // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
+        // domaine par défaut de l'environnement Container Apps.
+        applicationUrl: dep.targetCluster === 'azure' && usesEnvironment(dep)
+            ? azureAppUrl(dep.appName, config.azure, dep.environment)
+            : applicationAddress.url(dep),
         runs,
         latest,
         jobs,

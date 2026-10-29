@@ -188,7 +188,16 @@ describe('page de détail d\'un déploiement Azure dev/prod', () => {
     const res = await detail(envDeployment().id);
     expect(res.status).toBe(200);
     expect(res.text).not.toContain('id="url-card"');
-    expect(res.text).not.toContain('https://todo-az-dev.env.example.io');
+    expect(res.text).not.toContain('href="https://todo-az-dev.env.example.io"');
+  });
+
+  test('l\'adresse affichée est celle d\'Azure, jamais l\'adresse GCP <app>.dev.apps.mooroon5.fr', async () => {
+    environmentService.reconcile.mockResolvedValue({ phase: 'running', message: 'Pipeline en cours.' });
+    const res = await detail(envDeployment().id);
+    expect(res.text).toContain('id="application-address"');
+    expect(res.text).toContain('todo-az-dev.env.example.io');
+    expect(res.text).not.toContain('apps.mooroon5.fr');
+    expect(res.text).not.toContain('routage DNS et HTTPS');
   });
 
   test('le lien apparaît une fois le statut « success »', async () => {
