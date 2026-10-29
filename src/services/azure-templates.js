@@ -35,19 +35,47 @@ function validateAzureAppName(appName) {
     }
 }
 
-/** Noms des ressources d'une app. Le serveur est unique par app et par environnement, avec le suffixe d'abonnement. */
-function azureNames(appName, azure) {
+const ENVIRONMENTS = ['dev', 'prod'];
+// « <app>-<env> » doit tenir dans les 32 caractères d'un nom de Container App : 27 pour « -prod ».
+const MAX_APP_NAME_WITH_ENV = 27;
+
+/**
+ * Noms des ressources d'une app. Le serveur est unique par app et par environnement, avec le suffixe d'abonnement.
+ *
+ * `env` absent (ancien chemin « un seul environnement », déploiements legacy) : noms historiques, inchangés
+ * (serveur « -dev- », Container App = nom de l'app). `env` = dev ou prod (chemin dev/prod du portail) : tout est
+ * suffixé par l'environnement, comme les ressources GCP (`<app>-<env>`), pour que dev et prod ne se télescopent pas.
+ */
+function azureNames(appName, azure, env) {
     validateAzureAppName(appName);
-    const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-dev-${azure.nameSuffix}`;
+    if (env === undefined || env === 'legacy') {
+        const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-dev-${azure.nameSuffix}`;
+        if (server.length > 63) {
+            throw new Error(`Nom de serveur PostgreSQL trop long (${server.length} > 63) : ${server}`);
+        }
+        return {
+            server,
+            database: `${appName}-appdb`,
+            passwordSecret: `${appName}-pg-password`,
+            nameSecret: `${appName}-containerapp-secretname`,
+            containerApp: appName,
+            host: `${server}.postgres.database.azure.com`,
+        };
+    }
+    if (!ENVIRONMENTS.includes(env)) throw new Error(`Environnement invalide : ${env}`);
+    if (appName.length > MAX_APP_NAME_WITH_ENV) {
+        throw new Error(`Nom d'application trop long pour Azure avec un environnement (${appName.length} > ${MAX_APP_NAME_WITH_ENV}) : ${appName}`);
+    }
+    const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-${env}-${azure.nameSuffix}`;
     if (server.length > 63) {
         throw new Error(`Nom de serveur PostgreSQL trop long (${server.length} > 63) : ${server}`);
     }
     return {
         server,
-        database: `${appName}-appdb`,
-        passwordSecret: `${appName}-pg-password`,
-        nameSecret: `${appName}-containerapp-secretname`,
-        containerApp: appName,
+        database: `${appName}-${env}-appdb`,
+        passwordSecret: `${appName}-${env}-pg-password`,
+        nameSecret: `${appName}-${env}-containerapp-secretname`,
+        containerApp: `${appName}-${env}`,
         host: `${server}.postgres.database.azure.com`,
     };
 }
@@ -56,8 +84,9 @@ function header(text) {
     return text.split('\n').map(l => `# ${l}`).join('\n') + '\n';
 }
 
-function tplAzureFlexibleServer(appName, azure) {
-    const n = azureNames(appName, azure);
+function tplAzureFlexibleServer(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
+    const tagEnv = env === 'prod' ? 'prod' : 'dev';
     const doc = {
         apiVersion: 'dbforpostgresql.azure.upbound.io/v1beta1',
         kind: 'FlexibleServer',
@@ -79,7 +108,7 @@ function tplAzureFlexibleServer(appName, azure) {
                 backupRetentionDays: 7,
                 geoRedundantBackupEnabled: false,
                 tags: {
-                    'cnp-role': 'app-db', 'cnp-app': appName, 'cnp-env': 'dev',
+                    'cnp-role': 'app-db', 'cnp-app': appName, 'cnp-env': tagEnv,
                     'managed-by': 'crossplane', project: 'cnp', tier: 'souverainete',
                 },
             },
@@ -88,13 +117,14 @@ function tplAzureFlexibleServer(appName, azure) {
     };
     return header(
         `Serveur PostgreSQL de l'app ${appName} (tier souveraineté, Azure), créé par Crossplane via le portail.\n` +
-        'Un serveur par app : son administrateur ne voit que les bases de cette app. Tag cnp-env=dev : non copié en Irlande.\n' +
+        `Un serveur par app et par environnement : son administrateur ne voit que les bases de cette app. Tag cnp-env=${tagEnv}` +
+        `${tagEnv === 'dev' ? ' : non copié en Irlande' : ' : repris par le job de copie vers l\'Irlande'}.\n` +
         `Le mot de passe est généré dans le Secret ${n.passwordSecret} (${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
 
-function tplAzureDatabase(appName, azure) {
-    const n = azureNames(appName, azure);
+function tplAzureDatabase(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
     const doc = {
         apiVersion: 'dbforpostgresql.azure.upbound.io/v1beta1',
         kind: 'FlexibleServerDatabase',
@@ -110,8 +140,8 @@ function tplAzureDatabase(appName, azure) {
     return header(`Base logique (${DB_NAME}) de l'app ${appName} sur son propre serveur.`) + yaml.dump(doc, DUMP);
 }
 
-function tplAzureSecretName(appName, azure) {
-    const n = azureNames(appName, azure);
+function tplAzureSecretName(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
     const doc = {
         apiVersion: 'v1',
         kind: 'Secret',
@@ -125,10 +155,19 @@ function tplAzureSecretName(appName, azure) {
     ) + yaml.dump(doc, DUMP);
 }
 
-function tplAzureContainerApp(appName, appPort, azure) {
-    const n = azureNames(appName, azure);
+function tplAzureContainerApp(appName, appPort, azure, env, revision) {
+    const n = azureNames(appName, azure, env);
+    // Chemin dev/prod : le portail écrit le claim APRÈS une CI réussie, donc avec l'image réelle (tag = SHA du commit).
+    // Aucune image de départ n'est nécessaire. Ancien chemin (sans env) : image publique de départ, remplacée par la CI.
+    if (env !== undefined && env !== 'legacy' && !/^[a-f0-9]{40}$/.test(String(revision))) {
+        throw new Error('Révision CI invalide.');
+    }
+    const image = (env !== undefined && env !== 'legacy')
+        ? `${azure.acrLoginServer}/${appName}:${revision}`
+        : STARTER_IMAGE;
+    const tagEnv = env === 'prod' ? 'prod' : 'dev';
     const port = Number.parseInt(appPort, 10) || 8080;
-    const env = (name, value) => ({ name, value: String(value) });
+    const envVar = (name, value) => ({ name, value: String(value) });
     const doc = {
         apiVersion: 'containerapp.azure.upbound.io/v1beta2',
         kind: 'ContainerApp',
@@ -162,27 +201,27 @@ function tplAzureContainerApp(appName, appPort, azure) {
                         // Crossplane ne s'en remet pas (constaté le 25/10/2026). Cette image écoute sur le port 80, pas
                         // sur celui de l'app : sans importance, Azure crée la révision quand même, et la vraie image la
                         // remplace dès que la CI a promu.
-                        image: STARTER_IMAGE,
+                        image,
                         cpu: 0.25,
                         memory: '0.5Gi',
                         env: [
-                            env('PORT', port),
-                            env('APP_PORT', port),
-                            env('DB_HOST', n.host),
-                            env('DB_PORT', 5432),
-                            env('DB_NAME', DB_NAME),
-                            env('DB_USER', DB_ADMIN),
+                            envVar('PORT', port),
+                            envVar('APP_PORT', port),
+                            envVar('DB_HOST', n.host),
+                            envVar('DB_PORT', 5432),
+                            envVar('DB_NAME', DB_NAME),
+                            envVar('DB_USER', DB_ADMIN),
                             { name: 'DB_PASSWORD', secretName: SECRET_KEY_NAME },
                         ],
                     }],
                 },
-                tags: { project: 'cnp', tier: 'souverainete', 'cnp-env': 'dev' },
+                tags: { project: 'cnp', tier: 'souverainete', 'cnp-env': tagEnv },
             },
             providerConfigRef: { name: 'default' },
         },
     };
     return header(
-        `Container App de l'app ${appName}. L'image est mise à jour par la CI (pipeline-azure.yml).\n` +
+        `Container App de l'app ${appName}${env && env !== 'legacy' ? ` (${env})` : ''}. L'image est mise à jour par la CI (pipeline-azure.yml).\n` +
         'Contrat des variables : PORT/APP_PORT, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (lue dans le secret de l\'app).\n' +
         'La base impose SSL : sslmode=require. L\'app doit exposer /health (200 seulement si sa base est inscriptible).'
     ) + yaml.dump(doc, DUMP);
@@ -202,12 +241,12 @@ function tplAzureKustomization() {
 }
 
 /** Fichiers écrits dans le config-repo : { chemin relatif à apps/<app>/crossplane : contenu }. */
-function azureCrossplaneFiles(appName, appPort, azure) {
+function azureCrossplaneFiles(appName, appPort, azure, env, revision) {
     return {
-        'containerapp-secretname.yaml': tplAzureSecretName(appName, azure),
-        'flexibleserver.yaml': tplAzureFlexibleServer(appName, azure),
-        'flexibleserver-database.yaml': tplAzureDatabase(appName, azure),
-        'containerapp-claim.yaml': tplAzureContainerApp(appName, appPort, azure),
+        'containerapp-secretname.yaml': tplAzureSecretName(appName, azure, env),
+        'flexibleserver.yaml': tplAzureFlexibleServer(appName, azure, env),
+        'flexibleserver-database.yaml': tplAzureDatabase(appName, azure, env),
+        'containerapp-claim.yaml': tplAzureContainerApp(appName, appPort, azure, env, revision),
         'kustomization.yaml': tplAzureKustomization(),
     };
 }
@@ -258,13 +297,18 @@ function azureRepoVariables(azure) {
     ];
 }
 
-/** URL publique d'une app Azure (domaine par défaut de l'environnement Container Apps). */
-function azureAppUrl(appName, azure) {
-    return azure.environmentDomain ? `https://${appName}.${azure.environmentDomain}` : null;
+/**
+ * URL publique d'une app Azure (domaine par défaut de l'environnement Container Apps). Avec `env`, le nom de la
+ * Container App est « <app>-<env> » (chemin dev/prod) ; sans `env`, c'est le nom de l'app (ancien chemin).
+ */
+function azureAppUrl(appName, azure, env) {
+    if (!azure.environmentDomain) return null;
+    const containerApp = (env === 'dev' || env === 'prod') ? `${appName}-${env}` : appName;
+    return `https://${containerApp}.${azure.environmentDomain}`;
 }
 
 module.exports = {
-    validateAzureAppName, azureNames, azureCrossplaneFiles, azureConfigRepoPaths,
+    ENVIRONMENTS, MAX_APP_NAME_WITH_ENV, validateAzureAppName, azureNames, azureCrossplaneFiles, azureConfigRepoPaths,
     tplAzureCiWorkflow, azureRepoVariables, azureAppUrl,
     tplAzureFlexibleServer, tplAzureDatabase, tplAzureSecretName, tplAzureContainerApp, tplAzureKustomization,
 };

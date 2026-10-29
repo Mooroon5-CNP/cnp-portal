@@ -297,6 +297,40 @@ async function deleteArgocdApplication(name) {
   }
 }
 
+// Supprime une Application Argo CD EN CASCADE : on pose d'abord le finalizer, puis on supprime ; Argo supprime alors
+// les ressources de l'Application (donc, pour Azure, les objets Crossplane et leurs ressources dans Azure) avant de
+// retirer l'Application. Passe par l'API Kubernetes (le compte cnp-portal y a le droit de supprimer dans le namespace
+// argocd), pas par l'API Argo CD, où ce compte est en lecture seule (403). Renvoie false si elle n'existe pas.
+const ARGO_RESOURCES_FINALIZER = 'resources-finalizer.argocd.argoproj.io';
+async function cascadeDeleteArgocdApplication(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  const is404 = err => err.response?.statusCode === 404 || err.statusCode === 404;
+  try {
+    let current;
+    try {
+      current = (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+    } catch (err) {
+      if (is404(err)) return false;
+      throw err;
+    }
+    const finalizers = current.metadata?.finalizers || [];
+    if (!finalizers.includes(ARGO_RESOURCES_FINALIZER)) {
+      await customApi.patchNamespacedCustomObject(
+        'argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER] } },
+        undefined, undefined, undefined,
+        { headers: { 'Content-Type': 'application/merge-patch+json' } },
+      );
+    }
+    await customApi.deleteNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name);
+    return true;
+  } catch (err) {
+    if (is404(err)) return false;
+    handleError(err, `cascadeDeleteArgocdApplication(${name})`);
+  }
+}
+
 // Delete a K8s namespace (and all resources inside it). Idempotent.
 async function deleteNamespace(name) {
   const kc = getKubeConfig();
@@ -374,10 +408,19 @@ function conditionOf(body, type) {
   return (body?.status?.conditions || []).find(c => c.type === type) || null;
 }
 
+// Image réellement déployée, lue dans l'état OBSERVÉ de la Container App (pas dans la spec : une nouvelle spec n'est
+// pas une révision prête). Selon la version du provider, `template` est un objet ou une liste d'un élément.
+function azureObservedImage(containerApp) {
+  const observed = containerApp?.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+  return container?.image || null;
+}
+
 function azureAppStatusFrom({ server, database, containerApp }) {
   const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
   if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
-    return { phase: 'ready', failure: null };
+    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp) };
   }
   // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
   // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
@@ -403,13 +446,13 @@ async function getAzureObject(api, group, version, plural, name) {
   }
 }
 
-async function getAzureAppStatus(appName, { serverName, databaseName }) {
+async function getAzureAppStatus(appName, { serverName, databaseName, containerAppName }) {
   const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
   try {
     const [server, database, containerApp] = await Promise.all([
       getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', serverName),
       getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
-      getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', appName),
+      getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', containerAppName || appName),
     ]);
     return azureAppStatusFrom({ server, database, containerApp });
   } catch (err) {
@@ -528,8 +571,8 @@ module.exports = {
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
-  applyArgocdApplication, deleteArgocdApplication,
+  applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication,
   deleteNamespace,
-  getAzureAppStatus, azureAppStatusFrom, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

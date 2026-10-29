@@ -18,17 +18,10 @@ const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
 const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
+const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
 const SUPPORTED_CLOUDS = ['gcp', 'azure'];
-
-// Étapes de création côté Azure, après la CI : ce que l'utilisateur attend réellement.
-const AZURE_PROGRESS_MESSAGES = {
-    'waiting-argocd': 'Pipeline terminé. En attente de la synchronisation d\'Argo CD…',
-    server: 'Pipeline terminé. Création du serveur PostgreSQL privé en cours (5 à 10 minutes)…',
-    database: 'Serveur PostgreSQL prêt. Création de la base de données…',
-    containerapp: 'Base de données prête. Création de la Container App…',
-};
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -253,13 +246,8 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
-    // Azure : un seul environnement et pas de branche prod ; le dossier à plat apps/<app>/crossplane/ est écrit
-    // par onboardApp (onboardAzure), pas par le service d'environnements dev/prod, propre à GCP (WIF, projets Argo).
-    const isAzure = targetCluster === 'azure';
-    try {
-        if (isAzure) azureTemplates.validateAzureAppName(appName);
-        else environmentService.validate(environment, appName);
-    } catch (err) {
+    try { environmentService.validate(environment, appName, targetCluster); }
+    catch (err) {
         req.flash('error', err.message);
         return res.redirect('/deployments');
     }
@@ -306,28 +294,11 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             ownerTeamId: resolvedTeamId,
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
-            environment: isAzure ? 'legacy' : environment,
+            environment,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
-    }
-
-    if (isAzure) {
-        // Même schéma que l'ancien onboarding (statut mis à jour par rappel) : onboardApp aiguille vers onboardAzure.
-        onboardingService.onboardApp({
-            appName,
-            githubRepoUrl,
-            appPort: port,
-            teamOwner: 'platform',
-            targetCluster: 'azure',
-            updateStatus: async (status, error) => {
-                deploymentModel.updateOnboardingStatus(dep.id, status, error);
-            },
-        }).catch((err) => {
-            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
-        });
-        return res.redirect(`/deployments/${dep.id}`);
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
@@ -514,7 +485,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
     // Azure : domaine par défaut de l'environnement Container Apps (<app>.<domaine de l'environnement>).
     const azureUrl = dep.targetCluster === 'azure' && dep.onboardingStatus === 'ready'
-        ? azureAppUrl(dep.appName, config.azure) : null;
+        ? azureAppUrl(dep.appName, config.azure, usesEnvironment(dep) ? dep.environment : undefined) : null;
     const appUrl = cloudRunUrl || ingressUrl || azureUrl;
 
     const safeDeployment = {

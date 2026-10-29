@@ -11,13 +11,15 @@ const kubernetes = require('../clients/kubernetes');
 const argo = require('../clients/argocd');
 const routing = require('./application-routing');
 const addresses = require('./application-address');
+const azure = require('./environment-azure');
 
 const locks = new Map();
 const onboardingLocks = new Map();
 const branches = { dev: 'main', prod: 'prod' };
-function validate(environment, appName) {
+function validate(environment, appName, targetCluster) {
   if (!Object.hasOwn(branches, environment)) throw new Error('Environnement invalide : dev ou prod attendu.');
   if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(appName)) throw new Error('Nom invalide : 2 à 40 caractères, lettres minuscules, chiffres et tirets.');
+  if (targetCluster === 'azure') azure.validate(appName);
 }
 function target() {
   const [owner, repo] = (config.github.configRepoName || 'Mooroon5-CNP/config-repo').split('/');
@@ -29,7 +31,8 @@ function identity(dep) {
 }
 function workflowName(appName) { return `cnp-${appName}.yml`; }
 function image(dep, revision) { return `${config.github.registryUrl || config.gcp.imageRegistry}/${dep.appName}:${revision}`; }
-function workflow(appName) {
+function workflow(appName, dep) {
+  if (azure.isAzure(dep)) return azure.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
   return yaml.dump({ name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] } },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
@@ -71,6 +74,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
+  if (azure.isAzure(dep)) return azure.manifests(dep, revision);
   const { name, path } = identity(dep);
   const hash = createHash('sha256').update(`${config.gcp.project}/${name}`).digest('hex').slice(0, 8);
   const bucket = `cnp-${name}-${hash}-data`;
@@ -126,8 +130,9 @@ function current(dep) {
 }
 
 async function prepareOnboarding(dep) {
-  validate(dep.environment, dep.appName);
+  validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
+  if (azure.isAzure(dep)) azure.assertConfigured();
   const api = await github.getInstallationOctokit();
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
   const destination = target();
@@ -170,7 +175,11 @@ async function prepareOnboarding(dep) {
   if (!(await readFile(api, destination, rootPath))) await ensureEmptyRootAllowed();
   await github.checkActionsEnabled(source.owner, source.repo);
   await github.setRepoSecret(source.owner, source.repo, 'CONFIG_REPO_TOKEN', config.github.configRepoToken);
-  for (const [keyName, value] of [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]]) {
+  // Variables lues par le pipeline du cloud : WIF/Artifact Registry pour GCP, identité fédérée et ACR pour Azure.
+  const repoVariables = azure.isAzure(dep)
+    ? azure.repoVariables()
+    : [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]];
+  for (const [keyName, value] of repoVariables) {
     if (!value) throw new Error(`Configuration manquante : ${keyName}.`);
     await github.setRepoVariable(source.owner, source.repo, keyName, value);
   }
@@ -179,7 +188,7 @@ async function prepareOnboarding(dep) {
   const workflowPath = `.github/workflows/${workflowName(dep.appName)}`;
   for (const branch of ['main', 'prod']) {
     await commitFiles(api, source, async head => {
-      const files = { [workflowPath]: workflow(dep.appName) };
+      const files = { [workflowPath]: workflow(dep.appName, dep) };
       // Retirer uniquement l'ancien caller CNP possédé par la plateforme évite deux builds du même tag.
       const old = await readFile(api, source, '.github/workflows/ci.yml', head);
       if (old) {
@@ -242,6 +251,7 @@ async function sourceIsCurrent(dep, revision) {
 }
 
 async function readiness(dep, revision) {
+  if (azure.isAzure(dep)) return azure.readiness(dep, revision);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
   if (observed.ready && observed.image === image(dep, revision)) {
     const api = await github.getInstallationOctokit();
@@ -382,16 +392,23 @@ async function remove(dep) {
     }
   }
   const { path, name } = identity(dep);
-  await routing.sync(dep, { api, repo: target(), commitFiles }, true);
-  if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
+  const onAzure = azure.isAzure(dep);
+  // Le routage (NEG, backend, URL map) est propre au load balancer GCP : Azure n'en a pas.
+  if (!onAzure) {
+    await routing.sync(dep, { api, repo: target(), commitFiles }, true);
+    if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
+  }
   const files = {};
-  for (const file of ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml']) {
+  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
   // La cascade explicite pose le finalizer AVANT que le scanner dev ne retire
   // l'Application avec preserveResourcesOnDeletion=true. Sans cet ordre, les CR
   // cloud pourraient rester orphelines après la disparition du dossier GitOps.
-  await argo.deleteApplication(name, { cascade: true });
+  // Azure : par l'API Kubernetes. Le compte cnp-portal est en lecture seule côté Argo CD (403 sur DELETE).
+  if (onAzure) await kubernetes.cascadeDeleteArgocdApplication(name);
+  else await argo.deleteApplication(name, { cascade: true });
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
   await commitFiles(api, target(), async head => {
     const result = { ...files };

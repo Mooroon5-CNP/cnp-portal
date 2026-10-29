@@ -49,23 +49,30 @@ beforeEach(() => {
   db.prepare('DELETE FROM deployments').run();
 });
 
-test('un déploiement Azure passe par onboardApp, pas par le service d\'environnements GCP', async () => {
+test('un déploiement Azure passe par le service d\'environnements dev/prod, avec son cloud', async () => {
   const res = await request(app).post('/deployments').type('form').send(form);
   expect(res.status).toBe(302);
-  expect(onboarding.onboardApp).toHaveBeenCalledWith(expect.objectContaining({
-    appName: 'todo-az', targetCluster: 'azure', appPort: 8080,
-  }));
-  expect(environmentService.onboard).not.toHaveBeenCalled();
+  expect(environmentService.validate).toHaveBeenCalledWith('dev', 'todo-az', 'azure');
+  expect(environmentService.onboard).toHaveBeenCalledWith(expect.objectContaining({ appName: 'todo-az', targetCluster: 'azure', environment: 'dev' }));
+  expect(onboarding.onboardApp).not.toHaveBeenCalled();
   // listForUser(null) renvoie les lignes brutes de la base (colonnes en snake_case).
   const row = deployments.listForUser(null).find(d => d.app_name === 'todo-az');
-  expect(row.deployment_environment).toBe('legacy');
+  expect(row.deployment_environment).toBe('dev');
   expect(row.target_cluster).toBe('azure');
 });
 
-test('Azure : un nom invalide est refusé avant tout enregistrement', async () => {
+test('Azure en production est enregistré comme tel', async () => {
+  await request(app).post('/deployments').type('form').send({ ...form, environment: 'prod' });
+  const row = deployments.listForUser(null).find(d => d.app_name === 'todo-az');
+  expect(row.deployment_environment).toBe('prod');
+  expect(row.target_cluster).toBe('azure');
+});
+
+test('Azure : un nom refusé par la validation n\'enregistre rien', async () => {
+  environmentService.validate.mockImplementationOnce(() => { throw new Error('Nom invalide'); });
   const res = await request(app).post('/deployments').type('form').send({ ...form, appName: 'Mauvais_Nom' });
   expect(res.status).toBe(302);
-  expect(onboarding.onboardApp).not.toHaveBeenCalled();
+  expect(environmentService.onboard).not.toHaveBeenCalled();
   expect(deployments.listForUser(null)).toHaveLength(0);
 });
 
