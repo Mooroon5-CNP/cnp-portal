@@ -483,9 +483,11 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
             }
         }
     }
-    // Azure : domaine par défaut de l'environnement Container Apps (<app>.<domaine de l'environnement>).
-    const azureUrl = dep.targetCluster === 'azure' && dep.onboardingStatus === 'ready'
-        ? azureAppUrl(dep.appName, config.azure, usesEnvironment(dep) ? dep.environment : undefined) : null;
+    // Azure, ancien chemin (un seul environnement, sans suivi de CI) : domaine par défaut de l'environnement Container
+    // Apps. JAMAIS pour dev/prod : leur URL ne vient que du statut `success` (cloudRunUrl ci-dessus), sinon le lien
+    // s'affiche dès la préparation, avant que le serveur PostgreSQL et la Container App existent (404 Azure).
+    const azureUrl = !usesEnvironment(dep) && dep.targetCluster === 'azure' && dep.onboardingStatus === 'ready'
+        ? azureAppUrl(dep.appName, config.azure) : null;
     const appUrl = cloudRunUrl || ingressUrl || azureUrl;
 
     const safeDeployment = {

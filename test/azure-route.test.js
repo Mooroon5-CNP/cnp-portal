@@ -165,3 +165,36 @@ describe('azureAppStatusFrom (lecture des conditions Crossplane)', () => {
     expect(azureAppStatusFrom({ server: ok, database: ok, containerApp: transient }).phase).toBe('containerapp');
   });
 });
+
+describe('page de détail d\'un déploiement Azure dev/prod', () => {
+  function envDeployment(environment = 'dev') {
+    const dep = deployments.create({
+      appName: 'todo-az', githubRepoUrl: 'https://github.com/team/todo', appPort: 8080,
+      targetCluster: 'azure', environment, ownerUserId: managerId,
+    });
+    deployments.updateOnboardingStatus(dep.id, 'ready');
+    return dep;
+  }
+  const detail = id => request(app).get(`/deployments/${id}`);
+
+  beforeEach(() => {
+    githubClient.getRuns.mockResolvedValue([]);
+    githubClient.getLatestRun.mockResolvedValue(null);
+    githubClient.getRunJobs.mockResolvedValue([]);
+  });
+
+  test('le lien de l\'application n\'apparaît PAS tant que les ressources Azure ne sont pas prêtes', async () => {
+    environmentService.reconcile.mockResolvedValue({ phase: 'deploying', message: 'Création du serveur PostgreSQL privé en cours' });
+    const res = await detail(envDeployment().id);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('id="url-card"');
+    expect(res.text).not.toContain('https://todo-az-dev.env.example.io');
+  });
+
+  test('le lien apparaît une fois le statut « success »', async () => {
+    environmentService.reconcile.mockResolvedValue({ phase: 'success', applicationUrl: 'https://todo-az-dev.env.example.io' });
+    const res = await detail(envDeployment().id);
+    expect(res.text).toContain('id="url-card"');
+    expect(res.text).toContain('https://todo-az-dev.env.example.io');
+  });
+});
