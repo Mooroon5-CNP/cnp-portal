@@ -16,6 +16,12 @@ const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
+const azureTemplates = require('../services/azure-templates');
+const { azureAppUrl } = azureTemplates;
+const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
+
+// Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
+const SUPPORTED_CLOUDS = ['gcp', 'azure'];
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -231,14 +237,16 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
-    const hasPersistentStorage = persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true;
+    // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
+    const hasPersistentStorage = targetCluster !== 'azure'
+        && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
     if (!appName || !githubRepoUrl) {
         req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
         return res.redirect('/deployments');
     }
 
-    try { environmentService.validate(environment, appName); }
+    try { environmentService.validate(environment, appName, targetCluster); }
     catch (err) {
         req.flash('error', err.message);
         return res.redirect('/deployments');
@@ -260,8 +268,8 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
-    if (targetCluster && targetCluster !== 'gcp') {
-        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seul GCP est supporté pour le moment.');
+    if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
         return res.redirect('/deployments');
     }
 
@@ -352,6 +360,28 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
 
     if (run.status === 'completed') {
         const runUrl = `https://github.com/${parsed.owner}/${parsed.repo}/actions/runs/${run.id}`;
+        if (run.conclusion === 'success' && dep.targetCluster === 'azure') {
+            // Un run réussi = image construite et promue, pas application déployée : Crossplane crée encore le
+            // serveur PostgreSQL (5 à 10 min), la base puis la Container App. On attend leur état réel.
+            const names = azureTemplates.azureNames(dep.appName, config.azure);
+            const azure = await k8sClient.getAzureAppStatus(dep.appName, { serverName: names.server, databaseName: names.database })
+                .catch(() => null);
+            if (!azure) {
+                return res.json({ phase: 'running', message: 'Pipeline terminé. Vérification de l\'état des ressources Azure impossible pour le moment, nouvelle tentative…', runUrl });
+            }
+            if (azure.phase === 'failed') {
+                return res.json({ phase: 'failed', message: 'La création des ressources Azure a échoué.', detail: azure.failure, runUrl });
+            }
+            if (azure.phase !== 'ready') {
+                return res.json({ phase: 'running', message: AZURE_PROGRESS_MESSAGES[azure.phase], runUrl });
+            }
+            return res.json({
+                phase: 'success',
+                message: 'Votre application a été déployée avec succès.',
+                runUrl,
+                cloudRunUrl: azureAppUrl(dep.appName, config.azure),
+            });
+        }
         // Use cached URL from DB; only query K8s on cache miss and save on find.
         let cloudRunUrl = dep.cloudRunUrl || null;
         if (!cloudRunUrl) {
@@ -431,7 +461,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
     let ingressUrl = null;
     // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
-    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp') {
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp' && dep.targetCluster !== 'azure') {
         // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
@@ -453,7 +483,12 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
             }
         }
     }
-    const appUrl = cloudRunUrl || ingressUrl;
+    // Azure, ancien chemin (un seul environnement, sans suivi de CI) : domaine par défaut de l'environnement Container
+    // Apps. JAMAIS pour dev/prod : leur URL ne vient que du statut `success` (cloudRunUrl ci-dessus), sinon le lien
+    // s'affiche dès la préparation, avant que le serveur PostgreSQL et la Container App existent (404 Azure).
+    const azureUrl = !usesEnvironment(dep) && dep.targetCluster === 'azure' && dep.onboardingStatus === 'ready'
+        ? azureAppUrl(dep.appName, config.azure) : null;
+    const appUrl = cloudRunUrl || ingressUrl || azureUrl;
 
     const safeDeployment = {
         id: dep.id,
@@ -507,7 +542,11 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         environmentStatus: selectedStatus,
-        applicationUrl: applicationAddress.url(dep),
+        // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
+        // domaine par défaut de l'environnement Container Apps.
+        applicationUrl: dep.targetCluster === 'azure' && usesEnvironment(dep)
+            ? azureAppUrl(dep.appName, config.azure, dep.environment)
+            : applicationAddress.url(dep),
         runs,
         latest,
         jobs,
@@ -554,7 +593,7 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
             await environmentService.remove(dep);
         } else {
-            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
         }
     } catch (e) {
         // Log partial-cleanup warnings but don't block the deletion.
@@ -617,7 +656,7 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
             await environmentService.remove(dep);
         } else {
-            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl });
+            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
         }
     } catch (e) {
         req.flash('error', `Nettoyage partiel : ${e.message}`);

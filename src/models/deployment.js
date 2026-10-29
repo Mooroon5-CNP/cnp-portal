@@ -115,7 +115,7 @@ module.exports = {
         const id = uuidv4();
         const now = new Date().toISOString();
         const enc = configRepoToken ? encryptToken(configRepoToken) : null;
-        const cluster = (targetCluster === 'aws') ? 'aws' : 'gcp';
+        const cluster = ['aws', 'azure'].includes(targetCluster) ? targetCluster : 'gcp';
         insertStmt.run(id, appName, githubRepoUrl, appPort || null, enc, ownerUserId, ownerTeamId || null, 'configuring', persistentStorage ? 1 : 0, cluster, environment, now, now);
         // Grant access to owner team automatically.
         if (ownerTeamId) {

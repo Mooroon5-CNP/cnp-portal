@@ -297,6 +297,54 @@ async function deleteArgocdApplication(name) {
   }
 }
 
+// Lit une Application Argo CD par l'API Kubernetes (le compte cnp-portal y a get/list dans le namespace argocd).
+// L'API Argo CD répond 403 « permission denied » à ce compte pour une application qui n'existe pas (il n'a pas le
+// droit de lecture sur toutes les applications), alors que Kubernetes répond proprement 404. Renvoie null si absente.
+async function getArgocdApplicationIfExists(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    return (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+  } catch (err) {
+    if (err.response?.statusCode === 404 || err.statusCode === 404) return null;
+    handleError(err, `getArgocdApplicationIfExists(${name})`);
+  }
+}
+
+// Supprime une Application Argo CD EN CASCADE : on pose d'abord le finalizer, puis on supprime ; Argo supprime alors
+// les ressources de l'Application (donc, pour Azure, les objets Crossplane et leurs ressources dans Azure) avant de
+// retirer l'Application. Passe par l'API Kubernetes (le compte cnp-portal y a le droit de supprimer dans le namespace
+// argocd), pas par l'API Argo CD, où ce compte est en lecture seule (403). Renvoie false si elle n'existe pas.
+const ARGO_RESOURCES_FINALIZER = 'resources-finalizer.argocd.argoproj.io';
+async function cascadeDeleteArgocdApplication(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  const is404 = err => err.response?.statusCode === 404 || err.statusCode === 404;
+  try {
+    let current;
+    try {
+      current = (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+    } catch (err) {
+      if (is404(err)) return false;
+      throw err;
+    }
+    const finalizers = current.metadata?.finalizers || [];
+    if (!finalizers.includes(ARGO_RESOURCES_FINALIZER)) {
+      await customApi.patchNamespacedCustomObject(
+        'argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER] } },
+        undefined, undefined, undefined,
+        { headers: { 'Content-Type': 'application/merge-patch+json' } },
+      );
+    }
+    await customApi.deleteNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name);
+    return true;
+  } catch (err) {
+    if (is404(err)) return false;
+    handleError(err, `cascadeDeleteArgocdApplication(${name})`);
+  }
+}
+
 // Delete a K8s namespace (and all resources inside it). Idempotent.
 async function deleteNamespace(name) {
   const kc = getKubeConfig();
@@ -364,6 +412,71 @@ async function getV2ServiceStatus(appName) {
   } catch (err) {
     if (err.statusCode === 404 || err.response?.statusCode === 404) return { ready: false, url: null, image: null, failure: null };
     handleError(err, `getV2ServiceStatus(${appName})`);
+  }
+}
+
+// État d'une app Azure vue par Crossplane (providers Upbound : objets cluster-scoped, un par ressource Azure).
+// Fonction pure, séparée de l'appel API pour être testable. Une ressource absente est « pas encore créée » :
+// Argo CD ne crée la Container App (vague 2) qu'une fois le serveur et la base prêts.
+function conditionOf(body, type) {
+  return (body?.status?.conditions || []).find(c => c.type === type) || null;
+}
+
+// Image réellement déployée, lue dans l'état OBSERVÉ de la Container App (pas dans la spec : une nouvelle spec n'est
+// pas une révision prête). Selon la version du provider, `template` est un objet ou une liste d'un élément.
+function azureObservedImage(containerApp) {
+  const observed = containerApp?.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+  return container?.image || null;
+}
+
+function azureAppStatusFrom({ server, database, containerApp }) {
+  const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
+  if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
+    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp) };
+  }
+  // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
+  // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
+  // réconciliation (ReconcileError) peut être passagère : on ne la déclare pas en échec.
+  for (const [name, body] of [['Container App', containerApp], ['base de données', database], ['serveur PostgreSQL', server]]) {
+    const op = conditionOf(body, 'LastAsyncOperation');
+    if (op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)) {
+      const detail = String(op.message || op.reason).replace(/\s+/g, ' ').trim();
+      return { phase: 'failed', failure: `${name} : ${detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}` };
+    }
+  }
+  if (!server) return { phase: 'waiting-argocd', failure: null };
+  if (!ready(server)) return { phase: 'server', failure: null };
+  if (!ready(database)) return { phase: 'database', failure: null };
+  return { phase: 'containerapp', failure: null };
+}
+
+async function getAzureObject(api, group, version, plural, name) {
+  try { return (await api.getClusterCustomObject(group, version, plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+async function getAzureAppStatus(appName, { serverName, databaseName, containerAppName }) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const [server, database, containerApp] = await Promise.all([
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', serverName),
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
+      getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', containerAppName || appName),
+    ]);
+    const present = [server, database, containerApp].filter(Boolean);
+    return {
+      ...azureAppStatusFrom({ server, database, containerApp }),
+      // Pour confirmer un démontage : quelque chose existe encore / quelque chose est en cours de suppression.
+      exists: present.length > 0,
+      deleting: present.some(body => !!body.metadata?.deletionTimestamp),
+    };
+  } catch (err) {
+    handleError(err, `getAzureAppStatus(${appName})`);
   }
 }
 
@@ -478,8 +591,8 @@ module.exports = {
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet,
-  applyArgocdApplication, deleteArgocdApplication,
+  applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
-  getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

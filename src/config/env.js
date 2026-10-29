@@ -99,6 +99,47 @@ const config = {
     cloudRunSa:    process.env.GCP_CLOUD_RUN_SA
       || `cloud-run-sa@${process.env.GCP_PROJECT || 'cnp-terraform-500015'}.iam.gserviceaccount.com`,
   },
+  // Tier souveraineté UE (Azure). Ces clés ne sont volontairement PAS dans CLOUD_KEYS (cloud-env.js) :
+  // l'import du Terraform GCP exige toutes les clés de cette liste et échouerait faute des clés Azure.
+  // Valeurs : sortie Terraform `portal_environment` du dossier azure/. Aucune valeur d'infrastructure par défaut.
+  azure: {
+    namePrefix:        process.env.AZURE_NAME_PREFIX || 'cnp-sov',
+    regionKey:         process.env.AZURE_REGION_KEY || 'fr',
+    location:          process.env.AZURE_LOCATION || 'francecentral',
+    subscriptionId:    process.env.AZURE_SUBSCRIPTION_ID,
+    tenantId:          process.env.AZURE_TENANT_ID,
+    ciClientId:        process.env.AZURE_CLIENT_ID,
+    acrLoginServer:    process.env.AZURE_ACR_LOGIN_SERVER,
+    resourceGroup:     process.env.AZURE_RESOURCE_GROUP,
+    nameSuffix:        process.env.AZURE_NAME_SUFFIX,
+    environmentId:     process.env.AZURE_CONTAINERAPP_ENVIRONMENT_ID,
+    environmentDomain: process.env.AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN,
+    pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
+    dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
+    dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,
+  },
 };
 
-module.exports = { config, getMissingVars };
+// Clé de config.azure -> variable d'environnement, pour les valeurs sans lesquelles un déploiement Azure est impossible.
+const AZURE_REQUIRED = {
+  subscriptionId: 'AZURE_SUBSCRIPTION_ID',
+  tenantId: 'AZURE_TENANT_ID',
+  ciClientId: 'AZURE_CLIENT_ID',
+  acrLoginServer: 'AZURE_ACR_LOGIN_SERVER',
+  resourceGroup: 'AZURE_RESOURCE_GROUP',
+  nameSuffix: 'AZURE_NAME_SUFFIX',
+  environmentId: 'AZURE_CONTAINERAPP_ENVIRONMENT_ID',
+  environmentDomain: 'AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN',
+  pullIdentityId: 'AZURE_ACRPULL_IDENTITY_ID',
+  dbSubnetId: 'AZURE_DB_SUBNET_ID',
+  dbDnsZoneId: 'AZURE_DB_DNS_ZONE_ID',
+};
+
+/** Variables Azure manquantes (noms des variables d'environnement). Vide = déploiement Azure possible. */
+function getMissingAzureVars(azure = config.azure) {
+  return Object.entries(AZURE_REQUIRED)
+    .filter(([key]) => !azure[key] || String(azure[key]).trim() === '')
+    .map(([, envName]) => envName);
+}
+
+module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED };

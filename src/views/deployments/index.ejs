@@ -185,12 +185,12 @@
                       <select name="targetCluster" id="targetCluster" onchange="onCloudChange(this.value)">
                         <option value="gcp" selected>GCP — Google Cloud Platform (Cloud Run)</option>
                         <option value="aws">AWS — Amazon Web Services</option>
-                        <option value="azure">Azure — Microsoft Azure</option>
+                        <option value="azure">Azure — Souveraineté UE (Container Apps + PostgreSQL)</option>
                       </select>
                       <div class="form-hint">Plateforme de déploiement de l'application.</div>
                       <div id="cloudWarning" role="alert" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--text-primary);">
                         <strong style="color:#ca8a04;">⚠ Cloud pas encore disponible</strong><br>
-                        Le déploiement sur <strong id="cloudWarningName"></strong> n'est pas encore pris en charge. Nos collaborateurs travailleront dessus plus tard. Seul GCP est utilisable pour le moment.
+                        Le déploiement sur <strong id="cloudWarningName"></strong> n'est pas encore pris en charge. Nos collaborateurs travailleront dessus plus tard. Seuls GCP et Azure sont utilisables pour le moment.
                       </div>
                     </div>
 
@@ -309,10 +309,15 @@
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);
 
-                // Cloud selector: only GCP is supported for now, others show a warning.
+                // Cloud selector: GCP and Azure are supported, AWS shows a warning.
                 const CLOUD_LABELS = { aws: 'AWS', azure: 'Azure' };
                 function onCloudChange(value) {
-                  const unsupported = value !== 'gcp';
+                  const unsupported = value !== 'gcp' && value !== 'azure';
+                  // Azure stocke ses données dans PostgreSQL : l'option SQLite sur GCS ne s'applique pas.
+                  const storage = document.getElementById('persistentStorage');
+                  storage.disabled = value === 'azure';
+                  if (value === 'azure') storage.checked = false;
+                  storage.closest('.form-group').style.opacity = value === 'azure' ? '.5' : '';
                   document.getElementById('cloudWarning').style.display = unsupported ? 'block' : 'none';
                   document.getElementById('cloudWarningName').textContent = CLOUD_LABELS[value] || value;
                   const btn = document.getElementById('deploySubmitBtn');

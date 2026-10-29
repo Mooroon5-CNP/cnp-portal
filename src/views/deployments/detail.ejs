@@ -47,7 +47,11 @@
                   <div class="card-header"><span class="card-title">Adresse de l’environnement</span></div>
                   <div class="card-body">
                     <code><%= applicationUrl %></code>
-                    <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement.</div>
+                    <% if (deployment.targetCluster === 'azure') { %>
+                      <div class="form-hint">Adresse par défaut d’Azure (domaine de l’environnement Container Apps). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
+                    <% } else { %>
+                      <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement.</div>
+                    <% } %>
                   </div>
                 </div>
               <% } %>
