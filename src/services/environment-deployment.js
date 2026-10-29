@@ -410,9 +410,7 @@ async function remove(dep) {
   // La cascade explicite pose le finalizer AVANT que le scanner dev ne retire
   // l'Application avec preserveResourcesOnDeletion=true. Sans cet ordre, les CR
   // cloud pourraient rester orphelines après la disparition du dossier GitOps.
-  // Azure : par l'API Kubernetes. Le compte cnp-portal est en lecture seule côté Argo CD (403 sur DELETE).
-  if (onAzure) await kubernetes.cascadeDeleteArgocdApplication(name);
-  else await argo.deleteApplication(name, { cascade: true });
+  if (!onAzure) await argo.deleteApplication(name, { cascade: true });
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
   await commitFiles(api, target(), async head => {
     const result = { ...files };
@@ -428,6 +426,14 @@ async function remove(dep) {
     }
     return result;
   }, `chore(${dep.appName}): remove ${dep.environment}`);
+  // Azure : la cascade vient APRÈS le retrait des fichiers (ordre inverse de GCP, voir environment-azure.confirmTeardown).
+  // Tant que le dossier est dans Git, l'ApplicationSet dev (preserveResourcesOnDeletion) retire le finalizer posé et
+  // recrée l'Application : les ressources Azure restaient orphelines (constaté le 29/10/2026). L'API Kubernetes, car
+  // l'API Argo CD refuse ce compte.
+  if (onAzure) {
+    await kubernetes.cascadeDeleteArgocdApplication(name);
+    await azure.confirmTeardown(dep);
+  }
   // Secrets et workflow restent partagés avec l'autre environnement.
 }
 

@@ -119,6 +119,30 @@ async function readiness(dep, revision) {
   return { phase: 'deploying', message: PROGRESS_MESSAGES[status.phase] || 'CI terminée ; création des ressources Azure en cours.', cloudRunUrl: null };
 }
 
+/**
+ * Confirme qu'un démontage a réellement démarré : après la suppression de l'Application Argo en cascade, au moins
+ * une ressource Crossplane doit être en cours de suppression (ou déjà partie). Sans cette preuve, on ne déclare
+ * pas la suppression réussie : l'ApplicationSet dev a preserveResourcesOnDeletion et retire le finalizer d'une
+ * Application encore présente dans Git ; les ressources Azure resteraient alors orphelines (et facturées).
+ */
+async function confirmTeardown(dep, { attempts = 10, delayMs = 3000 } = {}) {
+  const names = azureTemplates.azureNames(dep.appName, config.azure, dep.environment);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const status = await kubernetes.getAzureAppStatus(dep.appName, {
+      serverName: names.server, databaseName: names.database, containerAppName: names.containerApp,
+    });
+    if (!status.exists) return 'gone';
+    if (status.deleting) return 'deleting';
+    if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  throw new Error(
+    'La suppression en cascade n\'a pas démarré : les ressources Azure de cet environnement existent toujours et ne sont ' +
+    'pas en cours de suppression. Réessayez la suppression ; sinon, supprimez l\'Application Argo CD ' +
+    `${dep.appName}-${dep.environment} avec le finalizer resources-finalizer.argocd.argoproj.io.`
+  );
+}
+
 module.exports = {
+  confirmTeardown,
   isAzure, PROGRESS_MESSAGES, validate, assertConfigured, repoVariables, workflow, imageRef, manifests, fileNames, readiness,
 };

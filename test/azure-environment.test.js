@@ -215,7 +215,9 @@ describe('vérification de l\'ancienne application', () => {
 });
 
 describe('suppression', () => {
-  test('supprime seulement l\'environnement choisi, en cascade par l\'API Kubernetes et sans routage GCP', async () => {
+  beforeEach(() => kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null, exists: true, deleting: true }));
+
+  test('supprime seulement l\'environnement choisi : fichiers d\'abord, puis cascade par l\'API Kubernetes, sans routage GCP', async () => {
     production(); await service.reconcile(dep);
     for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
     deployments.updateOnboardingStatus(dep.id, 'deleting');
@@ -227,16 +229,32 @@ describe('suppression', () => {
     expect(removal.map(file => file.path.split('/').pop()).sort()).toEqual(
       ['containerapp-claim.yaml', 'containerapp-secretname.yaml', 'flexibleserver-database.yaml', 'flexibleserver.yaml', 'kustomization.yaml']);
     expect(removal.every(file => file.sha === null)).toBe(true);
-    // la cascade précède la suppression des fichiers : sinon l'ApplicationSet retirerait l'Application sans cascade
+    // Azure : la cascade vient APRÈS le retrait des fichiers. Tant que le dossier est dans Git, l'ApplicationSet dev
+    // (preserveResourcesOnDeletion) retire le finalizer posé et recrée l'Application : ressources orphelines.
     const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
-    expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeLessThan(api.request.mock.invocationCallOrder[sourceDelete]);
+    expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
   });
 
-  test('un échec de la cascade laisse les fichiers GitOps en place pour une nouvelle tentative', async () => {
+  test('un échec de la cascade remonte, pour que la suppression puisse être rejouée', async () => {
     for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
     kubernetes.cascadeDeleteArgocdApplication.mockRejectedValue(new Error('refus'));
     deployments.updateOnboardingStatus(dep.id, 'deleting');
     await expect(service.remove(dep)).rejects.toThrow('refus');
-    expect(trees.some(tree => tree.tree.some(file => file.sha === null))).toBe(false);
+  });
+
+  test('une cascade qui n\'a rien supprimé n\'est pas déclarée réussie (ressources orphelines)', async () => {
+    for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
+    kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null, exists: true, deleting: false });
+    const azureEnv = require('../src/services/environment-azure');
+    await expect(azureEnv.confirmTeardown(dep, { attempts: 2, delayMs: 1 })).rejects.toThrow('n\'a pas démarré');
+    expect(kubernetes.getAzureAppStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test('le démontage est confirmé dès qu\'une ressource est en suppression, ou déjà disparue', async () => {
+    const azureEnv = require('../src/services/environment-azure');
+    kubernetes.getAzureAppStatus.mockResolvedValue({ exists: true, deleting: true });
+    await expect(azureEnv.confirmTeardown(dep, { attempts: 3, delayMs: 1 })).resolves.toBe('deleting');
+    kubernetes.getAzureAppStatus.mockResolvedValue({ exists: false, deleting: false });
+    await expect(azureEnv.confirmTeardown(dep, { attempts: 3, delayMs: 1 })).resolves.toBe('gone');
   });
 });

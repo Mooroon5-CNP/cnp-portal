@@ -468,7 +468,13 @@ async function getAzureAppStatus(appName, { serverName, databaseName, containerA
       getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
       getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', containerAppName || appName),
     ]);
-    return azureAppStatusFrom({ server, database, containerApp });
+    const present = [server, database, containerApp].filter(Boolean);
+    return {
+      ...azureAppStatusFrom({ server, database, containerApp }),
+      // Pour confirmer un démontage : quelque chose existe encore / quelque chose est en cours de suppression.
+      exists: present.length > 0,
+      deleting: present.some(body => !!body.metadata?.deletionTimestamp),
+    };
   } catch (err) {
     handleError(err, `getAzureAppStatus(${appName})`);
   }
