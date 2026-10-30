@@ -12,6 +12,7 @@ const argo = require('../clients/argocd');
 const routing = require('./application-routing');
 const addresses = require('./application-address');
 const azure = require('./environment-azure');
+const failover = require('./environment-failover');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -75,6 +76,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
   if (azure.isAzure(dep)) return azure.manifests(dep, revision);
+  if (failover.enabled(dep)) return failover.manifests(dep);
   const { name, path } = identity(dep);
   const hash = createHash('sha256').update(`${config.gcp.project}/${name}`).digest('hex').slice(0, 8);
   const bucket = `cnp-${name}-${hash}-data`;
@@ -256,6 +258,7 @@ async function sourceIsCurrent(dep, revision) {
 
 async function readiness(dep, revision) {
   if (azure.isAzure(dep)) return azure.readiness(dep, revision);
+  if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
   if (observed.ready && observed.image === image(dep, revision)) {
     const api = await github.getInstallationOctokit();
@@ -384,6 +387,7 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
 }
 
 async function remove(dep) {
+  if (failover.enabled(dep)) throw new Error('Suppression interdite pour le profil failover phase 1.');
   if (onboardingLocks.has(dep.id)) await onboardingLocks.get(dep.id).catch(() => {});
   if (locks.has(dep.id)) await locks.get(dep.id).catch(() => {});
   // Une préflight échouée ne donne aucun droit sur des manifests historiques.

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title><%= title %></title>
+<style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#173047}pre{white-space:pre-wrap;background:#f0f4f7;padding:20px}button{padding:10px 16px;margin:8px}article{border-top:1px solid #ccc;padding:20px 0}</style>
+</head><body>
+<a href="/">Tableau de bord</a><h1><%= title %></h1>
+<p>Cloud SQL → réplication native → RDS. Les propositions sont générées par la plateforme et publiées par sa GitHub App après approbation manager. Le bucket existant est conservé.</p>
+<p>Un merge ne prouve pas que les bases, la réplication ou le worker sont opérationnels. Aucun test de panne n’est lancé ici.</p>
+<% for (const stage of ['databases', 'runtime', 'dns']) { %>
+<form action="/failover/prepare/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><button>Préparer : <%= stage %></button></form>
+<% } %>
+<% for (const row of rows) { %>
+<article><h2><%= row.stage %> — <%= row.state %></h2>
+<p>Baseline <code><%= row.base_sha %></code></p>
+<a href="<%= row.pr_url %>">Pull request</a> · <a href="/failover/<%= row.id %>">Examiner le candidat</a>
+</article><% } %>
+<% if (typeof files !== 'undefined') { for (const [name, content] of Object.entries(files)) { %>
+<h3><%= name %></h3><pre><%= content %></pre>
+<% } if (['pending', 'approving'].includes(candidate.state)) { %>
+<form action="/failover/<%= candidate.id %>/approve" method="post">
+<input type="hidden" name="head" value="<%= candidate.head_sha %>">
+<input type="hidden" name="csrf" value="<%= failoverCsrf %>">
+<button>Approuver ce candidat et publier en production</button></form>
+<% if (candidate.state === 'pending') { %>
+<form action="/failover/<%= candidate.id %>/reject" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><button>Rejeter et fermer cette proposition</button></form>
+<% } %>
+<% } } %>
+</body></html>
