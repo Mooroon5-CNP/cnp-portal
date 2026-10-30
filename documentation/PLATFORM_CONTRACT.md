@@ -64,15 +64,17 @@ Le port déclaré dans le CNP Portal doit correspondre exactement au port que vo
 
 ### 3.3 Variables d'environnement injectées automatiquement
 
-La plateforme injecte dans chaque conteneur via ConfigMap :
+La plateforme injecte dans chaque conteneur :
 
-| Variable | Valeur |
-|---|---|
-| `LOG_LEVEL` | `INFO` |
-| `DD_ENV` | `dev` ou `prod` |
-| `DD_SERVICE` | `<app-name>` |
-| `DD_VERSION` | `1.0.0` |
-| `DATA_DIR` | `/data` (si stockage GCS activé) ou `/tmp` |
+| Variable | Valeur | Source |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | ConfigMap `<app>-<env>-config` |
+| `DD_ENV` | `dev` ou `prod` | label `tags.datadoghq.com/env` |
+| `DD_SERVICE` | `<app-name>` | label `tags.datadoghq.com/service` |
+| `DD_VERSION` | tag de l'image déployée (SHA du commit) | label `tags.datadoghq.com/version` |
+| `DATA_DIR` | `/data` (si stockage GCS activé) ou `/tmp` | |
+
+Les labels `tags.datadoghq.com/*` (Datadog unified service tagging) sont générés à l'onboarding ; `DD_VERSION` suit automatiquement le `newTag` mis à jour par la CI. Les logs doivent être écrits en JSON sur stdout (un objet par ligne, avec `level` et `message`). Le workflow `observability-check` du config-repo rejette un déploiement à qui il manque ces champs ou les probes `/healthz` / `/ready`.
 
 ---
 

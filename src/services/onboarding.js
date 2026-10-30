@@ -34,6 +34,11 @@ function tplBaseDeployment(appName, appPort, persistentStorage = false) {
         ? `\n        - name: data\n          persistentVolumeClaim:\n            claimName: ${appName}-data`
         : `\n        - name: data\n          emptyDir: {}`;
     const dataEnv = `\n          env:\n            - name: DATA_DIR\n              value: /data`;
+    // Datadog unified service tagging: DD_* are read from the pod labels.
+    // tags.datadoghq.com/env and /version are set by the overlay kustomization.
+    const ddEnv = ['env', 'service', 'version'].map(t =>
+        `\n            - name: DD_${t.toUpperCase()}\n              valueFrom:\n                fieldRef:\n                  fieldPath: metadata.labels['tags.datadoghq.com/${t}']`
+    ).join('');
     return `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,6 +46,7 @@ metadata:
   namespace: ${appName}
   labels:
     app.kubernetes.io/name: ${appName}
+    tags.datadoghq.com/service: ${appName}
 spec:
   replicas: 1
   progressDeadlineSeconds: 600
@@ -56,12 +62,13 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: ${appName}
+        tags.datadoghq.com/service: ${appName}
     spec:
       containers:
         - name: ${appName}
           image: ${IMAGE_REGISTRY}/${appName}:latest
           ports:
-            - containerPort: ${appPort}${dataEnv}
+            - containerPort: ${appPort}${dataEnv}${ddEnv}
           resources:
             limits:
               cpu: 500m
@@ -224,10 +231,33 @@ labels:
       app.kubernetes.io/owner: ${teamOwner}
       cost-center: projet-epita
     includeSelectors: false
+  - pairs:
+      tags.datadoghq.com/env: ${env}
+    includeSelectors: false
+    includeTemplates: true
 
 images:
   - name: ${IMAGE_REGISTRY}/${appName}
     newTag: "placeholder"
+
+# DD_VERSION follows the deployed image tag (newTag is updated by the CI on each promotion).
+replacements:
+  - source:
+      kind: Deployment
+      name: ${appName}
+      fieldPath: spec.template.spec.containers.0.image
+      options:
+        delimiter: ":"
+        index: 1
+    targets:
+      - select:
+          kind: Deployment
+          name: ${appName}
+        fieldPaths:
+          - metadata.labels.[tags.datadoghq.com/version]
+          - spec.template.metadata.labels.[tags.datadoghq.com/version]
+        options:
+          create: true
 ${patch}`;
 }
 
@@ -248,9 +278,6 @@ metadata:
   name: ${appName}-${env}-config
 data:
   LOG_LEVEL: "INFO"
-  DD_ENV: "${env}"
-  DD_SERVICE: "${appName}"
-  DD_VERSION: "1.0.0"
 `;
 }
 
@@ -379,6 +406,14 @@ function tplCrossplaneV2Service(appName, appPort, persistentStorage = false) {
     const dataDir = persistentStorage
         ? `\n          env:\n            - name: DATA_DIR\n              value: /data`
         : `\n          env:\n            - name: DATA_DIR\n              value: /tmp`;
+    // Datadog unified service tagging (CNP-037). DD_VERSION starts at the image
+    // placeholder and is updated with the image tag by the CI on each promotion.
+    const observabilityEnv = [
+        ['LOG_LEVEL', 'INFO'],
+        ['DD_ENV', 'dev'],
+        ['DD_SERVICE', appName],
+        ['DD_VERSION', 'placeholder'],
+    ].map(([name, value]) => `\n            - name: ${name}\n              value: "${value}"`).join('');
 
     return `apiVersion: cloudrun.gcp.upbound.io/v1beta2
 kind: V2Service
@@ -395,7 +430,7 @@ spec:
       containers:
         - image: ${IMAGE_REGISTRY}/${appName}:placeholder
           ports:
-            containerPort: ${appPort}${dataDir}${volumeMount}
+            containerPort: ${appPort}${dataDir}${observabilityEnv}${volumeMount}
   providerConfigRef:
     name: default
 `;
@@ -1238,4 +1273,8 @@ async function healGcsBucket(appName) {
     }
 }
 
-module.exports = { onboardApp, offboardApp, healIngressHostname, healGcsBucket };
+module.exports = {
+    onboardApp, offboardApp, healIngressHostname, healGcsBucket,
+    // Exposed for tests only.
+    _templates: { tplBaseDeployment, tplOverlayKustomization, tplOverlayConfigMap, tplCrossplaneV2Service },
+};
