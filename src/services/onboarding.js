@@ -297,6 +297,9 @@ ${tlsBlock}  rules:
 const GCP_PROJECT = config.gcp.project;
 const GCP_REGION = config.gcp.region;
 const CLOUD_RUN_SA = config.gcp.cloudRunSa;
+// Bounded AppProject for <app>-cloudrun Applications (config-repo argocd/projects/team-cnp-cloudrun.yaml).
+// Never 'default': that project allows any repo, destination and resource kind.
+const CLOUDRUN_PROJECT = 'team-cnp-cloudrun';
 
 // The ApplicationSet that auto-discovers apps/*/crossplane dirs and creates
 // an ArgoCD Application for each. Applied idempotently at the start of every
@@ -316,7 +319,7 @@ const CLOUDRUN_AUTODISCOVERY_APPSET = {
         template: {
             metadata: { name: '{{path[1]}}-cloudrun' },
             spec: {
-                project: 'default',
+                project: CLOUDRUN_PROJECT,
                 source: {
                     repoURL: `https://github.com/${(config.github.configRepoName || 'Mooroon5-CNP/config-repo')}.git`,
                     targetRevision: 'main',
@@ -436,7 +439,7 @@ function tplCrossplaneArgocdApplication(appName, configRepoUrl) {
         kind: 'Application',
         metadata: { name: `${appName}-cloudrun`, namespace: 'argocd' },
         spec: {
-            project: 'default',
+            project: CLOUDRUN_PROJECT,
             source: {
                 repoURL: `${configRepoUrl}.git`,
                 targetRevision: 'main',
