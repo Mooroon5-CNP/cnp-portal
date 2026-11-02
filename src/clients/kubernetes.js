@@ -563,7 +563,14 @@ async function getIngressUrl(appName, env) {
 //   - patches argocd-cm to enable the account (accounts.<username>: login)
 //   - patches argocd-secret to store the bcrypt password hash
 // bcryptHash must already be a bcrypt string (e.g. from bcryptjs.hashSync).
+// Accounts the portal must never (re)write: admin is Argo CD's superuser, cnp-portal is the portal itself.
+// A developer whose GitHub login maps to one of these would otherwise take over its password.
+const RESERVED_ARGOCD_ACCOUNTS = new Set(['admin', 'cnp-portal']);
+
 async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false } = {}) {
+  if (!/^[a-z0-9-]{1,32}$/.test(username) || RESERVED_ARGOCD_ACCOUNTS.has(username)) {
+    throw new Error(`Nom de compte Argo CD refusé : ${username}`);
+  }
   const kc  = getKubeConfig();
   const api = kc.makeApiClient(k8s.CoreV1Api);
   const ns  = 'argocd';
