@@ -32,6 +32,11 @@ test('account provisioning sends both patches as merge-patch JSON through the re
   expect(sent[1].body.data['accounts.developer.password']).toBe(Buffer.from('test-bcrypt-hash').toString('base64'));
 });
 
+test.each(['admin', 'cnp-portal', 'dev.enabled', ''])('reserved or malformed account %p is refused before any patch', async name => {
+  await expect(provisionArgoCDLocalUser(name, 'test-bcrypt-hash')).rejects.toThrow('Nom de compte Argo CD refusé');
+  expect(request).not.toHaveBeenCalled();
+});
+
 test('live diagnostics send the same account patches in Kubernetes dry-run mode', async () => {
   await provisionArgoCDLocalUser('developer', 'test-bcrypt-hash', { dryRun: true });
   expect(request).toHaveBeenCalledTimes(2);
