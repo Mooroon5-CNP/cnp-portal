@@ -6,6 +6,7 @@ const client     = require('../clients/argocd');
 const k8sClient  = require('../clients/kubernetes');
 const accessReqModel = require('../models/argocd_access_request');
 const userModel  = require('../models/user');
+const deploymentModel = require('../models/deployment');
 
 // AES-256-GCM encryption for ArgoCD passwords stored in DB.
 // Key derived from SESSION_SECRET so no extra env var is needed.
@@ -55,7 +56,17 @@ async function listApps() {
   }
 }
 
+// Only Applications created for a registered deployment can be synced from the portal:
+// platform Applications (Crossplane, routing, ingress) stay out of reach.
+function isPortalManagedApp(appName) {
+  return deploymentModel.listForUser(null)
+    .some(row => ['cloudrun', 'dev', 'prod'].some(suffix => appName === `${row.app_name}-${suffix}`));
+}
+
 async function syncApp(appName) {
+  if (!isPortalManagedApp(appName)) {
+    throw new Error(`Application ${appName} non gérée par le portail : synchronisation refusée.`);
+  }
   return client.syncApplication(appName);
 }
 
