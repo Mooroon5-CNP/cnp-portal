@@ -320,6 +320,18 @@ async function reconcile(dep) {
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
       const files = manifests(dep, revision);
+      if (!azure.isAzure(dep)) {
+        // Operator-managed Secret Manager references survive image promotions.
+        const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
+        if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
+          || !item?.valueSource?.secretKeyRef?.secret || !item?.valueSource?.secretKeyRef?.version
+          || Object.keys(item).some(key => !['name', 'valueSource'].includes(key)))) throw new Error('Invalid runtime secret references.');
+        const claimPath = `${identity(dep).path}/cloudrun-claim.yaml`;
+        const claim = yaml.load(files[claimPath]);
+        const container = claim.spec.forProvider.template.containers[0];
+        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
+        files[claimPath] = yaml.dump(claim);
+      }
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
         releases.save(dep.id, revision, token, 'published');

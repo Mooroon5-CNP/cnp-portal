@@ -394,3 +394,17 @@ test.each(['removed-source', 'deleting-application', 'missing-published-applicat
   expect(deployments.get(dep.id).onboardingStatus).toBe('delete_failed');
   expect(published).toHaveLength(0);
 });
+
+test('image promotions retain operator-managed runtime secret references without secret values', async () => {
+  const refs = [{ name: 'SESSION_SECRET', valueSource: { secretKeyRef: { secret: 'portal-session', version: '1' } } }];
+  existing.set('config/apps/pixelcam/crossplane/dev/runtime-secrets.yaml', yaml.dump(refs));
+  await service.reconcile(dep);
+  const file = trees.flatMap(tree => tree.tree).find(item => item.path.endsWith('/cloudrun-claim.yaml'));
+  const claim = yaml.load(file.content);
+  expect(claim.spec.forProvider.template.containers[0].env).toEqual(expect.arrayContaining(refs));
+});
+test('runtime secret configuration rejects plaintext values before publication', async () => {
+  existing.set('config/apps/pixelcam/crossplane/dev/runtime-secrets.yaml', yaml.dump([{ name: 'SESSION_SECRET', value: 'plaintext-not-allowed' }]));
+  await expect(service.reconcile(dep)).rejects.toThrow('Invalid runtime secret references');
+  expect(published).toHaveLength(0);
+});
