@@ -135,7 +135,7 @@ test('production detail only renders manager approval controls for managers', as
     const manager = await request(app).get(`/deployments/${dep.id}`);
     expect(manager.status).toBe(200);
     expect(manager.text).toContain('Approuver la production');
-    expect(github.getRuns).toHaveBeenCalledWith('team', 'sample', 5, 'prod', 'cnp-sample-app.yml');
+    expect(github.getRuns).toHaveBeenCalledWith('team', 'sample', 20, 'prod', 'cnp-sample-app.yml');
     const dev = await request(app).get(`/deployments/${dep.id}`).set('X-role', 'dev');
     expect(dev.status).toBe(200);
     expect(dev.text).not.toContain('Approuver la production');
