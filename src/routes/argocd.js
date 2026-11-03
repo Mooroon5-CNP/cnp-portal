@@ -10,15 +10,15 @@ const { config }     = require('../config/env');
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 router.get('/', requireAuth, async (req, res) => {
-  // Managers see ALL pending requests (not filtered by team — any manager can approve)
+  // Only expose requests this reviewer may actually approve or reject.
   let accessRequests = [];
   if (can(req.user, 'argocd:access:approve')) {
-    accessRequests = argocdService.getAccessRequests();
+    accessRequests = argocdService.getAccessRequests(req.user.id);
   }
 
-  // Managers already have full access — don't show them the request workflow
-  const isManager = req.user.role === 'manager';
-  const myRequest = !isManager && can(req.user, 'argocd:access:request')
+  // Portal permissions do not imply a personal Argo CD account. Resolve the
+  // caller's request for managers too, so approved credentials are not hidden.
+  const myRequest = can(req.user, 'argocd:access:request')
     ? argocdService.getUserAccessRequest(req.user.id)
     : null;
 
@@ -62,7 +62,9 @@ router.post('/access-request', requireAuth, requirePermission('argocd:access:req
   const { appName, reason } = req.body;
   try {
     argocdService.requestAccess(req.user.id, appName, reason);
-    req.flash('success', 'Demande d\'accès ArgoCD envoyée. Votre manager doit l\'approuver — vous recevrez vos identifiants une fois la demande traitée.');
+    req.flash('success', req.user.role === 'manager'
+      ? 'Demande d’accès ArgoCD envoyée au compte administrateur local admin pour validation.'
+      : 'Demande d’accès ArgoCD envoyée à votre manager pour validation.');
     return res.redirect('/argocd');
   } catch (err) {
     if (err.message === 'ALREADY_APPROVED') {
@@ -81,6 +83,7 @@ router.post('/access-request/:id/approve', requireAuth, requirePermission('argoc
     await argocdService.approveAccess(req.params.id, req.user.id);
     req.flash('success', 'Accès ArgoCD approuvé et compte créé.');
   } catch (err) {
+    if (err.code === 'FORBIDDEN') return res.status(403).render('error', { title: 'Accès refusé', message: err.message, code: 403, user: req.user });
     req.flash('error', err.message);
   }
   res.redirect('/argocd');
@@ -105,6 +108,7 @@ router.post('/access-request/:id/reject', requireAuth, requirePermission('argocd
     argocdService.rejectAccess(req.params.id, req.user.id);
     req.flash('success', 'Demande refusée.');
   } catch (err) {
+    if (err.code === 'FORBIDDEN') return res.status(403).render('error', { title: 'Accès refusé', message: err.message, code: 403, user: req.user });
     req.flash('error', err.message);
   }
   res.redirect('/argocd');

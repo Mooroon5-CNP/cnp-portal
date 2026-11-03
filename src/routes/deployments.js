@@ -65,6 +65,20 @@ function canViewDeployment(user, dep) {
     return deploymentModel.listForUser(user).some(row => row.id === dep.id);
 }
 
+function startEnvironmentOnboarding(dep) {
+    Promise.resolve().then(() => environmentService.onboard(dep)).then(() => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') deploymentModel.updateOnboardingStatus(dep.id, 'ready');
+    }).catch(err => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+    });
+}
+
+function canRetryConfiguration(user, dep) {
+    return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
+        && !dep.onboardingError?.startsWith('Nettoyage partiel')
+        && (user.role === 'manager' || user.id === dep.ownerUserId);
+}
+
 async function environmentStatus(dep) {
     try {
         return await environmentService.reconcile(dep);
@@ -302,16 +316,19 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
-    environmentService.onboard(dep).then(() => {
-        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
-            deploymentModel.updateOnboardingStatus(dep.id, 'ready');
-        }
-    }).catch(err => {
-        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
-            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
-        }
-    });
+    startEnvironmentOnboarding(dep);
 
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// Retry only failed setup; never deploy, adopt or clean up resources via a GET.
+router.post('/:id/retry-configuration', requireAuth, requirePermission('deployments:deploy'), (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep) || !(req.user.role === 'manager' || req.user.id === dep.ownerUserId)) return res.status(403).send('Accès refusé.');
+    if (!canRetryConfiguration(req.user, dep)) return res.status(409).send('Seule une configuration en échec peut être relancée.');
+    deploymentModel.updateOnboardingStatus(dep.id, 'configuring');
+    startEnvironmentOnboarding({ ...dep, onboardingStatus: 'configuring', onboardingError: null });
     return res.redirect(`/deployments/${dep.id}`);
 });
 
@@ -541,6 +558,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        canRetryConfiguration: canRetryConfiguration(req.user, dep),
         environmentStatus: selectedStatus,
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.

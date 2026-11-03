@@ -29,6 +29,9 @@ function getKubeConfig() {
 }
 
 function handleError(err, context) {
+  if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(err.code)) {
+    throw new Error(`API Kubernetes injoignable (${context}) : délai réseau dépassé. Vérifiez KUBE_API_URL, le VPN/réseau et les IP autorisées du cluster. Le résultat de cette opération n’est pas confirmé.`);
+  }
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     throw new Error(`Kubernetes API unreachable at ${config.kubernetes.apiUrl}: ${err.message}`);
   }
@@ -308,6 +311,7 @@ async function deleteArgocdApplication(name) {
 async function getArgocdApplicationIfExists(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
   try {
     return (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
   } catch (err) {
@@ -575,6 +579,11 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
   const api = kc.makeApiClient(k8s.CoreV1Api);
   const ns  = 'argocd';
   const mergeHeader = { headers: { 'Content-Type': 'application/merge-patch+json' } };
+  // The installed SDK ignores extra fields in its options argument; set the
+  // transport timeout through its interceptor, so a late PATCH is not merely
+  // abandoned by a Promise.race while the network request keeps running.
+  api.addInterceptor(options => { options.timeout = 10000; });
+  let stage = 'argocd-cm';
 
   try {
     // 1. Enable the account in argocd-cm
@@ -586,6 +595,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
     );
 
     // 2. Store the bcrypt password hash in argocd-secret (value must be base64-encoded)
+    stage = 'argocd-secret';
     const hashB64 = Buffer.from(bcryptHash).toString('base64');
     await api.patchNamespacedSecret(
       'argocd-secret', ns,
@@ -594,7 +604,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
       mergeHeader,
     );
   } catch (err) {
-    handleError(err, `provisionArgoCDLocalUser(${username})`);
+    handleError(err, `provisionArgoCDLocalUser(${username}), étape ${stage}`);
   }
 }
 

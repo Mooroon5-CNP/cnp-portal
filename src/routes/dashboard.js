@@ -9,14 +9,19 @@ const argocdService = require('../services/argocd');
 const deploymentModel = require('../models/deployment');
 const teamService = require('../services/teams');
 const { config } = require('../config/env');
+const { readDashboardSources } = require('../services/dashboard-sources');
 
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const [pods, alerts, apps] = await Promise.all([
-      k8sService.listPods(),
-      datadogService.getAlerts(),
-      argocdService.listApps(),
-    ]);
+    const sources = await readDashboardSources({
+      Kubernetes: () => k8sService.listPods(),
+      Datadog: () => datadogService.getAlerts(),
+      'Argo CD': () => argocdService.listApps(),
+    });
+    const pods = sources.Kubernetes.data;
+    const alerts = sources.Datadog.data;
+    const apps = sources['Argo CD'].data;
+    const unavailableSources = Object.entries(sources).filter(([, value]) => !value.available).map(([name]) => name);
 
     // Get the teams the current user belongs to.
     const userTeams = teamService.getTeamsForUser(req.user.id);
@@ -51,11 +56,11 @@ router.get('/', requireAuth, async (req, res) => {
     const myApps = apps.filter(argoAppInScope);
 
     const stats = {
-      totalPods:    myPods.length,
-      runningPods:  myPods.filter(p => p.status === 'Running').length,
-      activeAlerts: alerts.filter(a => a.status === 'ALERT').length,
-      syncedApps:   myApps.filter(a => a.status === 'Synced').length,
-      totalApps:    myApps.length,
+      totalPods:    sources.Kubernetes.available ? myPods.length : null,
+      runningPods:  sources.Kubernetes.available ? myPods.filter(p => p.status === 'Running').length : null,
+      activeAlerts: sources.Datadog.available ? alerts.filter(a => a.status === 'ALERT').length : null,
+      syncedApps:   sources['Argo CD'].available ? myApps.filter(a => a.status === 'Synced').length : null,
+      totalApps:    sources['Argo CD'].available ? myApps.length : null,
     };
 
     // Build per-app summary for the "Mes Applications" panel.
@@ -77,6 +82,7 @@ router.get('/', requireAuth, async (req, res) => {
       title: 'Dashboard — CNP Portal',
       currentPage: 'dashboard',
       stats,
+      unavailableSources,
       recentAlerts: alerts.filter(a => a.status !== 'OK').slice(0, 3),
       myAppsList,
       user: req.user,
@@ -86,7 +92,8 @@ router.get('/', requireAuth, async (req, res) => {
     res.render('dashboard', {
       title: 'Dashboard — CNP Portal',
       currentPage: 'dashboard',
-      stats: { totalPods: 0, runningPods: 0, activeAlerts: 0, syncedApps: 0, totalApps: 0 },
+      stats: { totalPods: null, runningPods: null, activeAlerts: null, syncedApps: null, totalApps: null },
+      unavailableSources: ['Kubernetes', 'Datadog', 'Argo CD'],
       recentAlerts: [],
       myAppsList: [],
       user: req.user,

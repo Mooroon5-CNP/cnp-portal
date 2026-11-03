@@ -7,11 +7,12 @@ const k8sClient  = require('../clients/kubernetes');
 const accessReqModel = require('../models/argocd_access_request');
 const userModel  = require('../models/user');
 const deploymentModel = require('../models/deployment');
+const { canReviewAccess, assertCanReviewAccess } = require('./argocd-access-policy');
 
 // AES-256-GCM encryption for ArgoCD passwords stored in DB.
 // Key derived from SESSION_SECRET so no extra env var is needed.
 const _encKey = crypto.createHash('sha256')
-  .update(process.env.SESSION_SECRET || 'dev-fallback-key-change-in-prod')
+  .update(require('../config/session').sessionSecret)
   .digest();
 
 function _encrypt(plain) {
@@ -86,8 +87,9 @@ function requestAccess(userId, appName, reason) {
   return accessReqModel.create({ userId, appName, reason });
 }
 
-function getAccessRequests() {
-  return accessReqModel.listPending();
+function getAccessRequests(reviewerId) {
+  const reviewer = userModel.findById(reviewerId);
+  return accessReqModel.listPending().filter(request => canReviewAccess(reviewer, userModel.findById(request.userId)));
 }
 
 function getUserAccessRequest(userId) {
@@ -110,6 +112,7 @@ async function approveAccess(requestId, reviewerId) {
 
   const user = userModel.findById(req.userId);
   if (!user) throw new Error('Utilisateur introuvable.');
+  assertCanReviewAccess(userModel.findById(reviewerId), user);
 
   // If the user already has an approved account, reuse its credentials.
   const existing = accessReqModel.getApprovedForUser(req.userId);
@@ -151,6 +154,7 @@ function rejectAccess(requestId, reviewerId) {
   const req = accessReqModel.getById(requestId);
   if (!req) throw new Error('Demande introuvable.');
   if (req.status !== 'pending') throw new Error('Cette demande a déjà été traitée.');
+  assertCanReviewAccess(userModel.findById(reviewerId), userModel.findById(req.userId));
   return accessReqModel.reject(requestId, reviewerId);
 }
 

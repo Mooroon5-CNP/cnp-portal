@@ -145,7 +145,7 @@ async function prepareOnboarding(dep) {
     const registeredKey = `${repository.owner}/${repository.repo}`.toLowerCase();
     return (app.app_name !== dep.appName && registeredKey === key) || (app.app_name === dep.appName && registeredKey !== key);
   });
-  if (conflict) throw new Error(`Ce dépôt ou nom d'application est déjà enregistré : ${conflict.app_name}.`);
+  if (conflict) throw new Error(`Ce dépôt ou nom d'application est déjà enregistré : ${conflict.app_name}, dans ${config.github.configRepoName}/apps/registry.yaml. Ce contrôle précède le lancement du pipeline. Le registre GitOps peut contenir des entrées absentes de la base locale du portail ; un administrateur doit vérifier l’entrée existante avant toute réutilisation ou correction.`);
   // Réutiliser les projets et scanners canoniques ; aucun second propriétaire Argo.
   let project;
   try { project = await argo.getProject(`team-cnp-${dep.environment}`); }
@@ -168,10 +168,9 @@ async function prepareOnboarding(dep) {
         throw new Error('Des manifests historiques existent à la racine. Leur adoption doit être validée par un opérateur.');
       }
     } catch (err) { if (err.status !== 404) throw err; }
-    // Azure : par l'API Kubernetes (l'API Argo CD répond 403 au compte du portail pour une application absente).
-    const legacyApplication = azure.isAzure(dep)
-      ? await kubernetes.getArgocdApplicationIfExists(`${dep.appName}-cloudrun`)
-      : await argo.getApplicationIfExists(`${dep.appName}-cloudrun`);
+    // Kubernetes distinguishes absence (404) from forbidden (403). The scoped
+    // Argo CD API can return 403 for absent applications, on GCP as on Azure.
+    const legacyApplication = await kubernetes.getArgocdApplicationIfExists(`${dep.appName}-cloudrun`);
     if (legacyApplication) {
       throw new Error('Une application historique existe sans son manifeste racine. Restaurez sa configuration avant de créer un environnement.');
     }

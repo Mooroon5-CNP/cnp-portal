@@ -4,7 +4,8 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
-const { marked } = require('marked');
+const { renderMarkdown } = require('../services/documentation-markdown');
+const { resolveDocument } = require('../services/documentation-path');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission, can } = require('../middleware/rbac');
 
@@ -57,15 +58,15 @@ router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
 });
 
 router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
-  const requestedPath = req.params[0];
-
-  // Prevent path traversal
-  const resolved = path.resolve(DOCS_DIR, requestedPath);
-  if (!resolved.startsWith(DOCS_DIR) || !resolved.endsWith('.md')) {
-    return res.status(400).render('error', { title: 'Fichier invalide', message: 'Fichier non autorisé.', code: 400, user: req.user });
+  // Markdown may contain HTML; prevent it from running scripts or submitting forms.
+  res.setHeader('Content-Security-Policy', "script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  let document;
+  try { document = resolveDocument(DOCS_DIR, req.params[0]); }
+  catch (_) {
+    return res.status(404).render('error', { title: 'Fichier introuvable', message: 'Fichier non autorisé ou introuvable.', code: 404, user: req.user });
   }
-
-  // Gate devops-only files
+  const { resolved, relative: requestedPath } = document;
+  // Check the canonical path, so ./devops and public/../devops cannot bypass roles.
   if (isDevopsFile(requestedPath) && !canSeeDevopsFiles(req.user)) {
     return res.status(403).render('error', { title: 'Accès refusé', message: 'Ce document est réservé aux DevOps.', code: 403, user: req.user });
   }
@@ -78,7 +79,7 @@ router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
   let content = null;
   try {
     const raw = fs.readFileSync(resolved, 'utf8');
-    content = marked(raw);
+    content = renderMarkdown(raw);
   } catch (_) {
     return res.status(404).render('error', { title: 'Fichier introuvable', message: 'Ce fichier de documentation n\'existe pas.', code: 404, user: req.user });
   }

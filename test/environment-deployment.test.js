@@ -6,7 +6,7 @@ jest.mock('../src/config/env', () => ({ config: {
 } }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), getRef: jest.fn(), createBranch: jest.fn(),
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -59,7 +59,7 @@ beforeEach(() => {
   github.getRef.mockImplementation(async (_owner, repo) => repo === 'pixelcalm' ? sourceHead : 'config-head');
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: null, url: null });
   argo.getProject.mockImplementation(async name => ({ metadata: { name } }));
-  argo.getApplicationIfExists.mockResolvedValue(null);
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue(null);
   argo.deleteApplication.mockResolvedValue();
 });
 
@@ -167,7 +167,8 @@ test('setup preserves custom CI files and rejects another app registered against
   expect(trees.every(tree => !tree.tree.some(file => file.path === '.github/workflows/ci.yml'))).toBe(true);
   existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'other-name', repo_url: dep.githubRepoUrl }] }));
   published.length = 0;
-  await expect(service.onboard(dep)).rejects.toThrow('déjà enregistré'); expect(published).toHaveLength(0);
+  await expect(service.onboard(dep)).rejects.toThrow('other-name, dans team/config/apps/registry.yaml');
+  expect(published).toHaveLength(0);
 });
 
 test('deletion closes pending candidates and only removes the selected environment', async () => {
@@ -247,7 +248,7 @@ test('missing environment project or orphaned legacy application prevents setup 
   argo.getProject.mockRejectedValueOnce(new Error('Project missing'));
   await expect(service.onboard(dep)).rejects.toThrow('argocd/projects/team-cnp-dev.yaml');
   expect(published).toHaveLength(0); expect(github.setRepoSecret).not.toHaveBeenCalled();
-  argo.getApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-cloudrun' } });
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-cloudrun' } });
   await expect(service.onboard(dep)).rejects.toThrow('application historique');
   expect(published).toHaveLength(0);
 });
@@ -319,4 +320,17 @@ test('a ready runtime stays deploying while friendly routing is unavailable and 
   production(); db.prepare("DELETE FROM deployment_releases WHERE revision != ?").run("__registration__"); routing.sync.mockClear();
   expect((await service.reconcile(dep)).phase).toBe('approval');
   expect(routing.sync).not.toHaveBeenCalled();
+});
+
+test('GCP checks legacy existence through Kubernetes when the Argo API would return 403', async () => {
+  argo.getApplicationIfExists.mockRejectedValue(new Error('ArgoCD API error (403): permission denied'));
+  await service.onboard(dep);
+  expect(kubernetes.getArgocdApplicationIfExists).toHaveBeenCalledWith('pixelcam-cloudrun');
+  expect(argo.getApplicationIfExists).not.toHaveBeenCalled();
+});
+test('Kubernetes permission failures remain blocking before any source or GitOps write', async () => {
+  kubernetes.getArgocdApplicationIfExists.mockRejectedValueOnce(new Error('Kubernetes forbidden'));
+  await expect(service.onboard(dep)).rejects.toThrow('Kubernetes forbidden');
+  expect(github.setRepoSecret).not.toHaveBeenCalled();
+  expect(published).toHaveLength(0);
 });

@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
+const { requireRole } = require('../middleware/rbac');
 const userStore = require('../models/user');
 
 const VALID_ROLES = ['manager', 'devops', 'dev'];
@@ -15,7 +16,7 @@ router.get('/', requireAuth, (req, res) => {
   });
 });
 
-router.post('/role', requireAuth, (req, res) => {
+router.post('/role', requireAuth, requireRole('manager'), (req, res) => {
   const { role } = req.body;
   if (!VALID_ROLES.includes(role)) {
     req.flash('error', 'Rôle invalide.');

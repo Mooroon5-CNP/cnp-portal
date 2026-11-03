@@ -18,7 +18,7 @@ jest.mock('../src/services/github', () => ({
   createOrUpdateFileWithToken: jest.fn().mockResolvedValue({}),
   deleteFileWithToken: jest.fn().mockResolvedValue({}),
 }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn().mockResolvedValue({}), deleteNamespace: jest.fn(), deleteApplicationSet: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn().mockResolvedValue({}), deleteApplicationSet: jest.fn(), deleteNamespace: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), deleteApplicationSet: jest.fn() }));
 
 const { config, getMissingAzureVars } = require('../src/config/env');

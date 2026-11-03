@@ -220,4 +220,57 @@ Références : [comptes locaux Argo CD](https://argo-cd.readthedocs.io/en/stable
 [RBAC Argo CD](https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/),
 [tokens Kubernetes](https://kubernetes.io/docs/reference/access-authn-authz/service-accounts-admin/).
 
+## Création de compte Argo CD bloquée : connect ETIMEDOUT
 
+Une erreur `connect ETIMEDOUT <endpoint>:443` signifie que la connexion TCP à
+l’API Kubernetes n’a pas abouti. Elle ne prouve pas un mauvais token, un refus RBAC
+ou un échec de mot de passe Argo CD : ces contrôles viennent après la connexion.
+Vérifier depuis la machine du portail l’endpoint actuel du cluster, le réseau/VPN
+et les réseaux/IP autorisés du control plane. Ne pas désactiver TLS pour ce cas.
+
+Le 2 novembre, la configuration locale pointait vers `34.163.195.132:443`, sans
+`.env.cloud`, et la demande observée restait pending sans identifiants enregistrés.
+L’endpoint actuel n’a pas pu être confirmé depuis le sandbox : pas de contexte
+kubectl ni de gcloud, et accès réseau interdit. Aucune création réelle n’a été
+réessayée par l’agent.
+
+La création active le compte dans argocd-cm, puis écrit le hash dans argocd-secret.
+Ces deux PATCH utilisent désormais un timeout transport de 10 secondes chacun via
+l’intercepteur du SDK installé. Le message indique l’étape en échec. Une expiration
+après une écriture peut laisser un état partiel : le résultat côté cluster reste
+à vérifier, et le portail ne marque pas la demande approuvée. Aucun secret/hash
+n’est ajouté aux diagnostics. Les 13 tests ciblés Argo/SDK passent, y compris les
+timeouts simulés aux deux étapes et le maintien en pending après échec.
+
+## Import depuis un cluster GKE déjà sélectionné
+
+Si le state Terraform n’est pas disponible localement mais que le cluster contient
+le Secret `cnp-portal/cnp-portal-cloud-env`, importer ce contrat directement :
+
+```bash
+npm run cloud:import:kube -- \
+  --context gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform \
+  --project cnp-terraform-512313
+npm run dev:integration
+```
+
+Le contexte sélectionné doit déjà exister (`gcloud container clusters get-credentials`).
+L’import lit seulement la configuration du contexte et ce Secret nommé ; il ne crée
+ni token, ni ressource, ni compte. Il valide projet et endpoint, refuse une
+configuration incomplète, puis écrit `.env.cloud` atomiquement en mode 0600. Il ne
+réutilise pas le token d’un ancien cluster et n’importe aucun identifiant gcloud
+personnel dans le portail. Les clés applicatives GitHub/OpenAI et SESSION_SECRET
+restent dans `.env`. Les lectures et sous-processus ont un délai maximal explicite.
+
+Constat du 2 novembre : le contexte GKE `cnp-terraform-512313` indique
+`https://34.155.205.12`, alors que le `.env` local indiquait
+`https://34.163.195.132` et `cnp-terraform-500015-508716`, sans `.env.cloud`.
+La récupération réelle du contrat est bloquée dans le sandbox (`socket: operation
+not permitted`). Aucun paramètre partiel n’a été écrit : exécuter l’import dans
+le terminal qui dispose de l’accès au cluster. Les 12 tests ciblés d’import et
+SDK passent ; cela ne prouve pas l’existence/validité du Secret du cluster réel.
+
+Une mise à jour de branche ne modifie pas `.env`/`.env.cloud` (fichiers privés).
+Le main GitHub revérifié est `ddcfa0d` (six commits après `f1c78d1`) ; la récupération
+Git est bloquée par le DNS de ce sandbox. Cette observation ne constitue pas une
+fusion de ces six commits dans la branche locale d’intégration.

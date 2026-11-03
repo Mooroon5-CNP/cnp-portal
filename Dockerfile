@@ -1,4 +1,4 @@
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 # hadolint ignore=DL3018
@@ -8,10 +8,10 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ build-base linux-h
   && apk del .build-deps \
   && npm cache clean --force
 
-FROM node:20-alpine AS final
+FROM node:24-alpine AS final
 WORKDIR /app
 
-# npm/yarn/corepack come with node:20-alpine but are never used at runtime
+# npm/yarn/corepack come with node:24-alpine but are never used at runtime
 # (tini starts node directly). They are removed because the npm bundled in
 # the base image carries a vulnerable tar (CVE-2026-59873, CRITICAL) that
 # fails the pipeline's scan-image job. See DEVELOPER_GUIDE.md §2.
@@ -22,6 +22,8 @@ RUN apk add --no-cache tini \
             /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node apps/ ./apps/
+COPY --chown=node:node packages/ ./packages/
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
 COPY --chown=node:node documentation/ ./documentation/

@@ -68,6 +68,14 @@ test('the form exposes dev/main and prod/approval choices', async () => {
     expect(response.text).toContain('.dev.apps.mooroon5.fr');
 });
 
+test('MCP links retain the selected deployment environment', async () => {
+    create('dev'); create('prod');
+    const response = await request(app).get('/deployments');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('/mcp-chat?applicationId=sample-app&amp;environment=dev');
+    expect(response.text).toContain('/mcp-chat?applicationId=sample-app&amp;environment=prod');
+});
+
 test('environment addresses never advertise DNS readiness from runtime readiness alone', async () => {
     const dep = create('prod');
     service.reconcile.mockResolvedValue({ phase: 'success', revision, cloudRunUrl: 'https://sample-app-prod.run.app', applicationUrl: 'https://sample-app.apps.mooroon5.fr' });
