@@ -29,7 +29,7 @@
                         <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
                       </form>
                     <% } else { %>
-                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'">Supprimer</button>
+                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'"><%= deployment.onboardingStatus === 'delete_failed' ? 'Réessayer la suppression' : 'Supprimer' %></button>
                     <% } %>
                   <% } else if (can('deployments:delete:request')) { %>
                     <% if (pendingDeletion) { %>
@@ -85,6 +85,21 @@
                   </div>
                 </div>
                 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+              <% } else if (deployment.onboardingStatus === 'delete_failed') { %>
+                <div class="card" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Suppression incomplète</span><span class="badge badge-danger">Action requise</span></div>
+                  <div class="card-body">
+                    <p>Le nettoyage a échoué. Le déploiement reste enregistré pour permettre de reprendre l’opération.</p>
+                    <div class="flash flash-error"><%= deployment.onboardingError %></div>
+                    <% if (can('deployments:delete')) { %>
+                      <p>Utilisez « Réessayer la suppression » en haut de page, ou reprenez le déploiement si sa configuration est encore présente et qu’aucune suppression de ressource n’a commencé.</p>
+                      <form action="/deployments/<%= deployment.id %>/resume-deployment" method="POST" style="margin-top:12px;">
+                        <button type="submit" class="btn btn-secondary">Reprendre le suivi CI</button>
+                      </form>
+                    <% } %>
+                  </div>
+                </div>
 
               <!-- ── Onboarding: failed (setup error) ───────────────────── -->
               <% } else if (deployment.onboardingStatus === 'failed' && !latest) { %>

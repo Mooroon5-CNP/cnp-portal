@@ -328,6 +328,7 @@ const ARGO_RESOURCES_FINALIZER = 'resources-finalizer.argocd.argoproj.io';
 async function cascadeDeleteArgocdApplication(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
   const is404 = err => err.response?.statusCode === 404 || err.statusCode === 404;
   try {
     let current;
@@ -341,7 +342,8 @@ async function cascadeDeleteArgocdApplication(name) {
     if (!finalizers.includes(ARGO_RESOURCES_FINALIZER)) {
       await customApi.patchNamespacedCustomObject(
         'argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
-        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER] } },
+        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER],
+          ...(current.metadata?.resourceVersion ? { resourceVersion: current.metadata.resourceVersion } : {}) } },
         undefined, undefined, undefined,
         { headers: { 'Content-Type': 'application/merge-patch+json' } },
       );

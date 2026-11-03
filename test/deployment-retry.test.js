@@ -1,6 +1,6 @@
 'use strict';
 
-jest.mock('../src/services/environment-deployment', () => ({ onboard: jest.fn(), workflowName: name => `cnp-${name}.yml` }));
+jest.mock('../src/services/environment-deployment', () => ({ onboard: jest.fn(), remove: jest.fn(), resumeAfterCleanupFailure: jest.fn(), workflowName: name => `cnp-${name}.yml` }));
 const app = require('../src/index');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
@@ -14,6 +14,8 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   service.onboard.mockReset();
+  service.remove.mockReset();
+  service.resumeAfterCleanupFailure.mockReset();
   db.prepare('DELETE FROM deployment_team_access').run();
   db.prepare('DELETE FROM deployments').run();
 });
@@ -60,4 +62,29 @@ test('failed retry retains the new error rather than claiming successful setup',
   await request(app, { method: 'POST', url: `/deployments/${dep.id}/retry-configuration`, headers: { cookie: auth } });
   await new Promise(resolve => setImmediate(resolve));
   expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'failed', onboardingError: 'Kubernetes forbidden' });
+});
+
+test('partial cleanup retains the record and a second deletion can succeed', async () => {
+  const dep = deployment('ready', null);
+  service.remove.mockRejectedValueOnce(new Error('Kubernetes timeout')).mockResolvedValueOnce();
+  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
+  expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed', onboardingError: 'Nettoyage partiel : Kubernetes timeout' });
+  const status = await request(app, { url: `/deployments/${dep.id}/status`, headers: { cookie: auth } });
+  expect(status.text).toContain('delete_failed');
+  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
+  expect(service.remove).toHaveBeenCalledTimes(2);
+  expect(deployments.get(dep.id)).toBeNull();
+});
+test('legacy cleanup failures expose the recovery status and explicit resume route', async () => {
+  const dep = deployment('failed', 'Nettoyage partiel : ArgoCD 415');
+  expect(deployments.get(dep.id).onboardingStatus).toBe('delete_failed');
+  const response = await request(app, { method: 'POST', url: `/deployments/${dep.id}/resume-deployment`, headers: { cookie: auth } });
+  expect(response.status).toBe(302);
+  expect(service.resumeAfterCleanupFailure).toHaveBeenCalledWith(expect.objectContaining({ id: dep.id, onboardingStatus: 'delete_failed' }));
+});
+test('concurrent deletion is rejected without starting another cleanup', async () => {
+  const dep = deployment('deleting', null);
+  const response = await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
+  expect(response.status).toBe(409);
+  expect(service.remove).not.toHaveBeenCalled();
 });

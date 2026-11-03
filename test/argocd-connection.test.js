@@ -62,3 +62,10 @@ test('persistent 401 stops after one renewal', async () => {
   await expect(client.listApplications()).rejects.toThrow('authentication failed');
   expect(adapter).toHaveBeenCalledTimes(4);
 });
+
+test('legacy Argo REST deletion explicitly sends JSON content type', async () => {
+  await client.deleteApplication('test-dev');
+  const call = adapter.mock.calls.map(([request]) => request).find(request => request.method === 'delete');
+  expect(call.headers['Content-Type']).toBe('application/json');
+  expect(call.params).toMatchObject({ cascade: true, propagationPolicy: 'foreground' });
+});

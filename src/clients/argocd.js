@@ -145,6 +145,7 @@ async function deleteApplication(name, { cascade = true } = {}) {
   const client = await makeClient();
   try {
     await client.delete(`/applications/${encodeURIComponent(name)}`, {
+      headers: { 'Content-Type': 'application/json' },
       params: { cascade, propagationPolicy: 'foreground' },
     });
   } catch (err) {

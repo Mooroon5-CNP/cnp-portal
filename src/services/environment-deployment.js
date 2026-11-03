@@ -1,6 +1,7 @@
 'use strict';
 
 const yaml = require('js-yaml');
+const { selectWorkflowRun } = require('./workflow-runs');
 const { createHash } = require('crypto');
 const { config } = require('../config/env');
 const github = require('../clients/github');
@@ -240,12 +241,10 @@ function onboard(dep) {
 async function latest(api, dep) {
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
   const { data } = await api.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
-    ...source, workflow_id: workflowName(dep.appName), branch: branches[dep.environment], per_page: 1,
+    ...source, workflow_id: workflowName(dep.appName), branch: branches[dep.environment], per_page: 20,
   });
-  const run = data.workflow_runs?.[0];
-  if (!run || run.head_branch !== branches[dep.environment]) return null;
-  if (dep.createdAt && run.created_at && new Date(run.created_at) < new Date(dep.createdAt)) return null;
-  return run;
+  const revision = await github.getRef(source.owner, source.repo, branches[dep.environment]);
+  return selectWorkflowRun(data.workflow_runs || [], { branch: branches[dep.environment], revision, notBefore: dep.createdAt });
 }
 
 async function sourceIsCurrent(dep, revision) {
@@ -396,20 +395,25 @@ async function remove(dep) {
   }
   const { path, name } = identity(dep);
   const onAzure = azure.isAzure(dep);
-  // Le routage (NEG, backend, URL map) est propre au load balancer GCP : Azure n'en a pas.
-  if (!onAzure) {
-    await routing.sync(dep, { api, repo: target(), commitFiles }, true);
-    if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
-  }
   const files = {};
   const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml'];
   for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
-  // La cascade explicite pose le finalizer AVANT que le scanner dev ne retire
-  // l'Application avec preserveResourcesOnDeletion=true. Sans cet ordre, les CR
-  // cloud pourraient rester orphelines après la disparition du dossier GitOps.
-  if (!onAzure) await argo.deleteApplication(name, { cascade: true });
+  if (!onAzure) {
+    const application = await kubernetes.getArgocdApplicationIfExists(name);
+    const hasRuntime = Object.keys(files).length > 0 || application
+      || releases.list(dep.id).some(release => release.state === 'published');
+    // A failed CI may never have published any resource or route. In that case
+    // remove only its registration; do not wait on a route that was never created.
+    if (hasRuntime) {
+      await routing.sync(dep, { api, repo: target(), commitFiles }, true);
+      if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
+      // Preserve the existing GCP cascade-before-source-removal ordering, using
+      // the scoped Kubernetes client already used for Azure (no Argo REST 415/403).
+      await kubernetes.cascadeDeleteArgocdApplication(name);
+    }
+  }
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
   await commitFiles(api, target(), async head => {
     const result = { ...files };
@@ -434,6 +438,28 @@ async function remove(dep) {
     await azure.confirmTeardown(dep);
   }
   // Secrets et workflow restent partagés avec l'autre environnement.
+}
+
+async function resumeAfterCleanupFailure(dep) {
+  if (deployments.get(dep.id)?.onboardingStatus !== 'delete_failed') throw new Error('Aucune suppression en échec à reprendre.');
+  if (releases.get(dep.id, '__registration__')?.state !== 'registered') throw new Error('Configuration incomplète : terminez la suppression avant de recréer le déploiement.');
+  const api = await github.getInstallationOctokit();
+  const registry = yaml.load(await readFile(api, target(), 'apps/registry.yaml') || 'apps: []');
+  const source = repositories.parseRepoUrl(dep.githubRepoUrl);
+  const entry = registry.apps?.find(app => {
+    const repo = repositories.parseRepoUrl(app.repo_url || '');
+    return app.app_name === dep.appName && repo && source && `${repo.owner}/${repo.repo}`.toLowerCase() === `${source.owner}/${source.repo}`.toLowerCase()
+      && app.environments?.includes(dep.environment);
+  });
+  if (!entry) throw new Error('La configuration GitOps a déjà été retirée. Terminez la suppression avant de redéployer.');
+  const application = await kubernetes.getArgocdApplicationIfExists(identity(dep).name);
+  if (application?.metadata?.deletionTimestamp) throw new Error('La suppression des ressources a déjà commencé. Terminez-la avant de redéployer.');
+  const published = releases.list(dep.id).some(release => release.state === 'published');
+  if (published && (!application || !(await readFile(api, target(), `${identity(dep).path}/kustomization.yaml`)))) {
+    throw new Error('Les ressources publiées ont commencé à disparaître. Terminez la suppression avant de redéployer.');
+  }
+  if (deployments.get(dep.id)?.onboardingStatus !== 'delete_failed') throw new Error('Le déploiement a changé. Réessayez.');
+  deployments.updateOnboardingStatus(dep.id, 'ready');
 }
 
 function startReconciler() {
@@ -464,4 +490,4 @@ function startReconciler() {
   return timer;
 }
 
-module.exports = { validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, startReconciler, commitFiles };
+module.exports = { validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };

@@ -206,7 +206,7 @@ test('failed cleanup retains the record so deletion can be retried', async () =>
     const dep = create('dev');
     service.remove.mockRejectedValueOnce(new Error('Provider unavailable'));
     await request(app).post(`/deployments/${dep.id}/delete`);
-    expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'failed' });
+    expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed' });
 });
 
 test.each(['success', 'failure'])('late setup %s cannot overwrite an in-progress deletion', async outcome => {
