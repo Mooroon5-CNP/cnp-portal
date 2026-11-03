@@ -33,6 +33,11 @@ db.exec(`
 
 // Migrations: add columns introduced after initial schema
 const cols = db.pragma('table_info(users)').map(c => c.name);
+if (!cols.includes('gitlab_id')) {
+  db.exec('ALTER TABLE users ADD COLUMN gitlab_id INTEGER');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_gitlab_id ON users(gitlab_id) WHERE gitlab_id IS NOT NULL');
+}
+
 if (!cols.includes('github_id')) {
   db.exec('ALTER TABLE users ADD COLUMN github_id INTEGER');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id) WHERE github_id IS NOT NULL');
@@ -42,15 +47,24 @@ if (!cols.includes('approved')) {
   db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1');
 }
 
-// Seed default admin (local login) — always active and approved
-const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
-if (!adminExists) {
-  const hash = bcrypt.hashSync('admin', 10);
+// Bootstrap explicitly; never create or retain the public admin/admin credential.
+const adminExists = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get('admin');
+const defaultPassword = adminExists?.password_hash && bcrypt.compareSync('admin', adminExists.password_hash);
+if (!adminExists || defaultPassword) {
+  const password = process.env.ADMIN_INITIAL_PASSWORD;
+  if (!password || password.length < 16 || Buffer.byteLength(password) > 72) {
+    throw new Error('Set ADMIN_INITIAL_PASSWORD (16–72 bytes) to bootstrap admin or replace the unsafe default password.');
+  }
+  const hash = bcrypt.hashSync(password, 12);
   const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
-    VALUES (?, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
-  `).run(uuidv4(), hash, now, now);
+  if (adminExists) {
+    db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(hash, now, adminExists.id);
+  } else {
+    db.prepare(`
+      INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
+      VALUES (?, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
+    `).run(uuidv4(), hash, now, now);
+  }
 }
 
 module.exports = db;

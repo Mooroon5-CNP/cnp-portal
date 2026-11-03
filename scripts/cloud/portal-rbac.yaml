@@ -27,14 +27,17 @@ rules:
   - apiGroups: ['']
     resources: [configmaps]
     resourceNames: [argocd-cm]
-    verbs: [get, patch]
+    verbs: [patch]
   - apiGroups: ['']
     resources: [secrets]
     resourceNames: [argocd-secret]
-    verbs: [get, patch]
+    verbs: [patch]
   - apiGroups: [argoproj.io]
-    resources: [applicationsets, applications]
-    verbs: [get, list, create, update, patch, delete]
+    resources: [applicationsets]
+    verbs: [get, create, update, delete]
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

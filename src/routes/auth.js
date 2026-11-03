@@ -6,6 +6,19 @@ const bcrypt = require('bcryptjs');
 const router = express.Router();
 const userStore = require('../models/user');
 const tokenStore = require('../models/tokenStore');
+const { createLoginLimiter } = require('../middleware/login-limit');
+
+function renewSession(req, user) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate(error => {
+      if (error) return reject(error);
+      req.session.userId = user.id;
+      req.session.role = user.role;
+      req.session.username = user.username;
+      req.session.save(error => error ? reject(error) : resolve());
+    });
+  });
+}
 
 const GITHUB_AUTH_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
@@ -16,9 +29,10 @@ router.get('/login', (req, res) => {
   res.render('login', { title: 'Connexion — CNP Portal', user: null });
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', createLoginLimiter(), async (req, res, next) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password
+    || username.length > 200 || Buffer.byteLength(password) > 72) {
     req.flash('error', 'Identifiant et mot de passe requis.');
     return res.redirect('/auth/login');
   }
@@ -36,10 +50,10 @@ router.post('/login', async (req, res) => {
     req.flash('error', 'Identifiant ou mot de passe incorrect.');
     return res.redirect('/auth/login');
   }
-  req.session.userId = user.id;
-  req.session.role = user.role;
-  req.session.username = user.username;
-  res.redirect('/');
+  try {
+    await renewSession(req, user);
+    res.redirect('/');
+  } catch (error) { next(error); }
 });
 
 router.get('/github', (req, res) => {
@@ -100,9 +114,7 @@ router.get('/github/callback', async (req, res) => {
 
     tokenStore.set(user.id, { accessToken: access_token, refreshToken: null, expiresAt: null });
 
-    req.session.userId = user.id;
-    req.session.role = user.role;
-    req.session.username = user.username;
+    await renewSession(req, user);
 
     res.redirect('/');
   } catch (err) {
@@ -119,12 +131,6 @@ router.post('/logout', (req, res) => {
   });
 });
 
-router.get('/logout', (req, res) => {
-  const userId = req.session && req.session.userId;
-  if (userId) tokenStore.remove(userId);
-  req.session.destroy(() => {
-    res.redirect('/auth/login');
-  });
-});
+router.get('/logout', (_req, res) => res.status(405).set('Allow', 'POST').send('Use POST to log out.'));
 
 module.exports = router;

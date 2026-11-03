@@ -96,7 +96,8 @@ function _rowToObj(row) {
         configRepoToken: row.config_repo_token ? decryptToken(row.config_repo_token) : null,
         ownerUserId: row.owner_user_id,
         ownerTeamId: row.owner_team_id || null,
-        onboardingStatus: row.onboarding_status || 'configuring',
+        onboardingStatus: row.onboarding_status === 'failed' && row.onboarding_error?.startsWith('Nettoyage partiel')
+            ? 'delete_failed' : row.onboarding_status || 'configuring',
         onboardingError: row.onboarding_error || null,
         persistentStorage: !!row.persistent_storage,
         targetCluster: row.target_cluster || 'gcp',

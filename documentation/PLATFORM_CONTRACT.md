@@ -124,7 +124,7 @@ Flux :
 
 L'accès à l'interface ArgoCD est sur demande :
 1. L'utilisateur fait une demande depuis le Portal (section ArgoCD)
-2. Un manager approuve
+2. Un manager distinct du demandeur approuve. Pour un demandeur de rôle `manager`, seul le compte local `admin` peut approuver ou refuser. Aucune auto-approbation n’est autorisée, y compris par appel direct au serveur.
 3. Un compte local ArgoCD est créé automatiquement et les identifiants sont affichés dans le Portal
 4. L'utilisateur peut régénérer ses identifiants depuis le Portal à tout moment
 

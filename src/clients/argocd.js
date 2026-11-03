@@ -7,6 +7,9 @@ const { config } = require('../config/env');
 let sessionPromise;
 
 async function makeClient() {
+  if (process.env.NODE_ENV === 'production' && config.argocd.insecure) {
+    throw new Error('ArgoCD TLS verification is required in production.');
+  }
   if (!config.argocd.serverUrl || (!config.argocd.token && !(config.argocd.username && config.argocd.password))) {
     throw new Error('ArgoCD credentials not configured (URL and token, or username/password)');
   }
@@ -90,7 +93,14 @@ async function getApplicationStatus(appName) {
   }
 }
 
-// Préflight de l'onboarding : les projets dédiés restent provisionnés par l'opérateur.
+// Read-only raw status for the MCP contract adapter.
+async function getApplicationDetails(appName) {
+  const client = await makeClient();
+  try { return (await client.get(`/applications/${encodeURIComponent(appName)}`)).data; }
+  catch (err) { handleError(err, `getApplicationDetails(${appName})`); }
+}
+
+// Préflight de l'onboarding : projets provisionnés par l'opérateur.
 async function getProject(name) {
   const client = await makeClient();
   try { return (await client.get(`/projects/${encodeURIComponent(name)}`)).data; }
@@ -135,6 +145,7 @@ async function deleteApplication(name, { cascade = true } = {}) {
   const client = await makeClient();
   try {
     await client.delete(`/applications/${encodeURIComponent(name)}`, {
+      headers: { 'Content-Type': 'application/json' },
       params: { cascade, propagationPolicy: 'foreground' },
     });
   } catch (err) {
@@ -143,15 +154,4 @@ async function deleteApplication(name, { cascade = true } = {}) {
   }
 }
 
-// Delete an ArgoCD ApplicationSet via the ArgoCD REST API.
-async function deleteApplicationSet(name) {
-  const client = await makeClient();
-  try {
-    await client.delete(`/applicationsets/${encodeURIComponent(name)}`);
-  } catch (err) {
-    if (err.response && err.response.status === 404) return;
-    handleError(err, `deleteApplicationSet(${name})`);
-  }
-}
-
-module.exports = { getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication, deleteApplicationSet };
+module.exports = { getApplicationDetails, getProject, getApplicationIfExists, listApplications, getApplicationStatus, syncApplication, checkConnectivity, deleteApplication };

@@ -11,3 +11,9 @@ docs/
 !README.md
 .eslintrc*
 .npmrc
+
+**/.venv
+**/__pycache__
+**/.pytest_cache
+.kilo
+coverage

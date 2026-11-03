@@ -29,6 +29,9 @@ function getKubeConfig() {
 }
 
 function handleError(err, context) {
+  if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(err.code)) {
+    throw new Error(`API Kubernetes injoignable (${context}) : délai réseau dépassé. Vérifiez KUBE_API_URL, le VPN/réseau et les IP autorisées du cluster. Le résultat de cette opération n’est pas confirmé.`);
+  }
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     throw new Error(`Kubernetes API unreachable at ${config.kubernetes.apiUrl}: ${err.message}`);
   }
@@ -246,8 +249,13 @@ async function applyApplicationSet(manifest) {
   }
 }
 
+// ApplicationSets shared by every app: an offboarding must never delete them,
+// whatever app name it was given.
+const SHARED_APPLICATIONSETS = new Set(['cloudrun-autodiscovery', 'crossplane-autodiscovery-dev', 'crossplane-autodiscovery-prod']);
+
 // Delete an ArgoCD ApplicationSet from the argocd namespace (idempotent).
 async function deleteApplicationSet(name) {
+  if (SHARED_APPLICATIONSETS.has(name)) throw new Error(`ApplicationSet partagé ${name} : suppression refusée.`);
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
   try {
@@ -303,6 +311,7 @@ async function deleteArgocdApplication(name) {
 async function getArgocdApplicationIfExists(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
   try {
     return (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
   } catch (err) {
@@ -319,6 +328,7 @@ const ARGO_RESOURCES_FINALIZER = 'resources-finalizer.argocd.argoproj.io';
 async function cascadeDeleteArgocdApplication(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
   const is404 = err => err.response?.statusCode === 404 || err.statusCode === 404;
   try {
     let current;
@@ -332,7 +342,8 @@ async function cascadeDeleteArgocdApplication(name) {
     if (!finalizers.includes(ARGO_RESOURCES_FINALIZER)) {
       await customApi.patchNamespacedCustomObject(
         'argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
-        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER] } },
+        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER],
+          ...(current.metadata?.resourceVersion ? { resourceVersion: current.metadata.resourceVersion } : {}) } },
         undefined, undefined, undefined,
         { headers: { 'Content-Type': 'application/merge-patch+json' } },
       );
@@ -558,11 +569,23 @@ async function getIngressUrl(appName, env) {
 //   - patches argocd-cm to enable the account (accounts.<username>: login)
 //   - patches argocd-secret to store the bcrypt password hash
 // bcryptHash must already be a bcrypt string (e.g. from bcryptjs.hashSync).
+// Accounts the portal must never (re)write: admin is Argo CD's superuser, cnp-portal is the portal itself.
+// A developer whose GitHub login maps to one of these would otherwise take over its password.
+const RESERVED_ARGOCD_ACCOUNTS = new Set(['admin', 'cnp-portal']);
+
 async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false } = {}) {
+  if (!/^[a-z0-9-]{1,32}$/.test(username) || RESERVED_ARGOCD_ACCOUNTS.has(username)) {
+    throw new Error(`Nom de compte Argo CD refusé : ${username}`);
+  }
   const kc  = getKubeConfig();
   const api = kc.makeApiClient(k8s.CoreV1Api);
   const ns  = 'argocd';
   const mergeHeader = { headers: { 'Content-Type': 'application/merge-patch+json' } };
+  // The installed SDK ignores extra fields in its options argument; set the
+  // transport timeout through its interceptor, so a late PATCH is not merely
+  // abandoned by a Promise.race while the network request keeps running.
+  api.addInterceptor(options => { options.timeout = 10000; });
+  let stage = 'argocd-cm';
 
   try {
     // 1. Enable the account in argocd-cm
@@ -574,6 +597,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
     );
 
     // 2. Store the bcrypt password hash in argocd-secret (value must be base64-encoded)
+    stage = 'argocd-secret';
     const hashB64 = Buffer.from(bcryptHash).toString('base64');
     await api.patchNamespacedSecret(
       'argocd-secret', ns,
@@ -582,7 +606,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
       mergeHeader,
     );
   } catch (err) {
-    handleError(err, `provisionArgoCDLocalUser(${username})`);
+    handleError(err, `provisionArgoCDLocalUser(${username}), étape ${stage}`);
   }
 }
 

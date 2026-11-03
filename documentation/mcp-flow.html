@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CNP · MCP interactions</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#dce9ef;background:#0c1821}body{margin:0;padding:40px;max-width:1240px;margin-inline:auto}h1{font-size:36px;margin:8px 0}h2{font-size:23px;margin:0 0 10px}p{color:#a9becb;line-height:1.6}header{margin-bottom:30px}.eyebrow{color:#71dfc4;font-size:13px;letter-spacing:2px;text-transform:uppercase}.columns{display:grid;grid-template-columns:1fr 1fr;gap:24px}.panel{border:1px solid #334957;border-radius:18px;padding:26px;background:#12232f}.tag{display:inline-block;font-size:12px;padding:6px 10px;border-radius:16px;color:#71dfc4;background:#173d39;margin-bottom:18px}.future .tag{color:#f7d397;background:#473921}.node{background:#1b3443;border:1px solid #385667;border-radius:10px;padding:15px 18px}.node strong{display:block;font-size:17px}.node small{display:block;margin-top:5px;color:#b8cdd8;line-height:1.5}.arrow{text-align:center;font-size:13px;color:#89d6cd;padding:11px}.arrow span{display:block;font-size:20px;line-height:22px}.future .node.ai{border-color:#ccaa64;background:#3b3429}.note{padding:15px;border-left:3px solid #71dfc4;margin:20px 0 0;font-size:14px;line-height:1.6}.future .note{border-color:#e8c184}.return{margin-top:18px;border:1px dashed #527382;padding:14px;border-radius:10px;font-size:14px;color:#c4d9e3}.checks{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:25px}.check{padding:20px;background:#142a36;border-radius:12px}.check strong{color:#71dfc4}.check p{font-size:14px;margin-bottom:0}code{color:#90e5d3}footer{margin-top:24px;font-size:13px;color:#9ab3c2}@media(max-width:800px){body{padding:20px}.columns,.checks{grid-template-columns:1fr}}@media print{body{background:white;color:#142a36;padding:0}.panel,.node,.check{background:white;color:#142a36}p,.node small,.return,footer{color:#254e65}}
+</style></head><body>
+<header><div class="eyebrow">CNP / local integration / 7 October 2026</div><h1>From your question to platform data</h1><p>The portal handles the conversation. MCP exposes four read-only tools. Jev selects a tool in the target architecture; it does not supply platform data.</p></header>
+<div class="columns">
+<section class="panel"><span class="tag">CURRENT · real registry + source diagnostics verified</span><h2>Real data mode running today</h2>
+<div class="node"><strong>1. Browser · localhost:3001</strong><small>Sign in → select app-2-dancingduck + development → type / or ask a question.</small></div>
+<div class="arrow">POST /api/v1/mcp/chat/turn · session cookie + CSRF<span>↓</span></div>
+<div class="node"><strong>2. Portal backend / orchestrator</strong><small>Read authorized catalog → resolve target → clear local intent or explicit / command → validated tool arguments. Uncertain requests go to Jev.</small></div>
+<div class="arrow">MCP SDK · /mcp · bearer JWT + Origin + correlation ID<span>↓</span></div>
+<div class="node"><strong>3. MCP server · 127.0.0.1:3000</strong><small>Validate JWT / scope / origin / host → execute one of four read-only tools → validate response.</small></div>
+<div class="arrow">list_applications · get_deployment_status<br>get_application_logs · get_finops_recommendation<span>↓</span></div>
+<div class="node"><strong>4. Real source adapters</strong><small>Remote Git registry/config · Argo CD · Kubernetes pods · Datadog logs/metrics. Missing sources return explicit errors or partial results; no mock fallback.</small></div>
+<div class="return">↑ Validated ToolResponse → OpenAI Responses when configured, otherwise structured answer → SSE → browser and source warnings.</div>
+<div class="note"><strong>Jev fallback is wired and its live API responds.</strong> OpenAI answer generation is wired; the selected model and local key are still required.</div>
+</section>
+<section class="panel future"><span class="tag">ROUTING + ANSWER GENERATION · implemented</span><h2>When local intent is uncertain</h2>
+<div class="node"><strong>1. Uncertain question → Jev</strong><small>Authenticated portal context is reduced to the question, allowed tools and confirmed application/environment.</small></div>
+<div class="arrow">Minimal question + allowed tools + confirmed target<span>↓</span></div>
+<div class="node ai"><strong>2. TypeSafe / Jev routing API</strong><small>Classify read-only intent and confidence. No portal identity, roles, cookies, credentials or raw logs are forwarded.</small></div>
+<div class="arrow">Validated classification · local policy + argument mapper<span>↓</span></div>
+<div class="node"><strong>3. MCP client → MCP server</strong><small>Invoke approved tool with validated arguments and correlation ID; use HTTPS and short-lived service credentials.</small></div>
+<div class="arrow">Authenticated HTTPS GETs to internal façades<span>↓</span></div>
+<div class="node"><strong>4. OpenAI Responses API</strong><small>After validated tool execution, redact and bound evidence → OpenAI model drafts a concise grounded answer. API key stays in the backend. No mutation tools are sent.</small></div>
+<div class="return">↑ Generated text → SSE → browser. If enabled generation fails, show a warning and the verified structured answer.</div>
+<div class="note"><strong>Fail closed before execution:</strong> Jev unavailable → routing_unavailable; ambiguous intent → clarification; mutation → rejection. No selected MCP tool executes in these cases.</div>
+</section></div>
+<div class="checks"><div class="check"><strong>Actual data: catalog reachable</strong><p>The registry contains cnp-portal, app-2-dancingduck and other real application records. Registration does not prove runtime health.</p></div><div class="check"><strong>Remaining source configuration</strong><p>Argo localhost:8080 unreachable; Kubernetes reads return 403; Datadog keys absent; OpenAI model/key pending.</p></div><div class="check"><strong>Start the working local flow</strong><p>In cnp-portal: <code>npm run dev:integration</code>. Open <code>localhost:3001/mcp-chat</code>.</p></div></div>
+<footer>The real local launcher reuses MCP-CNP server/Jev components and portal source clients. The separate integration test still uses isolated fixtures. Local JWT signing remains restricted to development loopback HTTP.</footer>
+</body></html>

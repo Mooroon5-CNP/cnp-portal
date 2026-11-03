@@ -6,7 +6,7 @@ jest.mock('../src/config/env', () => ({ config: {
 } }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), getRef: jest.fn(), createBranch: jest.fn(),
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -59,7 +59,8 @@ beforeEach(() => {
   github.getRef.mockImplementation(async (_owner, repo) => repo === 'pixelcalm' ? sourceHead : 'config-head');
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: null, url: null });
   argo.getProject.mockImplementation(async name => ({ metadata: { name } }));
-  argo.getApplicationIfExists.mockResolvedValue(null);
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue(null);
+  kubernetes.cascadeDeleteArgocdApplication.mockResolvedValue(false);
   argo.deleteApplication.mockResolvedValue();
 });
 
@@ -167,7 +168,8 @@ test('setup preserves custom CI files and rejects another app registered against
   expect(trees.every(tree => !tree.tree.some(file => file.path === '.github/workflows/ci.yml'))).toBe(true);
   existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'other-name', repo_url: dep.githubRepoUrl }] }));
   published.length = 0;
-  await expect(service.onboard(dep)).rejects.toThrow('déjà enregistré'); expect(published).toHaveLength(0);
+  await expect(service.onboard(dep)).rejects.toThrow('other-name, dans team/config/apps/registry.yaml');
+  expect(published).toHaveLength(0);
 });
 
 test('deletion closes pending candidates and only removes the selected environment', async () => {
@@ -177,9 +179,10 @@ test('deletion closes pending candidates and only removes the selected environme
   await service.remove(dep);
   expect(trees.at(-1).tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/prod/') && file.sha === null)).toBe(true);
   expect(api.request.mock.calls).toContainEqual(['PATCH /repos/{owner}/{repo}/pulls/{pull_number}', expect.objectContaining({ pull_number: 5, state: 'closed' })]);
-  expect(argo.deleteApplication).toHaveBeenCalledWith('pixelcam-prod', { cascade: true });
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
+  expect(argo.deleteApplication).not.toHaveBeenCalled();
   const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
-  expect(argo.deleteApplication.mock.invocationCallOrder[0]).toBeLessThan(api.request.mock.invocationCallOrder[sourceDelete]);
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeLessThan(api.request.mock.invocationCallOrder[sourceDelete]);
   expect((await service.reconcile(dep)).phase).toBe('configuring');
 });
 
@@ -247,7 +250,7 @@ test('missing environment project or orphaned legacy application prevents setup 
   argo.getProject.mockRejectedValueOnce(new Error('Project missing'));
   await expect(service.onboard(dep)).rejects.toThrow('argocd/projects/team-cnp-dev.yaml');
   expect(published).toHaveLength(0); expect(github.setRepoSecret).not.toHaveBeenCalled();
-  argo.getApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-cloudrun' } });
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-cloudrun' } });
   await expect(service.onboard(dep)).rejects.toThrow('application historique');
   expect(published).toHaveLength(0);
 });
@@ -262,8 +265,8 @@ test('setup preserves a real legacy root unchanged', async () => {
 test('a failed explicit cascade keeps the GitOps source available for cleanup retry', async () => {
   for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
   deployments.updateOnboardingStatus(dep.id, 'deleting');
-  argo.deleteApplication.mockRejectedValue(new Error('Argo unavailable'));
-  await expect(service.remove(dep)).rejects.toThrow('Argo unavailable');
+  kubernetes.cascadeDeleteArgocdApplication.mockRejectedValue(new Error('Kubernetes unavailable'));
+  await expect(service.remove(dep)).rejects.toThrow('Kubernetes unavailable');
   expect(published).toHaveLength(0); expect(trees).toHaveLength(0);
 });
 
@@ -319,4 +322,89 @@ test('a ready runtime stays deploying while friendly routing is unavailable and 
   production(); db.prepare("DELETE FROM deployment_releases WHERE revision != ?").run("__registration__"); routing.sync.mockClear();
   expect((await service.reconcile(dep)).phase).toBe('approval');
   expect(routing.sync).not.toHaveBeenCalled();
+});
+
+test('GCP checks legacy existence through Kubernetes when the Argo API would return 403', async () => {
+  argo.getApplicationIfExists.mockRejectedValue(new Error('ArgoCD API error (403): permission denied'));
+  await service.onboard(dep);
+  expect(kubernetes.getArgocdApplicationIfExists).toHaveBeenCalledWith('pixelcam-cloudrun');
+  expect(argo.getApplicationIfExists).not.toHaveBeenCalled();
+});
+test('Kubernetes permission failures remain blocking before any source or GitOps write', async () => {
+  kubernetes.getArgocdApplicationIfExists.mockRejectedValueOnce(new Error('Kubernetes forbidden'));
+  await expect(service.onboard(dep)).rejects.toThrow('Kubernetes forbidden');
+  expect(github.setRepoSecret).not.toHaveBeenCalled();
+  expect(published).toHaveLength(0);
+});
+
+test('a failed CI does not freeze the deployment; the next successful CI is published', async () => {
+  run.conclusion = 'failure';
+  expect((await service.reconcile(dep)).phase).toBe('failed');
+  expect(published).toHaveLength(0);
+  expect(deployments.get(dep.id).onboardingStatus).toBe('ready');
+  run = { ...run, id: 11, head_sha: 'b'.repeat(40), conclusion: 'success' }; sourceHead = run.head_sha;
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'deploying', revision: sourceHead, runId: 11 });
+  expect(releases.get(dep.id, sourceHead).state).toBe('published');
+});
+test('a successful rerun is accepted by attempt start time rather than original run creation', async () => {
+  run.created_at = new Date(Date.parse(dep.createdAt) - 60000).toISOString();
+  run.run_started_at = new Date(Date.parse(dep.createdAt) + 1000).toISOString();
+  run.run_attempt = 2;
+  const failed = { ...run, id: 20, conclusion: 'failure', run_started_at: dep.createdAt };
+  const original = api.request.getMockImplementation();
+  api.request.mockImplementation((route, args) => route.includes('/actions/workflows/') ? { data: { workflow_runs: [failed, run] } } : original(route, args));
+  expect((await service.reconcile(dep)).runId).toBe(run.id);
+  expect(releases.get(dep.id, revision).state).toBe('published');
+});
+test('failed CI without published resources can be removed without waiting on runtime routing', async () => {
+  run.conclusion = 'failure';
+  expect((await service.reconcile(dep)).phase).toBe('failed');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, repo_url: dep.githubRepoUrl, environments: ['dev', 'prod'] }] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(kubernetes.cascadeDeleteArgocdApplication).not.toHaveBeenCalled();
+  expect(require('../src/services/application-routing').sync).not.toHaveBeenCalled();
+  expect(argo.deleteApplication).not.toHaveBeenCalled();
+  const registry = trees.at(-1).tree.find(file => file.path === 'apps/registry.yaml');
+  expect(yaml.load(registry.content).apps[0].environments).toEqual(['prod']);
+});
+function interruptedCleanup() {
+  deployments.updateOnboardingStatus(dep.id, 'failed', 'Nettoyage partiel : ArgoCD API error (415)');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, repo_url: dep.githubRepoUrl, environments: ['dev'] }] }));
+  return deployments.get(dep.id);
+}
+test('legacy cleanup errors remain distinct from setup errors and can explicitly resume CI', async () => {
+  const failed = interruptedCleanup();
+  expect(failed.onboardingStatus).toBe('delete_failed');
+  expect((await service.reconcile(failed)).phase).toBe('configuring');
+  expect(published).toHaveLength(0);
+  await service.resumeAfterCleanupFailure(failed);
+  expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'ready', onboardingError: null });
+  expect(published).toHaveLength(0);
+  expect((await service.reconcile(deployments.get(dep.id))).phase).toBe('deploying');
+});
+test.each(['removed-source', 'deleting-application', 'missing-published-application'])('resume refuses unsafe cleanup state %s', async reason => {
+  const failed = interruptedCleanup();
+  if (reason === 'removed-source') existing.delete('config/apps/registry.yaml');
+  if (reason === 'deleting-application') kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { deletionTimestamp: new Date().toISOString() } });
+  if (reason === 'missing-published-application') {
+    const token = releases.acquire(dep.id, revision, run.id); releases.save(dep.id, revision, token, 'published'); releases.release(dep.id, revision, token);
+  }
+  await expect(service.resumeAfterCleanupFailure(failed)).rejects.toThrow();
+  expect(deployments.get(dep.id).onboardingStatus).toBe('delete_failed');
+  expect(published).toHaveLength(0);
+});
+
+test('image promotions retain operator-managed runtime secret references without secret values', async () => {
+  const refs = [{ name: 'SESSION_SECRET', valueSource: { secretKeyRef: { secret: 'portal-session', version: '1' } } }];
+  existing.set('config/apps/pixelcam/crossplane/dev/runtime-secrets.yaml', yaml.dump(refs));
+  await service.reconcile(dep);
+  const file = trees.flatMap(tree => tree.tree).find(item => item.path.endsWith('/cloudrun-claim.yaml'));
+  const claim = yaml.load(file.content);
+  expect(claim.spec.forProvider.template.containers[0].env).toEqual(expect.arrayContaining(refs));
+});
+test('runtime secret configuration rejects plaintext values before publication', async () => {
+  existing.set('config/apps/pixelcam/crossplane/dev/runtime-secrets.yaml', yaml.dump([{ name: 'SESSION_SECRET', value: 'plaintext-not-allowed' }]));
+  await expect(service.reconcile(dep)).rejects.toThrow('Invalid runtime secret references');
+  expect(published).toHaveLength(0);
 });

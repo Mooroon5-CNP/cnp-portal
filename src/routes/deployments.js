@@ -14,6 +14,7 @@ const deletionRequestModel = require('../models/deletion_request');
 const teamService = require('../services/teams');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
+const { selectWorkflowRun } = require('../services/workflow-runs');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
 const azureTemplates = require('../services/azure-templates');
@@ -65,6 +66,20 @@ function canViewDeployment(user, dep) {
     return deploymentModel.listForUser(user).some(row => row.id === dep.id);
 }
 
+function startEnvironmentOnboarding(dep) {
+    Promise.resolve().then(() => environmentService.onboard(dep)).then(() => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') deploymentModel.updateOnboardingStatus(dep.id, 'ready');
+    }).catch(err => {
+        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
+    });
+}
+
+function canRetryConfiguration(user, dep) {
+    return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
+        && !dep.onboardingError?.startsWith('Nettoyage partiel')
+        && (user.role === 'manager' || user.id === dep.ownerUserId);
+}
+
 async function environmentStatus(dep) {
     try {
         return await environmentService.reconcile(dep);
@@ -82,6 +97,7 @@ function environmentBadge(status) {
         failed: ['Échec du déploiement', 'badge-danger'],
         rejected: ['Production refusée', 'badge-danger'],
         deleting: ['Suppression en cours', 'badge-warning'],
+        delete_failed: ['Suppression incomplète', 'badge-danger'],
     };
     const [label, badge] = labels[status.phase] || ['En attente', 'badge-gray'];
     return { label, badge };
@@ -157,6 +173,8 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
             status = { label: 'Configuration...', badge: 'badge-warning' };
         } else if (d.onboardingStatus === 'deleting') {
             status = environmentBadge({ phase: 'deleting' });
+        } else if (d.onboardingStatus === 'delete_failed') {
+            status = environmentBadge({ phase: 'delete_failed' });
         } else if (d.onboardingStatus === 'failed') {
             status = { label: 'Erreur setup', badge: 'badge-danger' };
         } else {
@@ -302,16 +320,31 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
-    environmentService.onboard(dep).then(() => {
-        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
-            deploymentModel.updateOnboardingStatus(dep.id, 'ready');
-        }
-    }).catch(err => {
-        if (deploymentModel.get(dep.id)?.onboardingStatus === 'configuring') {
-            deploymentModel.updateOnboardingStatus(dep.id, 'failed', err.message);
-        }
-    });
+    startEnvironmentOnboarding(dep);
 
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// A partial deletion must never silently resume publishing on a new CI result.
+router.post('/:id/resume-deployment', requireAuth, requirePermission('deployments:delete'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé.');
+    try {
+        await environmentService.resumeAfterCleanupFailure(dep);
+        req.flash('success', 'Suivi CI repris. La prochaine CI valide sera prise en compte ; la production reste soumise à approbation.');
+    } catch (error) { req.flash('error', error.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// Retry only failed setup; never deploy, adopt or clean up resources via a GET.
+router.post('/:id/retry-configuration', requireAuth, requirePermission('deployments:deploy'), (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep) || !(req.user.role === 'manager' || req.user.id === dep.ownerUserId)) return res.status(403).send('Accès refusé.');
+    if (!canRetryConfiguration(req.user, dep)) return res.status(409).send('Seule une configuration en échec peut être relancée.');
+    deploymentModel.updateOnboardingStatus(dep.id, 'configuring');
+    startEnvironmentOnboarding({ ...dep, onboardingStatus: 'configuring', onboardingError: null });
     return res.redirect(`/deployments/${dep.id}`);
 });
 
@@ -332,10 +365,14 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
         return res.json({ phase: 'deleting', message: 'Suppression de cet environnement en cours...' });
     }
 
+    if (dep.onboardingStatus === 'delete_failed') {
+        return res.json({ phase: 'delete_failed', message: 'Suppression incomplète : réessayez la suppression ou reprenez explicitement le suivi CI.', detail: dep.onboardingError });
+    }
+
     if (dep.onboardingStatus === 'failed') {
         return res.json({
             phase: 'failed',
-            message: 'Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.',
+            message: 'La configuration de la plateforme a échoué. Consultez le détail avant de la relancer.',
             detail: dep.onboardingError,
         });
     }
@@ -425,8 +462,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     if (dep.onboardingStatus === 'ready') {
         const parsed = githubService.parseRepoUrl(dep.githubRepoUrl);
         if (parsed) {
-            runs = await githubClient.getRuns(parsed.owner, parsed.repo, 5, sourceBranch(dep), workflowId(dep)).catch(() => []);
-            latest = runs && runs.length > 0 ? runs[0] : null;
+            runs = await githubClient.getRuns(parsed.owner, parsed.repo, usesEnvironment(dep) ? 20 : 5, sourceBranch(dep), workflowId(dep)).catch(() => []);
+            latest = selectWorkflowRun(runs || [], { branch: sourceBranch(dep) });
             if (latest) {
                 jobs = await githubClient.getRunJobs(parsed.owner, parsed.repo, latest.id).catch(() => []);
                 githubActionsUrl = `https://github.com/${parsed.owner}/${parsed.repo}/actions/runs/${latest.id}`;
@@ -541,6 +578,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        canRetryConfiguration: canRetryConfiguration(req.user, dep),
         environmentStatus: selectedStatus,
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.
@@ -588,6 +626,8 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
         return res.redirect('/deployments');
     }
 
+    if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
+
     try {
         if (usesEnvironment(dep)) {
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
@@ -599,7 +639,7 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
         // Log partial-cleanup warnings but don't block the deletion.
         req.flash('error', `Nettoyage partiel : ${e.message}`);
         if (usesEnvironment(dep)) {
-            deploymentModel.updateOnboardingStatus(dep.id, 'failed', `Nettoyage partiel : ${e.message}`);
+            deploymentModel.updateOnboardingStatus(dep.id, 'delete_failed', `Nettoyage partiel : ${e.message}`);
             return res.redirect(`/deployments/${dep.id}`);
         }
     }
@@ -651,6 +691,8 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
     const request = deletionRequestModel.listForDeployment(dep.id).find(r => r.status === 'pending');
     if (request) deletionRequestModel.approve(request.id, req.user.id);
 
+    if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
+
     try {
         if (usesEnvironment(dep)) {
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
@@ -661,7 +703,7 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
     } catch (e) {
         req.flash('error', `Nettoyage partiel : ${e.message}`);
         if (usesEnvironment(dep)) {
-            deploymentModel.updateOnboardingStatus(dep.id, 'failed', `Nettoyage partiel : ${e.message}`);
+            deploymentModel.updateOnboardingStatus(dep.id, 'delete_failed', `Nettoyage partiel : ${e.message}`);
             return res.redirect(`/deployments/${dep.id}`);
         }
     }

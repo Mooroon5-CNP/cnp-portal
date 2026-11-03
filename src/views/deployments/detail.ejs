@@ -29,7 +29,7 @@
                         <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
                       </form>
                     <% } else { %>
-                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'">Supprimer</button>
+                      <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'"><%= deployment.onboardingStatus === 'delete_failed' ? 'Réessayer la suppression' : 'Supprimer' %></button>
                     <% } %>
                   <% } else if (can('deployments:delete:request')) { %>
                     <% if (pendingDeletion) { %>
@@ -44,13 +44,13 @@
 
               <% if (applicationUrl) { %>
                 <div class="card" id="application-address" style="margin-bottom:16px;">
-                  <div class="card-header"><span class="card-title">Adresse de l’environnement</span></div>
+                  <div class="card-header"><span class="card-title"><%= deployment.onboardingStatus === 'ready' ? 'Adresse de l’environnement' : 'Adresse prévue de l’environnement' %></span></div>
                   <div class="card-body">
                     <code><%= applicationUrl %></code>
                     <% if (deployment.targetCluster === 'azure') { %>
                       <div class="form-hint">Adresse par défaut d’Azure (domaine de l’environnement Container Apps). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
                     <% } else { %>
-                      <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement.</div>
+                      <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement. Cette adresse prévue ne confirme pas qu’un déploiement est disponible.</div>
                     <% } %>
                   </div>
                 </div>
@@ -86,6 +86,21 @@
                 </div>
                 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 
+              <% } else if (deployment.onboardingStatus === 'delete_failed') { %>
+                <div class="card" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Suppression incomplète</span><span class="badge badge-danger">Action requise</span></div>
+                  <div class="card-body">
+                    <p>Le nettoyage a échoué. Le déploiement reste enregistré pour permettre de reprendre l’opération.</p>
+                    <div class="flash flash-error"><%= deployment.onboardingError %></div>
+                    <% if (can('deployments:delete')) { %>
+                      <p>Utilisez « Réessayer la suppression » en haut de page, ou reprenez le déploiement si sa configuration est encore présente et qu’aucune suppression de ressource n’a commencé.</p>
+                      <form action="/deployments/<%= deployment.id %>/resume-deployment" method="POST" style="margin-top:12px;">
+                        <button type="submit" class="btn btn-secondary">Reprendre le suivi CI</button>
+                      </form>
+                    <% } %>
+                  </div>
+                </div>
+
               <!-- ── Onboarding: failed (setup error) ───────────────────── -->
               <% } else if (deployment.onboardingStatus === 'failed' && !latest) { %>
                 <div class="card">
@@ -95,13 +110,18 @@
                   </div>
                   <div class="card-body">
                     <div class="flash flash-error">
-                      <strong>Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.</strong>
+                      <strong>La configuration de votre application a échoué. Consultez le détail ci-dessous ; le pipeline peut ne pas avoir été lancé.</strong>
                       <% if (deployment.onboardingError) { %>
                         <div style="margin-top:8px;font-size:13px;color:inherit;opacity:0.85;">
                           Détail : <%= deployment.onboardingError %>
                         </div>
                       <% } %>
                     </div>
+                    <% if (locals.canRetryConfiguration) { %>
+                      <form action="/deployments/<%= deployment.id %>/retry-configuration" method="POST">
+                        <button type="submit" class="btn btn-primary">Réessayer la configuration</button>
+                      </form>
+                    <% } %>
                   </div>
                 </div>
 
@@ -171,7 +191,7 @@
                     <% } %>
                   <% } else if (latest.conclusion === 'failure') { %>
                     <div class="flash flash-error" style="margin-bottom:16px;">
-                      <strong>Votre pipeline a échoué. Veuillez vérifier la configuration de votre application.</strong>
+                      <strong>La configuration de votre application a échoué. Consultez le détail ci-dessous ; le pipeline peut ne pas avoir été lancé.</strong>
                     </div>
                   <% } %>
                 <% } %>
@@ -362,7 +382,7 @@
 
     <!-- ── Reject MR modals (manager) ───────────────────────────────────── -->
     <% if (can('k8s:manifest:approve') && pendingMrs) { pendingMrs.forEach(mr => { %>
-    <div id="rejectModal-<%= mr.id %>" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+    <div id="rejectModal-<%= mr.id %>" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
         <h3 style="margin:0 0 8px;">Rejeter la modification</h3>
         <p style="color:var(--text-muted);margin-bottom:12px;">Fichier : <code><%= mr.filePath.split('/').pop() %></code></p>
@@ -381,7 +401,7 @@
     <% }) } %>
 
     <!-- ── Delete modal (manager) ──────────────────────────────────────── -->
-    <div id="deleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+    <div id="deleteModal" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
         <h3 style="margin:0 0 8px;"><%= deployment.environment === 'legacy' ? "Supprimer l’application" : "Supprimer l’environnement " + deployment.environment %></h3>
         <p style="color:var(--text-muted);margin-bottom:12px;">Supprimer "<strong><%= deployment.appName %></strong>"<%= deployment.environment === 'legacy' ? " et toutes ses ressources" : " — environnement " + deployment.environment %> ?</p>
@@ -402,7 +422,7 @@
     </div>
 
     <!-- ── Approve deletion modal (manager reviewing a request) ─────────── -->
-    <div id="approveDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+    <div id="approveDeleteModal" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
         <h3 style="margin:0 0 8px;">Approuver la suppression</h3>
         <p style="color:var(--text-muted);margin-bottom:12px;">Approuver la demande de suppression de "<strong><%= deployment.appName %></strong>" ?</p>
@@ -419,7 +439,7 @@
     </div>
 
     <!-- ── Request deletion modal (dev/devops) ──────────────────────────── -->
-    <div id="requestDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+    <div id="requestDeleteModal" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
       <div style="background:var(--surface);width:480px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
         <h3 style="margin:0 0 8px;">Demander la suppression</h3>
         <p style="color:var(--text-muted);margin-bottom:16px;">Un manager devra valider cette demande avant la suppression <%= deployment.environment === 'legacy' ? 'de l’application' : 'de cet environnement' %>.</p>

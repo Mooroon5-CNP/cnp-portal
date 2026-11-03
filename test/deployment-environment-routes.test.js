@@ -68,6 +68,14 @@ test('the form exposes dev/main and prod/approval choices', async () => {
     expect(response.text).toContain('.dev.apps.mooroon5.fr');
 });
 
+test('MCP links retain the selected deployment environment', async () => {
+    create('dev'); create('prod');
+    const response = await request(app).get('/deployments');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('/mcp-chat?applicationId=sample-app&amp;environment=dev');
+    expect(response.text).toContain('/mcp-chat?applicationId=sample-app&amp;environment=prod');
+});
+
 test('environment addresses never advertise DNS readiness from runtime readiness alone', async () => {
     const dep = create('prod');
     service.reconcile.mockResolvedValue({ phase: 'success', revision, cloudRunUrl: 'https://sample-app-prod.run.app', applicationUrl: 'https://sample-app.apps.mooroon5.fr' });
@@ -127,7 +135,7 @@ test('production detail only renders manager approval controls for managers', as
     const manager = await request(app).get(`/deployments/${dep.id}`);
     expect(manager.status).toBe(200);
     expect(manager.text).toContain('Approuver la production');
-    expect(github.getRuns).toHaveBeenCalledWith('team', 'sample', 5, 'prod', 'cnp-sample-app.yml');
+    expect(github.getRuns).toHaveBeenCalledWith('team', 'sample', 20, 'prod', 'cnp-sample-app.yml');
     const dev = await request(app).get(`/deployments/${dep.id}`).set('X-role', 'dev');
     expect(dev.status).toBe(200);
     expect(dev.text).not.toContain('Approuver la production');
@@ -198,7 +206,7 @@ test('failed cleanup retains the record so deletion can be retried', async () =>
     const dep = create('dev');
     service.remove.mockRejectedValueOnce(new Error('Provider unavailable'));
     await request(app).post(`/deployments/${dep.id}/delete`);
-    expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'failed' });
+    expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed' });
 });
 
 test.each(['success', 'failure'])('late setup %s cannot overwrite an in-progress deletion', async outcome => {
