@@ -8,7 +8,7 @@ const service = require('./environment-failover');
 const root = path.resolve(path.dirname(fs.realpathSync(__filename)), '../..');
 const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const actions = ['credentials-plan', 'bootstrap-plan', 'initialize-secrets', 'observe', 'bootstrap', 'verify', 'automation-plan', 'worker-configure', 'worker-verify', 'activation-plan', 'worker-resume', 'health'];
+const actions = ['credentials-plan', 'bootstrap-plan', 'initialize-secrets', 'observe', 'bootstrap', 'verify', 'runtime-verify', 'automation-plan', 'worker-configure', 'worker-verify', 'activation-plan', 'worker-resume', 'health'];
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_operations (id TEXT PRIMARY KEY, app TEXT NOT NULL,
     action TEXT NOT NULL, state TEXT NOT NULL, input_hash TEXT NOT NULL, requested_by TEXT NOT NULL,
@@ -41,9 +41,10 @@ function start(app, action, user) {
   manager(user); schema();
   if (!actions.includes(action)) throw new Error('Opération inconnue.');
   const document = service.profileFor(app);
-  if (!document || (document.profile.mode === 'stateless' && action !== 'health')) throw new Error('Profil SQL requis.');
+  if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify'].includes(action))) throw new Error('Profil SQL requis.');
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
-  const existingPilot = service.settings()?.app === app && document.secrets.initialized;
+  const legacySettings = service.settings();
+  const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
   if (existingPilot && ['bootstrap', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
   if (action === 'bootstrap' && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
   if (action === 'verify' && !existingPilot && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
@@ -52,9 +53,19 @@ function start(app, action, user) {
     const verified = previous(app, 'verify');
     if (!previous(app, 'worker-verify') || !verified || Date.now() - Date.parse(verified.created_at) > 600000) throw new Error('Vérifications récentes de réplication et du worker requises avant activation.');
   }
-  if (action === 'worker-resume' && !previous(app, 'activation-plan')) throw new Error('Plan d’activation non appliqué.');
+  if (action === 'worker-resume' && !previous(app, 'activation-plan')?.result?.worker_task_definition) throw new Error('Plan d’activation non appliqué.');
   const id = randomUUID();
   const request = { action, app, document, work: path.join(workRoot, id) };
+  if (action === 'runtime-verify') {
+    service.rows(app);
+    const runtime = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
+    if (!runtime) throw new Error('Publication des runtimes requise avant vérification.');
+    request.images = runtime.image_record ? JSON.parse(runtime.image_record) : null;
+  }
+  if (action === 'health' && document.profile.mode !== 'stateless') {
+    request.packages = service.operationalPackage(app, 'automation', user);
+    request.task_definition = previous(app, 'activation-plan')?.result?.worker_task_definition;
+  }
   if (['bootstrap', 'verify'].includes(action)) {
     request.packages = service.operationalPackage(app, 'bootstrap', user);
     request.task_definition = previous(app, 'bootstrap-plan')?.result?.bootstrap_task_definition || (existingPilot ? 'cnp-failover-bootstrap' : null);
@@ -143,4 +154,22 @@ async function createProfile(app, mode, contract, user) {
   }
   return service.configure(app, { profile, credentials: {}, secrets: { app }, observations: {} }, user);
 }
-module.exports = { list, start, apply, createProfile };
+function retry(id, user) {
+  manager(user); schema();
+  const row = db.prepare('SELECT * FROM failover_operations WHERE id=?').get(id);
+  if (!row || row.state !== 'failed') throw new Error('Opération non disponible pour reprise.');
+  if (row.reviewed_by) throw new Error('Apply interrompu : préparer un nouveau plan après lecture de l’état réel.');
+  const document = service.profileFor(row.app);
+  if (hash(document) !== row.input_hash) throw new Error('Profil modifié ; préparer une nouvelle opération.');
+  if (list(row.app).some(value => ['running', 'applying'].includes(value.state))) throw new Error('Opération déjà en cours.');
+  const request = JSON.parse(fs.readFileSync(path.join(workRoot, id, 'request.json')));
+  db.prepare("UPDATE failover_operations SET state='running',result=NULL WHERE id=?").run(id);
+  void finish(id, request);
+  return { id, state: 'running' };
+}
+function recoverInterrupted() {
+  schema();
+  db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE state IN ('running','applying')")
+    .run(JSON.stringify({ error: 'Portail redémarré pendant l’opération. Reprendre la tâche suivie ; un apply incertain exige un nouveau plan.' }));
+}
+module.exports = { list, start, apply, retry, createProfile, recoverInterrupted };

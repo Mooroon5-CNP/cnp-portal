@@ -234,3 +234,24 @@ test('un site sans base génère les deux runtimes et un DNS sans base ni verrou
   expect(dns.files[`${dir}/healthcheck-latch-http.yaml`]).toBeUndefined();
   expect(yaml.load(dns.files[`${dir}/record-primary.yaml`]).spec.forProvider.healthCheckIdSelector.matchLabels['cnp-failover']).toBe('health');
 });
+
+test('la disponibilité refuse les preuves d’un ancien profil et les dates futures', () => {
+  const { createHash } = require('crypto');
+  service.rows();
+  const operations = require('../src/services/failover-operations');
+  operations.list('app4-pixelcam');
+  db.prepare("DELETE FROM failover_operations WHERE app=?").run('app4-pixelcam');
+  for (const stage of ['databases', 'runtime', 'dns']) {
+    db.prepare(`INSERT INTO failover_candidates (id,stage,base_sha,head_sha,pr_number,pr_url,files,input_hash,state,requested_by,created_at,app_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(stage, stage, base, head, 1, 'url', '{}', 'hash', 'published', manager.id, new Date().toISOString(), 'app4-pixelcam');
+  }
+  const dep = { appName: 'app4-pixelcam', environment: 'prod', targetCluster: 'gcp' };
+  const currentHash = createHash('sha256').update(JSON.stringify(service.profileFor('app4-pixelcam'))).digest('hex');
+  db.prepare('INSERT INTO failover_operations VALUES (?,?,?,?,?,?,?,?,?)').run('health-proof', 'app4-pixelcam', 'health', 'completed', 'old-profile', manager.id,
+    JSON.stringify({ verified: true, state: 'WAIT_SIGNALS', observed_at: Date.now() / 1000 }), new Date().toISOString(), null);
+  expect(service.readiness(dep).phase).toBe('deploying');
+  db.prepare('UPDATE failover_operations SET input_hash=? WHERE id=?').run(currentHash, 'health-proof');
+  expect(service.readiness(dep).phase).toBe('success');
+  db.prepare('UPDATE failover_operations SET result=? WHERE id=?').run(JSON.stringify({ verified: true, observed_at: Date.now() / 1000 + 600 }), 'health-proof');
+  expect(service.readiness(dep).phase).toBe('deploying');
+});

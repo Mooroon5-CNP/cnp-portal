@@ -27,7 +27,7 @@ function profileFor(app) {
   const saved = db.prepare('SELECT document FROM failover_profiles WHERE app_name=?').get(app);
   if (saved) return JSON.parse(saved.document);
   const legacy = settings();
-  return legacy?.app === app ? inputs(legacy) : null;
+  return legacy?.app === app && legacy.exposeLegacyApplication !== false ? inputs(legacy) : null;
 }
 const enabled = dep => !!dep && dep.environment === 'prod'
   && dep.targetCluster !== 'azure' && !!profileFor(dep.appName);
@@ -40,7 +40,7 @@ function profiles() {
   schema();
   const names = db.prepare('SELECT app_name FROM failover_profiles ORDER BY app_name').all().map(row => row.app_name);
   const legacy = settings();
-  return [...new Set([...names, ...(legacy ? [legacy.app] : [])])].sort();
+  return [...new Set([...names, ...(legacy?.app && legacy.exposeLegacyApplication !== false ? [legacy.app] : [])])].sort();
 }
 function configure(app, document, user) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
@@ -287,6 +287,7 @@ function operationalPackage(app, stage, user) {
   for (const name of profiles()) {
     const document = profileFor(name);
     if (document.profile.mode === 'stateless') continue;
+    if (name !== app && !rows(name).some(row => row.stage === 'dns' && row.state === 'published')) continue;
     const result = render({ ...document, stage: 'automation' });
     const vars = result['automation.tfvars.json'];
     const shared = Object.fromEntries(Object.entries(vars).filter(([key]) => key !== 'applications'));
@@ -366,7 +367,8 @@ function readiness(dep) {
   const next = required.find(stage => !stages.has(stage));
   const operations = require('./failover-operations');
   const health = operations.list(dep.appName).find(row => row.action === 'health' && row.state === 'completed');
-  if (!next && health?.result?.verified && Date.now() / 1000 - health.result.observed_at < 120) {
+  const age = health ? Date.now() / 1000 - health.result?.observed_at : Infinity;
+  if (!next && health?.result?.verified && health.input_hash === hash(profileFor(dep.appName)) && age >= 0 && age < 120) {
     return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif.' : 'Application déployée ; secours vérifié et disponible.',
       applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state };
   }

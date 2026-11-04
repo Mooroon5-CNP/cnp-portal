@@ -39,13 +39,42 @@ def execute(request):
     if expected.resolve() not in work.parents:
         raise ValueError('Dossier opérateur hors périmètre')
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if action == 'runtime-verify':
+        import boto3
+        cloudrun = json.loads(command(['gcloud', 'run', 'services', 'describe', app + '-prod',
+            '--region=europe-west9', '--project=cnp-terraform-512313', '--format=json']))
+        primary_ready = any(value.get('type') == 'Ready' and value.get('status') == 'True'
+            for value in cloudrun.get('status', {}).get('conditions', []))
+        status = cloudrun.get('status', {})
+        primary_ready &= bool(status.get('latestReadyRevisionName')) and status.get('latestReadyRevisionName') == status.get('latestCreatedRevisionName')
+        client = boto3.client('ecs', region_name='eu-west-3')
+        if boto3.client('sts', region_name='eu-west-3').get_caller_identity()['Account'] != '804210702561':
+            raise ValueError('Compte AWS inattendu')
+        services = client.describe_services(cluster='cnp-cluster', services=[app + '-prod'])['services']
+        standby_ready = len(services) == 1 and services[0]['runningCount'] > 0 and services[0]['pendingCount'] == 0
+        standby_ready &= bool(services) and any(value.get('status') == 'PRIMARY' and value.get('rolloutState') == 'COMPLETED'
+            and value.get('taskDefinition') == services[0]['taskDefinition'] for value in services[0].get('deployments', []))
+        groups = services[0].get('loadBalancers', []) if services else []
+        target_ready = bool(groups)
+        for group in groups:
+            targets = boto3.client('elbv2', region_name='eu-west-3').describe_target_health(TargetGroupArn=group['targetGroupArn'])['TargetHealthDescriptions']
+            target_ready &= bool(targets) and all(value['TargetHealth']['State'] == 'healthy' for value in targets)
+        images = request.get('images')
+        images_ready = not images
+        if images and services:
+            containers = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']['containerDefinitions']
+            primary_image = cloudrun.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [{}])[0].get('image')
+            images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
+        return {'verified': primary_ready and standby_ready and target_ready and images_ready,
+            'primary_ready': primary_ready, 'standby_ready': standby_ready, 'target_ready': target_ready,
+            'images_ready': images_ready, 'observed_at': int(time.time())}
     if action == 'health':
-        import boto3, urllib.request
+        import boto3, urllib.request, ssl, botocore
         from botocore.config import Config
         client = lambda name, region='eu-west-3': boto3.client(name, region_name=region, config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 0}))
         if client('sts').get_caller_identity()['Account'] != '804210702561': raise ValueError('Compte AWS inattendu')
         try:
-            with urllib.request.urlopen('https://' + app + '.apps.mooroon5.fr' + document['profile']['gcp'].get('readiness_path', '/health'), timeout=10) as response:
+            with urllib.request.urlopen('https://' + app + '.apps.mooroon5.fr' + document['profile']['gcp'].get('readiness_path', '/health'), timeout=10, context=ssl.create_default_context(cafile=str(Path(botocore.__file__).parent / 'cacert.pem'))) as response:
                 public_ready = response.status == 200
         except Exception: public_ready = False
         services = client('ecs').describe_services(cluster=document['profile'].get('automation', {}).get('ecs_cluster_arn', 'cnp-cluster'), services=[app + '-prod'])['services']
@@ -67,9 +96,20 @@ def execute(request):
             records[name] = decode(client('dynamodb').get_item(TableName='cnp-failover-automation', Key={'app': {'S': app}, 'record': {'S': name}}, ConsistentRead=True).get('Item', {}))
         control, replication = records['CONTROL'], records['REPLICATION']
         fresh = 0 <= int(time.time()) - replication.get('observed_at', 0) <= 120 and 0 <= int(time.time()) - replication.get('last_message_at', 0) <= 120
-        configured = bool(control.get('config_hash')) and control.get('config_hash') == replication.get('config_hash')
+        import automation
+        expected = next(value for value in request['packages']['worker-config.json']['applications'] if value['app'] == app)
+        configured = control.get('config_hash') == automation.config_hash(expected) and control.get('config_hash') == replication.get('config_hash')
+        triggers_ready = bool(request.get('task_definition'))
+        for rule in ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']:
+            events = client('events')
+            try:
+                enabled = events.describe_rule(Name=rule)['State'] == 'ENABLED'
+                targets = events.list_targets_by_rule(Rule=rule)['Targets']
+                triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == request.get('task_definition') for value in targets)
+            except Exception: triggers_ready = False
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
-        return {'verified': healthy and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
+        return {'verified': healthy and configured and triggers_ready and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
+            'configured': configured, 'triggers_ready': triggers_ready,
             'dns_ready': dns_ready, 'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
             'observed_at': int(time.time()), 'zero_loss_proven': False}
     if action == 'allocate-listener':
@@ -118,7 +158,10 @@ def execute(request):
             master = master[0] if isinstance(master, list) else master
             variables['bootstrap_secret_arns'] = sorted(set(variables['bootstrap_secret_arns'] + list(refs.values()) + [master['secretArn']]))
             if request['kind'] != 'bootstrap-plan':
-                worker = request['packages']['worker-config.json']
+                incoming = request['packages']['worker-config.json']
+                retained = {value['app']: value for value in variables['applications'] + variables['additional_applications']}
+                retained.update({value['app']: value for value in incoming['applications']})
+                worker = {'applications': [retained[name] for name in sorted(retained)]}
                 legacy = {value['app'] for value in variables['applications']}
                 variables['additional_applications'] = [value for value in worker['applications'] if value['app'] not in legacy]
                 image = request['images']['worker']
@@ -136,6 +179,13 @@ def execute(request):
             seal['bootstrap_version'] = hashlib.sha256(request['images']['bootstrap'].encode()).hexdigest()
             if request['kind'] != 'bootstrap-plan': seal['worker_version'] = version
         (work / 'seal.json').write_text(json.dumps(seal))
+        if review['safe'] and not review['changes']:
+            outputs = json.loads(command(['terraform', 'output', '-json'], target))
+            if stack == 'credentials': review['credentials'] = outputs
+            else:
+                review['outputs'] = outputs
+                review['bootstrap_task_definition'] = outputs['bootstrap_version_task_arns']['value'][seal['bootstrap_version']]
+                if seal.get('worker_version'): review['worker_task_definition'] = outputs['worker_version_task_arns']['value'][seal['worker_version']]
         return review
     if action == 'apply':
         seal = json.loads((work / 'seal.json').read_text())
@@ -199,17 +249,24 @@ def execute(request):
         import base64, zlib
         compressed = base64.b64encode(zlib.compress(payload.encode())).decode()
         if len(compressed) > 6000: raise ValueError('Configuration ECS trop volumineuse')
+        pending_file = work / 'task-requests.json'
+        pending = json.loads(pending_file.read_text()) if pending_file.exists() else {}
         def task(operation):
             if bootstrap:
                 script = "import os,pathlib,subprocess,base64,zlib; p=pathlib.Path('/tmp/phase1-operation.json'); p.write_bytes(zlib.decompress(base64.b64decode(os.environ['CNP_OPERATION_CONFIG']))); p.chmod(0o600); raise SystemExit(subprocess.call(['python','bootstrap.py','" + operation + "','--config',str(p),'--execute']))"
                 override = {'name': 'bootstrap', 'command': [script], 'environment': [{'name': 'CNP_OPERATION_CONFIG', 'value': compressed}]}
             else:
                 override = {'name': 'worker', 'command': [operation, '--app', app, '--execute']}
-            response = ecs.run_task(cluster=variables['ecs_cluster_arn'], taskDefinition=actual['taskDefinitionArn'], launchType='FARGATE', count=1,
-                networkConfiguration={'awsvpcConfiguration': {'subnets': variables['public_subnet_ids'], 'securityGroups': [variables['ecs_security_group_id']], 'assignPublicIp': 'ENABLED'}},
-                overrides={'containerOverrides': [override]}, startedBy='cnp-portal-phase1')
-            if response.get('failures') or len(response.get('tasks', [])) != 1: raise ValueError('Lancement ECS refusé')
-            arn = response['tasks'][0]['taskArn']
+            if operation in pending:
+                arn = pending[operation]
+            else:
+                response = ecs.run_task(clientToken=hashlib.sha256((str(work) + operation).encode()).hexdigest(), cluster=variables['ecs_cluster_arn'], taskDefinition=actual['taskDefinitionArn'], launchType='FARGATE', count=1,
+                    networkConfiguration={'awsvpcConfiguration': {'subnets': variables['public_subnet_ids'], 'securityGroups': [variables['ecs_security_group_id']], 'assignPublicIp': 'ENABLED'}},
+                    overrides={'containerOverrides': [override]}, startedBy='cnp-portal-phase1')
+                if response.get('failures') or len(response.get('tasks', [])) != 1: raise ValueError('Lancement ECS refusé')
+                arn = response['tasks'][0]['taskArn']
+                pending[operation] = arn
+                pending_file.write_text(json.dumps(pending))
             ecs.get_waiter('tasks_stopped').wait(cluster=variables['ecs_cluster_arn'], tasks=[arn], WaiterConfig={'Delay': 5, 'MaxAttempts': 100})
             stopped = ecs.describe_tasks(cluster=variables['ecs_cluster_arn'], tasks=[arn])['tasks'][0]
             if any(container.get('exitCode') != 0 for container in stopped['containers']): raise ValueError('Tâche opérateur en échec ; aucune reprise destructive automatique')
@@ -237,7 +294,9 @@ def execute(request):
                 raise ValueError('Réplication fraîche et complète non prouvée')
         if action == 'worker-verify':
             controls = completed['status']['results']
-            if not any(value.get('state') in {'DISABLED', 'WAIT_SIGNALS'} and isinstance(value.get('paused'), bool) for value in controls):
+            import automation
+            expected = next(value for value in config['applications'] if value['app'] == app)
+            if not any(value.get('state') == 'DISABLED' and value.get('paused') is True and value.get('config_hash') == automation.config_hash(expected) for value in controls):
                 raise ValueError('Worker en pause non prouvé')
         return {'completed': True, 'tasks': completed, 'activated': action == 'worker-resume', 'verified': action in {'verify', 'worker-verify'}}
     raise ValueError('Opération inconnue')

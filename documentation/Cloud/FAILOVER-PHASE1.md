@@ -1,155 +1,95 @@
-# Profil failover Pixelcalm — phase 1
+# Failover CNP — phase 1
 
-Le profil est isolé dans `src/services/environment-failover.js`, sur le modèle
-de `environment-azure.js`. Les seuls branchements dans le service partagé
-concernent le rendu, l'état de disponibilité et l'interdiction de suppression
-du profil. Aucun comportement Azure ou des autres applications n'est changé.
-Coordonner tout changement de ces branchements avec Maia ; son travail Azure
-de `f1c78d1` est conservé.
+Le failover est une capacité par application de production GCP. PostgreSQL est
+le seul moteur de base pris en charge pour le moment ; les applications sans
+base conservent un parcours stateless. Pixelcalm n'est qu'un ancien pilote.
 
-## Préparation locale et configuration
+## Parcours manager
 
-Node 22.22.2 est requis pour l'installation locale actuelle. Conserver la base
-SQLite et les fichiers de configuration existants. Le démarrage existant via
-`start-portal.sh` est compatible avec les symlinks du runtime privé.
+Le déploiement demande `Activer le failover GCP → AWS` et publie une même image
+par digest dans GAR et ECR. Le portail vérifie la provenance CI et la révision
+courante avant publication et avant approbation du runtime.
 
-Le profil est opt-in : un fichier défini par `CNP_FAILOVER_SETTINGS`, ou par
-défaut `../phase1-deployment-20261029/portal-settings.json` à côté du dépôt,
-référence les documents locaux sans mots de passe :
+Depuis `/failover?app=<nom>`, la création du profil lance une préparation
+persistante. Un profil non encore initialisé peut aussi utiliser **Démarrer la
+préparation automatique**. La plateforme enchaîne :
 
-```json
-{
-  "app": "app4-pixelcam",
-  "profile": "/chemin/profile.json",
-  "credentials": "/chemin/credentials-outputs.json",
-  "secrets": "/chemin/secret-result.json",
-  "observations": "/chemin/observations.json"
-}
-```
+1. Plan des conteneurs de secrets, puis initialisation sans rotation implicite.
+2. Proposition GitOps des bases ; attente des ressources et collecte des CA.
+3. Plan de la tâche bootstrap, copie initiale et preuve d'une écriture rejouée.
+4. Proposition des runtimes, contrôle de la nouvelle révision GCP et du secours
+   ECS/ALB, puis proposition DNS et observation des contrôles réellement créés.
+5. Plan du worker, configuration en pause, vérification du profil exact,
+   nouvelle preuve SQL, plan d'activation, activation et santé opérationnelle.
 
-`credentials` contient les références Terraform, `secrets` le résultat expurgé
-d'initialisation (dont la version GCP), jamais les valeurs des secrets. Les
-observations contiennent les ressources Crossplane Ready/Synced et leurs CA
-publiques. Le profil conserve `ENCRYPTED_ONLY` côté Cloud SQL ; le choix explicite
-`wireguard-tls` ne concerne que le subscriber natif RDS.
+Chaque proposition GitOps et chaque plan Terraform modifiant le cloud attend
+sa revue manager. L'automate ne fabrique aucune approbation humaine. La revue
+GitOps porte sur le SHA et la baseline exacts ; un apply porte sur un plan
+sauvegardé et scellé. Destruction et remplacement sont refusés.
 
-Le rendu utilise Python 3 (surcharge possible `CNP_FAILOVER_PYTHON`) et réutilise
-les générateurs versionnés du dépôt frère `config-repo/scripts`. Le pont
-`scripts/failover/render.py` est sans réseau et ne lit aucun secret cloud. Il
-reçoit uniquement des documents JSON par stdin. Conserver les deux dépôts à
-côté l'un de l'autre ; ce profil opérateur local n'est pas une image de portail
-autonome à déployer dans un autre environnement sans ces dépendances.
+L'état et les identifiants des opérations sont conservés dans SQLite. Après
+interruption, **Reprendre après correction** utilise les tâches ECS suivies et
+leur journal. Un apply incertain exige un nouveau plan et une nouvelle revue.
+La convergence des fournisseurs est observée pendant une heure au maximum,
+sans rejouer l'initialisation SQL. Un manager révoqué ne poursuit pas le parcours.
+Une préparation SQL déjà engagée manuellement n'est jamais réinitialisée par
+la création implicite d'un nouvel automate.
 
-## Circuit prod
+Après mise en service, les contrôles de santé continuent périodiquement.
+Une ancienne preuve, une preuve liée à un autre profil ou une date future ne
+permettent pas d'annoncer l'application prête. La santé SQL contrôle aussi le
+profil du worker et les cibles EventBridge réellement activées.
 
-Le manager utilise `http://localhost:3001/failover` :
+## Bascule pendant une panne
 
-1. Préparer `databases`. Le portail lit la baseline distante exacte, conserve
-   toutes les ressources existantes et génère Cloud SQL/RDS. Il crée une branche
-   dédiée et une PR avec la GitHub App `cnp-platform-bot[bot]`, jamais un push
-   direct sur main.
-2. Examiner les fichiers affichés et la PR, puis approuver le SHA exact dans
-   le portail. L'identité du manager est enregistrée dans la base. Un profil,
-   un SHA ou une baseline modifiés invalident la revue. Une seule proposition
-   peut être en attente ; aucune préparation ne fusionne automatiquement.
-3. Attendre les bases Ready/Synced et vérifier le bootstrap, la réplication
-   initiale et les nouvelles écritures avec les outils de recette existants.
-4. Compléter le profil avec les endpoints, CA et références réellement observés,
-   puis préparer et approuver `runtime` et ensuite `dns`.
+Une fois activé, le worker AWS assure la bascule sans action manager pendant la
+panne. Il exige plusieurs signaux, une panne publique confirmée et la source
+SQL privée inaccessible. Une panne du seul frontend avec PostgreSQL encore
+accessible reste en attente de confirmation ; elle ne suffit pas à ouvrir un
+second écrivain. Le worker promeut RDS, aligne les séquences et ouvre le verrou
+DNS. Il ne réalise aucun failback automatique. La réplication asynchrone ne
+promet pas zéro perte lors d'une panne totale.
 
-Les étapes publiées sont enregistrées dans `failover_candidates` de la base
-existante. Un déploiement CI ordinaire conserve les manifests du profil approuvé
-plutôt que de remettre le mode bucket. Une nouvelle image ou un changement de
-profil nécessitent une nouvelle revue runtime. Les appels du service et les
-routes vérifient le rôle manager ; les POST exigent le jeton de session.
+## Installation actuelle
 
-Le bucket, ses objets, les volumes et variables existants restent conservés.
-Les nouveaux objets cloud portent `deletionPolicy: Orphan`. Ce lot ne migre
-pas les anciennes données vers PostgreSQL et ne réalise aucun failback.
+Utiliser Node 22 et conserver `.env`, `.env.cloud`, SQLite et les comptes
+existants. Les opérations locales utilisent les dépôts frères `cnp` et
+`config-repo`, Python avec leurs dépendances, Terraform, kubectl et gcloud.
+`CNP_FAILOVER_OPERATOR_PYTHON` désigne l'interpréteur opérateur.
 
-## Limites de validation
+`CNP_FAILOVER_SETTINGS` référence des documents locaux expurgés : profil,
+références Terraform, résultat d'initialisation et observations. Les paramètres
+partagés incluent les images opérateur et les varfiles déjà appliqués. Ils ne
+sont pas committés. `exposeLegacyApplication=false` masque l'ancien pilote sans
+supprimer ses ressources. Le paquet opérateur rassemble les profils publiés et
+conserve aussi les applications/générations déjà présentes dans le state.
 
-Une PR fusionnée n'est pas un état opérationnel : le parcours de disponibilité
-reste explicite et n'annonce pas « déployée » sans recette complète. Les plans
-réseau attendent deux relectures humaines avant application. Le worker doit
-observer une réplication saine avant activation de ses déclencheurs.
-Les tests de panne sont réalisés par Thomas ; le portail ne coupe jamais GCP
-ou WireGuard pour valider cette phase.
+Le portail cloud standard ne contient pas encore ce paquet opérateur et ses
+outils. Ne pas déduire d'un build de son image que ce parcours local est installé
+dans Cloud Run. Les tests CI du portail utilisent une révision explicite des
+générateurs du dépôt privé `config-repo`, lue avec `CONFIG_REPO_TOKEN`.
 
-## Généralisation locale — 3 novembre 2026
+Les applications PostgreSQL doivent utiliser les variables `DB_*` injectées,
+le rôle runtime dédié et la vérification de CA. Fournir une sonde de vie AWS
+indépendante de la disponibilité SQL : le standby SQL reste fermé avant
+promotion. Les applications sans base ne doivent pas dépendre de fichiers ou
+sessions locaux pour assurer leur continuité.
 
-Le code ne sélectionne plus le pilote par son nom : les profils sont enregistrés
-par application dans `failover_profiles`. Le fichier historique reste une source
-compatible pour le pilote existant. Les candidats portent `app_name` ; la migration
-rattache l'ancien historique à ses chemins GitOps réellement publiés. Préparations,
-prérequis, manifests et revue sont isolés par application. Le SHA exact et la
-baseline distante restent vérifiés avant tout merge.
+## Préservation et limites restantes
 
-Dans **Déploiements → Nouveau déploiement**, l'option **Activer le failover GCP →
-AWS** demande une production GCP sans SQLite sur bucket. La CI utilise alors le
-circuit existant `target_cloud: both`, en mode portail : la publication reste
-soumise au manager. Une demande sans profil reste en attente ; elle ne publie pas
-silencieusement un runtime GCP seul.
+Les buckets, objets, configurations et applications existants sont conservés.
+Les ressources générées utilisent `Orphan` ; aucune sélection ApplicationSet
+existante n'est retirée. Aucun changement de VM, IP, clé ou WireGuard.
+Cloud SQL reste en `ENCRYPTED_ONLY`, applications et administration vérifient la
+CA. L'exception `wireguard-tls` concerne uniquement le subscriber natif RDS.
 
-Le manager accède à **Failover** dans le menu. Il configure le document
-`{profile, credentials, secrets, observations}` de l'application puis prépare
-les lots. Les références de secrets doivent appartenir à l'application. Les noms
-de secrets SQL et priorités ALB doivent être distincts des autres profils.
-Les identités, contrats et bases d'un profil publié ne sont pas modifiables par ce
-formulaire ; seules les évolutions compatibles passent par la revue suivante.
+Le contrat PostgreSQL actuel décrit manuellement plusieurs tables `public`,
+avec des types limités, une clé primaire simple et des séquences identity
+positives. **Il ne couvre pas encore tous les schémas ou migrations PostgreSQL.**
+La préparation générique du schéma et les migrations DDL restent à terminer ;
+la réplication logique ne réplique pas ces migrations.
 
-Deux parcours supplémentaires sont disponibles :
-
-- `application_profile: postgres` : schéma déclaratif dans `sql_contract`, avec
-  plusieurs tables du schéma public, une clé primaire simple par table et
-  séquences identity positives. Aucun SQL libre, aucune migration automatique.
-  Le bootstrap valide le schéma existant et le worker aligne les séquences à la
-  promotion. Les applications doivent utiliser le rôle exclusif `cnp_runtime`,
-  les variables DB injectées et les CA vérifiées. Fournir une sonde de vie AWS
-  indépendante de la disponibilité SQL, par exemple `/healthz`.
-- `mode: stateless` et `application_profile: stateless` : pas de base, secret SQL,
-  réplication ou worker SQL. Les lots sont `runtime` puis `dns` ; Route53 utilise
-  directement la sonde HTTPS primaire. Ce mode ne couvre pas des fichiers
-  persistants, sessions locales ou services externes non répliqués.
-
-Exemples : `config-repo/docs/templates/failover-phase1/{postgres,stateless}/`.
-Les paramètres réseau partagés sont réutilisés ; aucune VM ou configuration
-WireGuard n'est créée ou modifiée par les générateurs.
-
-Pour une production déjà présente, **Rattacher la production existante au
-portail** lit le registre, les ressources et l'Application Argo. Le manager
-confirme la révision examinée. L'action écrit seulement le rattachement local,
-conserve le propriétaire GitOps et ne crée pas de fausse exécution CI. Une
-Application en suppression ou une baseline différente bloque l'opération.
-
-Les paquets `secrets`, `bootstrap`, `automation` sont téléchargeables pour le
-circuit opérateur existant. Le paquet automation rassemble tous les profils SQL
-connus afin de ne pas omettre une application du worker partagé. La proposition
-conserve `enable_triggers=false` ; garder les varfiles bootstrap/activation déjà
-appliqués et faire contrôler le plan par `safe_apply.py`. Un paquet téléchargé
-n'est ni un apply ni une preuve de disponibilité.
-
-**État de livraison : développements locaux testés, pas encore déployés dans
-l'image cloud du portail ou du worker.** Le formulaire manager reste un formulaire
-de profil opérateur ; le provisionnement des secrets, l'exécution distante du
-bootstrap et l'activation Terraform ne sont pas encore un parcours automatique
-complet dans le portail. Le changement ne suffit donc pas à déclarer la phase 1
-self-service entièrement terminée. La CI normale conserve les manifests approuvés ;
-une nouvelle image doit encore être renseignée dans une revue runtime.
-
-## Raccordement CI — 4 novembre 2026
-
-Le workflow réutilisable exporte désormais `image_digest`. Le caller failover
-produit une preuve `cnp-images.json` uniquement après succès du pipeline prod.
-Le portail vérifie l'application, les deux registres, la révision courante,
-l'unicité et la validité de l'artefact. Le candidat runtime utilise ces images
-par digest ; l'approbation les revalide et conserve leur provenance en base.
-Une nouvelle CI de production attend une nouvelle revue runtime au lieu de
-réutiliser silencieusement l'ancienne version.
-
-L'action manager « Configurer la CI sur les deux clouds » configure le workflow
-CNP de l'application. Les changements de `ci-templates` et du portail doivent
-être publiés ensemble avant d'utiliser cette action sur un dépôt réel. Ils sont
-encore locaux. Le provisionnement des secrets, l'exécution du bootstrap et
-l'activation du worker restent à raccorder au portail ; les paquets existants
-restent disponibles, sans exécution automatique ajoutée par ce lot.
+Les tests de l'automate et de ses contrôles ne remplacent pas la recette d'un
+nouveau déploiement par le portail. Cette recette complète et le test de panne
+réservé à Thomas restent nécessaires avant de déclarer la phase 1 terminée.
+Le portail ne coupe ni GCP ni WireGuard pour sa recette.
