@@ -238,8 +238,12 @@ async function applyApplicationSet(manifest) {
       if (/^crossplane-autodiscovery-(dev|prod)$/.test(name)) {
         const paths = manifest.spec.generators[0].git.directories.map(entry => entry.path);
         const patch = require('../services/application-set-preservation').additivePatch(existing, paths);
-        await customApi.patchNamespacedCustomObject(group, version, namespace, plural, name,
-          patch, undefined, undefined, undefined, { headers: { 'Content-Type': 'application/json-patch+json' } });
+        // Le rôle borné du portail autorise UPDATE, pas PATCH. Conserver
+        // l'objet complet et son resourceVersion garde le contrôle de concurrence.
+        const updated = JSON.parse(JSON.stringify(existing));
+        updated.spec.generators[0].git.directories = patch[1].value;
+        updated.spec.syncPolicy = patch[2].value;
+        await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, updated);
         return;
       }
       manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
