@@ -56,3 +56,7 @@ test('a label in a build stage cannot claim runtime compatibility for the final 
   await expect(provider.prepare(dep)).rejects.toThrow('chargeur');
   expect(identity.prepare).not.toHaveBeenCalled();
 });
+test('bucket errors retain safe status and operation for the operator diagnostic', async () => {
+  jest.spyOn(protocol, 'request').mockRejectedValue({ status: 403, providerStatus: 'PERMISSION_DENIED', permission: 'storage.buckets.get', config: { data: 'private-payload' } });
+  await expect(provider.prepare(dep)).rejects.toMatchObject({ status: 403, operation: 'storage.buckets.get', providerStatus: 'PERMISSION_DENIED', permission: 'storage.buckets.get' });
+});

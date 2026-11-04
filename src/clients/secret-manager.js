@@ -2,6 +2,7 @@
 const axios = require('axios');
 const { createHash } = require('crypto');
 const auth = require('./google-access');
+const { provisionError } = require('../../scripts/runtime/provider-error.cjs');
 const { config } = require('../config/env');
 
 // IAM can briefly lag a newly created service account. Retry only conflicts or
@@ -28,27 +29,31 @@ async function prepare(dep, credentials = auth) {
   const account = runtimeAccount(dep);
   const provisioner = process.env.GCP_CROSSPLANE_SERVICE_ACCOUNT || `crossplane-gcp-sa@${config.gcp.project}.iam.gserviceaccount.com`;
   if (!/^[\w.-]+@[\w.-]+\.iam\.gserviceaccount\.com$/.test(provisioner)) throw new Error('Identité Crossplane non configurée.');
+  let operation = 'google.authentication';
   try {
     const headers = await credentials.headers();
     const root = `https://iam.googleapis.com/v1/projects/${config.gcp.project}/serviceAccounts`;
-    const request = (method, url, data) => axios.request({ method, url, data, headers, timeout: 10000 });
-    let created = false;
-    try { await request('GET', `${root}/${account}`); }
+    const request = (method, url, data, params) => axios.request({ method, url, data, params, headers, timeout: 10000 });
+    let created = false; let resourceId = account;
+    operation = 'iam.serviceAccounts.get';
+    try { const response = await request('GET', `${root}/${account}`); if (/^\d+$/.test(response.data.uniqueId || '')) resourceId = response.data.uniqueId; }
     catch (error) {
       if (error.response?.status !== 404) throw error;
       created = true;
-      await request('POST', root, { accountId: account.split('@')[0], serviceAccount: { displayName: `CNP runtime ${dep.appName} ${dep.environment}` } });
+      operation = 'iam.serviceAccounts.create';
+      const response = await request('POST', root, { accountId: account.split('@')[0], serviceAccount: { displayName: `CNP runtime ${dep.appName} ${dep.environment}` } });
+      if (/^\d+$/.test(response.data.uniqueId || '')) resourceId = response.data.uniqueId;
     }
     await updatePolicy(
-      () => request('POST', `${root}/${account}:getIamPolicy`, { options: { requestedPolicyVersion: 3 } }),
-      policy => request('POST', `${root}/${account}:setIamPolicy`, { policy }),
+      () => { operation = 'iam.serviceAccounts.getIamPolicy'; return request('POST', `${root}/${resourceId}:getIamPolicy`, undefined, { 'options.requestedPolicyVersion': 3 }); },
+      policy => { operation = 'iam.serviceAccounts.setIamPolicy'; return request('POST', `${root}/${resourceId}:setIamPolicy`, { policy }); },
       policy => {
         let binding = policy.bindings.find(item => item.role === 'roles/iam.serviceAccountUser' && !item.condition);
         if (!binding) { binding = { role: 'roles/iam.serviceAccountUser', members: [] }; policy.bindings.push(binding); }
         binding.members = [...new Set([...(binding.members || []), `serviceAccount:${provisioner}`])];
       }, created,
     );
-  } catch (_) { throw new Error('Création de l’identité Cloud Run impossible. Vérifiez les droits IAM du portail et l’identité Crossplane.'); }
+  } catch (error) { throw provisionError(operation, error, 'Création de l’identité Cloud Run impossible. Vérifiez les droits IAM du portail et l’identité Crossplane.'); }
 }
 
 async function store(dep, key, value) {

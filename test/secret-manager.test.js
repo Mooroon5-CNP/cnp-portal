@@ -94,3 +94,27 @@ test('empty values do not depend on zero-byte secret versions and never create p
   expect(await client.store(dep, 'OPTIONAL', '')).toEqual({ name: 'OPTIONAL', value: '' });
   expect(axios.request).not.toHaveBeenCalled();
 });
+
+test('IAM policy read uses query options with an empty body and numeric ID after creation', async () => {
+  let reads = 0;
+  axios.request.mockImplementation(async options => {
+    if (options.method === 'GET' && reads++ === 0) throw { response: { status: 404 } };
+    if (options.method === 'POST' && options.url.endsWith('/serviceAccounts')) return { data: { uniqueId: '123456789012345678901' } };
+    return { data: { bindings: [] } };
+  });
+  await client.prepare(dep);
+  const get = axios.request.mock.calls.find(([options]) => options.url.endsWith(':getIamPolicy'))[0];
+  expect(get.method).toBe('POST'); expect(get.data).toBeUndefined();
+  expect(get.params).toEqual({ 'options.requestedPolicyVersion': 3 });
+  expect(get.url).toContain('/123456789012345678901:getIamPolicy');
+});
+test('provisioning errors identify the failing IAM operation without exposing tokens or request data', async () => {
+  axios.request.mockRejectedValue({ config: { headers: { Authorization: 'Bearer private-access-token' }, data: 'private-payload' }, response: { status: 403, data: { error: {
+    status: 'PERMISSION_DENIED', message: 'private-payload', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'IAM_PERMISSION_DENIED', metadata: { permission: 'iam.serviceAccounts.get', credential: 'private-access-token' } }],
+  } } } });
+  try { await client.prepare(dep); throw new Error('Expected failure'); }
+  catch (error) {
+    expect(error).toMatchObject({ status: 403, operation: 'iam.serviceAccounts.get', providerStatus: 'PERMISSION_DENIED', permission: 'iam.serviceAccounts.get' });
+    expect(JSON.stringify(error)).not.toContain('private'); expect(error.message).not.toContain('private');
+  }
+});

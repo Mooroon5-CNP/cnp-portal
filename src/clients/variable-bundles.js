@@ -4,6 +4,7 @@ const auth = require('./google-access');
 const identity = require('./secret-manager');
 const { config } = require('../config/env');
 const protocol = require('../../scripts/runtime/variables.cjs');
+const { provisionError } = require('../../scripts/runtime/provider-error.cjs');
 const GCS_PERMISSIONS = ['storage.buckets.create', 'storage.buckets.get', 'storage.buckets.getIamPolicy', 'storage.buckets.setIamPolicy', 'storage.objects.create', 'storage.objects.get', 'iam.serviceAccounts.create', 'iam.serviceAccounts.get', 'iam.serviceAccounts.getIamPolicy', 'iam.serviceAccounts.setIamPolicy'];
 function provider() { return process.env.CNP_VARIABLES_PROVIDER || 'secret-manager'; }
 function client(credentials = auth) { return protocol.createClient({ getAccess: credentials.token, req: protocol.request, getJWT: protocol.googleJWT }); }
@@ -43,24 +44,28 @@ async function prepare(dep, credentials = auth) {
   }
   await identity.prepare(dep, credentials);
   const headers = await credentials.headers();
+  const call = async (operation, url, options) => {
+    try { return await protocol.request(url, { timeout: 15000, ...options }); }
+    catch (error) { throw provisionError(operation, error, 'Préparation du stockage impossible.'); }
+  };
   if (provider() === 'gcs') {
     const name = bucket(dep); const base = `https://storage.googleapis.com/storage/v1/b/${name}`;
     let metadata;
-    try { metadata = await protocol.request(base, { headers }); }
+    try { metadata = await call('storage.buckets.get', base, { headers }); }
     catch (error) {
-      if (error.status !== 404) throw new Error('Vérification du bucket privé impossible.');
-      metadata = await protocol.request(`https://storage.googleapis.com/storage/v1/b?project=${encodeURIComponent(config.gcp.project)}`, { method: 'POST', headers, body: {
+      if (error.status !== 404) throw error;
+      metadata = await call('storage.buckets.create', `https://storage.googleapis.com/storage/v1/b?project=${encodeURIComponent(config.gcp.project)}`, { method: 'POST', headers, body: {
         name, location: config.gcp.region, labels: { 'cnp-deployment': dep.id },
         iamConfiguration: { uniformBucketLevelAccess: { enabled: true }, publicAccessPrevention: 'enforced' },
       } });
     }
     if (metadata.labels?.['cnp-deployment'] !== dep.id || metadata.iamConfiguration?.publicAccessPrevention !== 'enforced' || metadata.iamConfiguration?.uniformBucketLevelAccess?.enabled !== true) throw new Error('Le bucket ne respecte pas le contrat privé.');
-    const policy = await protocol.request(`${base}/iam?optionsRequestedPolicyVersion=3`, { headers });
+    const policy = await call('storage.buckets.getIamPolicy', `${base}/iam?optionsRequestedPolicyVersion=3`, { headers });
     if (policy.bindings?.some(binding => binding.members?.some(member => ['allUsers', 'allAuthenticatedUsers'].includes(member)))) throw new Error('Un accès public au bucket est interdit.');
     policy.bindings ||= [];
     const member = `serviceAccount:${identity.runtimeAccount(dep)}`;
     if (!policy.bindings.some(binding => binding.role === 'roles/storage.objectViewer' && !binding.condition && binding.members?.includes(member))) policy.bindings.push({ role: 'roles/storage.objectViewer', members: [member] });
-    await protocol.request(`${base}/iam`, { method: 'PUT', headers, body: policy });
+    await call('storage.buckets.setIamPolicy', `${base}/iam`, { method: 'PUT', headers, body: policy });
   } else {
     const account = await protocol.request(`https://iam.googleapis.com/v1/projects/${config.gcp.project}/serviceAccounts/${identity.runtimeAccount(dep)}`, { headers });
     if (!/^\d+$/.test(account.uniqueId || '')) throw new Error('Identité runtime Google invalide.');
@@ -79,7 +84,7 @@ async function write(dep, values, credentials = auth) {
   try {
     const reference = await client(credentials).writeBundle(target(dep), values, provider(), { bundleId, bucket: bucket(dep) });
     return { reference, names: Object.keys(values).sort() };
-  } catch (_) { throw new Error('Enregistrement du bundle impossible. Aucune nouvelle configuration publiée.'); }
+  } catch (error) { throw provisionError(provider() === 'gcs' ? 'storage.objects.create' : 'openbao.kv.write', error, 'Enregistrement du bundle impossible. Aucune nouvelle configuration publiée.'); }
 }
 async function read(bundle) {
   try { return await client().readBundle(bundle.reference, true); }

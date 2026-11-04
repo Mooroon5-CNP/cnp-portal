@@ -2,6 +2,7 @@
 const https = require('https');
 const http = require('http');
 const { randomUUID } = require('crypto');
+const { safeDetails } = require('./provider-error.cjs');
 const RESERVED = /^(PORT|HOST|DATA_DIR|DD_ENV|DD_SERVICE|DD_VERSION|LOG_LEVEL|CNP_VARIABLES_.*|CNP_OPENBAO_.*)$/;
 function fail(code, status) { const error = new Error(code); error.code = code; error.status = status; return error; }
 function scope(value) {
@@ -41,12 +42,15 @@ function request(url, { method = 'GET', headers = {}, body, timeout = 3000 } = {
       res.on('data', chunk => { size += chunk.length; if (size > 524288) res.destroy(fail('CONFIG_RESPONSE_TOO_LARGE')); else chunks.push(chunk); });
       res.on('error', () => reject(fail('CONFIG_CONNECTION_FAILED')));
       res.on('end', () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) return reject(fail('CONFIG_PROVIDER_REQUEST_FAILED', res.statusCode));
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          let data; try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (_) { data = {}; }
+          return reject(Object.assign(fail('CONFIG_PROVIDER_REQUEST_FAILED', res.statusCode), safeDetails({ response: { status: res.statusCode, data } })));
+        }
         try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
         catch (_) { reject(fail('CONFIG_PAYLOAD_INVALID')); }
       });
     });
-    req.on('error', () => reject(fail('CONFIG_CONNECTION_FAILED')));
+    req.on('error', error => reject(Object.assign(fail(error.code === 'CONFIG_TIMEOUT' ? 'CONFIG_TIMEOUT' : 'CONFIG_CONNECTION_FAILED'), safeDetails(error))));
     req.setTimeout(timeout, () => req.destroy(fail('CONFIG_TIMEOUT')));
     // A deadline also covers connection establishment and DNS, unlike socket timeout alone.
     const timer = setTimeout(() => req.destroy(fail('CONFIG_TIMEOUT')), timeout);

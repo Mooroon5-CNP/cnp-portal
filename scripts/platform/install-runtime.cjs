@@ -25,7 +25,7 @@ function main() {
   const ignore = fs.existsSync(path.join(dir, '.dockerignore')) ? fs.readFileSync(path.join(dir, '.dockerignore'), 'utf8') : '';
   if (/^\s*(?:\.cnp\/?|\.\*|\*)\s*$/m.test(ignore)) throw new Error('.dockerignore pourrait exclure .cnp/runtime : vérifier avant adaptation.');
   fs.mkdirSync(path.join(dir, '.cnp/runtime'), { recursive: true });
-  for (const name of ['start.cjs', 'variables.cjs']) fs.copyFileSync(path.join(__dirname, '../runtime', name), path.join(dir, '.cnp/runtime', name));
+  for (const name of ['start.cjs', 'variables.cjs', 'provider-error.cjs']) fs.copyFileSync(path.join(__dirname, '../runtime', name), path.join(dir, '.cnp/runtime', name));
   fs.writeFileSync(file, next);
   console.log('Dockerfile adapté. Vérifiez le diff, construisez et testez l’image avant de la publier.');
 }

@@ -5,6 +5,7 @@ const fs = require('fs'); const os = require('os'); const path = require('path')
 const { execFileSync } = require('child_process'); const { randomBytes, X509Certificate } = require('crypto');
 const { parseFile } = require('../../public/js/application-variables');
 const { previewId } = require('./prepare-preview.cjs'); const { render } = require('./render-preview.cjs');
+const { safeDetails } = require('../runtime/provider-error.cjs');
 const { request, validateValues } = require('../runtime/variables.cjs');
 const PROJECT = 'cnp-terraform-512313'; const REGION = 'europe-west9';
 const REGISTRY = 'europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal';
@@ -68,6 +69,7 @@ async function main() {
   stage('private bucket and isolated runtime identity');
   const provider = require('../../src/clients/variable-bundles');
   await provider.prepare(dep, credentials);
+  stage('write versioned application variable bundle');
   const bundle = await provider.write(dep, values, credentials);
   const profile = { schemaVersion: 1, service: 'cnp-portal-preview', project: PROJECT, region: REGION, runtimeAccount: provider.runtimeAccount(dep), bundle };
   fs.writeFileSync(path.join(dir, 'profile.json'), JSON.stringify(profile, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
@@ -108,4 +110,4 @@ async function main() {
     metadataDirectory: dir, generatedAdminPasswordFile: fs.existsSync(path.join(dir, 'admin-password.txt')) ? path.join(dir, 'admin-password.txt') : null,
     next: 'gcloud run services proxy cnp-portal-preview --project=cnp-terraform-512313 --region=europe-west9 --port=8090' }, null, 2));
 }
-if (require.main === module) main().catch(error => { console.error(JSON.stringify({ deployed: false, step, code: typeof error.code === 'string' ? error.code : /^[A-Z_]+$/.test(error.message || '') ? error.message : 'PREVIEW_DEPLOY_FAILED', httpStatus: error.status || null, message: 'No existing portal service was changed. Check operator permissions and the named stage; configuration values were not logged.' })); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(JSON.stringify({ deployed: false, step, code: typeof error.code === 'string' ? error.code : /^[A-Z_]+$/.test(error.message || '') ? error.message : 'PREVIEW_DEPLOY_FAILED', httpStatus: error.status || null, operation: error.operation || null, ...safeDetails(error), message: 'No existing portal service was changed. Check operator permissions and the named stage; configuration values were not logged.' })); process.exitCode = 1; });
