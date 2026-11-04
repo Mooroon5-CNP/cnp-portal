@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const { randomBytes } = require('crypto');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
 const DB_PATH  = process.env.DB_PATH  || path.join(DATA_DIR, 'cnp-portal.sqlite');
@@ -47,13 +48,27 @@ if (!cols.includes('approved')) {
   db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1');
 }
 
-// Bootstrap explicitly; never create or retain the public admin/admin credential.
+// Bootstrap automatically when no operator password is configured; never use admin/admin.
 const adminExists = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get('admin');
 const defaultPassword = adminExists?.password_hash && bcrypt.compareSync('admin', adminExists.password_hash);
 if (!adminExists || defaultPassword) {
-  const password = process.env.ADMIN_INITIAL_PASSWORD;
-  if (!password || password.length < 16 || Buffer.byteLength(password) > 72) {
-    throw new Error('Set ADMIN_INITIAL_PASSWORD (16–72 bytes) to bootstrap admin or replace the unsafe default password.');
+  let password = process.env.ADMIN_INITIAL_PASSWORD;
+  if (!password) {
+    const credentialPath = path.join(dataDir, 'admin-initial-password');
+    try {
+      password = fs.readFileSync(credentialPath, 'utf8').trim();
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      password = randomBytes(32).toString('hex');
+      try { fs.writeFileSync(credentialPath, password + '\n', { flag: 'wx', mode: 0o600 }); }
+      catch (writeError) {
+        if (writeError.code !== 'EEXIST') throw writeError;
+        password = fs.readFileSync(credentialPath, 'utf8').trim();
+      }
+    }
+  }
+  if (Buffer.byteLength(password) < 16 || Buffer.byteLength(password) > 72) {
+    throw new Error('Admin bootstrap password must contain 16–72 bytes.');
   }
   const hash = bcrypt.hashSync(password, 12);
   const now = new Date().toISOString();

@@ -28,6 +28,8 @@ COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
 COPY --chown=node:node documentation/ ./documentation/
 
+RUN mkdir -p /app/data && chown node:node /app/data
+
 USER node
 
 EXPOSE 3000
