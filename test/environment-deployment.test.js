@@ -418,3 +418,13 @@ test('le failover publie la provenance seulement après succès du pipeline prod
   expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
   expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
 });
+
+test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: 'registry.test/project/apps/pixelcam:old', failure: "Revision 'old' failed to start", url: null });
+  const result = await service.reconcile(dep);
+  expect(result).toMatchObject({ phase: 'deploying', revision });
+  expect(result.message).toContain('ArgoCD/Crossplane');
+  expect(result.message).not.toContain("Revision 'old'");
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: `registry.test/project/apps/pixelcam:${revision}`, failure: 'Current revision failed to start', url: null });
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'failed', message: 'Cloud Run : Current revision failed to start' });
+});
