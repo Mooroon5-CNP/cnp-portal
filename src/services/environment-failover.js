@@ -4,6 +4,7 @@
 // générés depuis la baseline Git distante et publiés uniquement par la GitHub
 // App, après revue manager du contenu exact. Aucun apply cloud dans ce module.
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { createHash, randomUUID } = require('crypto');
@@ -111,6 +112,39 @@ function inputs(s) {
   const read = key => JSON.parse(fs.readFileSync(s[key], 'utf8'));
   return { profile: read('profile'), credentials: read('credentials'), secrets: read('secrets'),
     observations: s.observations && fs.existsSync(s.observations) ? read('observations') : {} };
+}
+// Paramètres propres à la plateforme, identiques pour toutes les applications : IP du LB GCP, identité et sous-réseau
+// de Cloud Run, groupe de sécurité et CA de RDS, configuration de l'orchestration. Source : CNP_FAILOVER_PLATFORM,
+// sinon data/failover-platform.json. Repli hérité, tant que ce fichier n'existe pas : le profil du pilote référencé par
+// les paramètres partagés (ancien comportement de createProfile).
+const platformPath = () => process.env.CNP_FAILOVER_PLATFORM || path.resolve(sourceRoot, 'data/failover-platform.json');
+const AUTOMATION_REQUIRED = ['worker_image', 'ecs_cluster_arn', 'ecs_security_group_id', 'public_subnet_ids', 'subscription_ca_path_on_rds', 'kube_context'];
+function validatePlatform(value) {
+  const text = item => typeof item === 'string' && item.length > 0;
+  const problems = [];
+  if (!net.isIPv4(value?.gcp?.gcp_lb_ip)) problems.push('gcp.gcp_lb_ip');
+  if (!text(value?.gcp?.gcp_runtime?.service_account)) problems.push('gcp.gcp_runtime.service_account');
+  if (!text(value?.gcp?.gcp_runtime?.subnetwork)) problems.push('gcp.gcp_runtime.subnetwork');
+  if (!/^sg-[a-z0-9]+$/.test(value?.aws?.database_security_group_id || '')) problems.push('aws.database_security_group_id');
+  if (!text(value?.aws?.database_ca_pem) || !value.aws.database_ca_pem.includes('BEGIN CERTIFICATE')) problems.push('aws.database_ca_pem');
+  const automation = value?.automation;
+  if (!automation || typeof automation !== 'object' || Array.isArray(automation)) problems.push('automation');
+  else for (const key of AUTOMATION_REQUIRED) if (!(key in automation)) problems.push(`automation.${key}`);
+  if (problems.length) throw new Error(`Paramètres de plateforme invalides : ${problems.join(', ')}.`);
+  return value;
+}
+function platform() {
+  const file = platformPath();
+  if (fs.existsSync(file)) return validatePlatform(JSON.parse(fs.readFileSync(file, 'utf8')));
+  const legacy = settings();
+  if (!legacy) throw new Error(`Paramètres de plateforme absents : créer ${file} ou définir CNP_FAILOVER_PLATFORM.`);
+  const pilot = inputs(legacy).profile;
+  return validatePlatform({
+    gcp: { gcp_lb_ip: pilot.gcp?.gcp_lb_ip,
+      gcp_runtime: { service_account: pilot.gcp?.gcp_runtime?.service_account, subnetwork: pilot.gcp?.gcp_runtime?.subnetwork } },
+    aws: { database_security_group_id: pilot.aws?.database_security_group_id, database_ca_pem: pilot.aws?.database_ca_pem },
+    automation: pilot.automation,
+  });
 }
 function repository() {
   const name = config.github.configRepoName || 'Mooroon5-CNP/config-repo';
@@ -376,5 +410,5 @@ function readiness(dep) {
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker requise avant de déclarer le failover prêt.',
     failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}`, cloudRunUrl: null };
 }
-module.exports = { profiles, configure, profileFor, enabled, settings, inputs, render, rows, prepare, approve, reject, manifests, readiness,
+module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, reject, manifests, readiness,
   adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus };

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Adaptateur pur des générateurs phase 1 : aucune opération cloud ni secret."""
 import json
+import os
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+# CNP_FAILOVER_CONFIG_REPO : racine du config-repo (portail déployé) ; sinon le dépôt voisin du portail, ce qui
+# convient aux deux dispositions connues (côte à côte, ou imbriqué dans cnp).
+CONFIG_REPO = Path(os.environ.get('CNP_FAILOVER_CONFIG_REPO') or Path(__file__).resolve().parents[3] / 'config-repo')
+sys.path.insert(0, str(CONFIG_REPO / 'scripts'))
 from prepare_failover_phase1 import build, resolve_credentials, automation_profile, runtime_profiles, credentials_profile, validate
 import render_stateless_phase1 as stateless
 import render_failover_phase1 as gcp

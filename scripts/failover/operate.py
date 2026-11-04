@@ -10,7 +10,33 @@ import subprocess
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[3] / 'cnp' / 'deployment' / 'failover-phase1'
+def engine_root(environ=os.environ, here=Path(__file__).resolve()):
+    """Racine du moteur phase 1 (safe_apply.py, credentials/, automation/).
+
+    CNP_FAILOVER_ENGINE_ROOT l'impose (portail déployé, disposition inhabituelle) et n'a alors aucun repli : une
+    valeur fausse doit échouer, pas être remplacée en silence par un autre moteur. Sans elle, on reconnaît les deux
+    dispositions du dépôt : dépôts côte à côte (projet/cnp et projet/cnp-portal) ou portail imbriqué dans cnp
+    (cnp/cnp-portal).
+    """
+    configured = environ.get('CNP_FAILOVER_ENGINE_ROOT')
+    candidates = [Path(configured)] if configured else [
+        here.parents[3] / 'cnp' / 'deployment' / 'failover-phase1',
+        here.parents[3] / 'deployment' / 'failover-phase1',
+    ]
+    for candidate in candidates:
+        if (candidate / 'safe_apply.py').is_file():
+            return candidate.resolve()
+    raise FileNotFoundError('Moteur phase 1 introuvable : définir CNP_FAILOVER_ENGINE_ROOT.')
+
+
+try:
+    ROOT = engine_root()
+except FileNotFoundError as error:
+    # Le portail attend du JSON sur stdout : sans lui, il n'afficherait qu'« opérateur indisponible ».
+    if __name__ == '__main__':
+        print(json.dumps({'error': str(error)}))
+        raise SystemExit(1)
+    raise
 sys.path.insert(0, str(ROOT))
 import safe_apply
 

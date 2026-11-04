@@ -129,12 +129,11 @@ async function createProfile(app, mode, contract, user) {
   const row = deployments.listForUser(user).find(row => row.app_name === app && row.deployment_environment === 'prod');
   if (!row || row.target_cluster !== 'gcp') throw new Error('Déploiement de production GCP requis.');
   if (service.profileFor(app)) throw new Error('Ce déploiement possède déjà son profil.');
-  const settings = service.settings();
-  if (!settings) throw new Error('Paramètres partagés de la plateforme absents.');
-  const platform = service.inputs(settings).profile;
+  const platform = service.platform();
   const template = mode === 'stateless' ? 'stateless' : mode === 'postgres' ? 'postgres' : null;
   if (!template) throw new Error('Choisir sans base ou PostgreSQL.');
-  const profile = JSON.parse(fs.readFileSync(path.resolve(root, `../config-repo/docs/templates/failover-phase1/${template}/recipe.example.json`)));
+  const configRepo = process.env.CNP_FAILOVER_CONFIG_REPO || path.resolve(root, '../config-repo');
+  const profile = JSON.parse(fs.readFileSync(path.join(configRepo, `docs/templates/failover-phase1/${template}/recipe.example.json`)));
   const used = service.profiles().map(name => service.profileFor(name).profile.aws.listener_priority).filter(Number.isInteger);
   const id = randomUUID();
   const temporary = { profile: { gcp: { app_name: app }, aws: { app_name: app } } };

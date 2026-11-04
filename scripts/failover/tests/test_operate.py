@@ -80,5 +80,56 @@ class OperatorTests(unittest.TestCase):
         self.assertTrue(result['standby_ready'])
 
 
+class EngineRootTests(unittest.TestCase):
+    """Le moteur doit être trouvé dans les deux dispositions du dépôt, sans PYTHONPATH."""
+
+    def engine(self, base, *parts):
+        directory = Path(base).joinpath(*parts, 'deployment', 'failover-phase1')
+        directory.mkdir(parents=True)
+        (directory / 'safe_apply.py').write_text('')
+        return directory
+
+    def script(self, base, *parts):
+        file = Path(base).joinpath(*parts, 'scripts', 'failover', 'operate.py')
+        file.parent.mkdir(parents=True)
+        file.write_text('')
+        return file.resolve()
+
+    def test_repositories_side_by_side(self):
+        with tempfile.TemporaryDirectory() as base:
+            expected = self.engine(base, 'cnp')
+            here = self.script(base, 'cnp-portal')
+            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+
+    def test_portal_nested_inside_cnp(self):
+        with tempfile.TemporaryDirectory() as base:
+            expected = self.engine(base)
+            here = self.script(base, 'cnp-portal')
+            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+
+    def test_environment_variable_wins(self):
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as other:
+            self.engine(base)
+            chosen = self.engine(other)
+            here = self.script(base, 'cnp-portal')
+            self.assertEqual(operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(chosen)}, here), chosen.resolve())
+
+    def test_wrong_variable_does_not_fall_back_silently(self):
+        with tempfile.TemporaryDirectory() as base:
+            self.engine(base)
+            here = self.script(base, 'cnp-portal')
+            with self.assertRaises(FileNotFoundError):
+                operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(Path(base) / 'absent')}, here)
+
+    def test_missing_engine_is_explicit(self):
+        with tempfile.TemporaryDirectory() as base:
+            here = self.script(base, 'cnp-portal')
+            with self.assertRaisesRegex(FileNotFoundError, 'CNP_FAILOVER_ENGINE_ROOT'):
+                operator.engine_root({}, here)
+
+    def test_real_layout_resolves_without_pythonpath(self):
+        self.assertTrue((operator.ROOT / 'safe_apply.py').is_file())
+
+
 if __name__ == '__main__':
     unittest.main()
