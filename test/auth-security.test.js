@@ -61,11 +61,15 @@ test('deleted accounts lose stale session identity during population', () => {
   expect(next).toHaveBeenCalled();
 });
 
-test('production refuses a missing session signing key', () => {
+test('production generates its own session signing key when configuration is absent', () => {
   const previous = process.env.NODE_ENV; const secret = process.env.SESSION_SECRET;
   try {
     process.env.NODE_ENV = 'production'; delete process.env.SESSION_SECRET;
-    expect(() => jest.isolateModules(() => require('../src/config/session'))).toThrow('SESSION_SECRET');
+    let first; let second;
+    jest.isolateModules(() => { first = require('../src/config/session').sessionSecret; });
+    jest.isolateModules(() => { second = require('../src/config/session').sessionSecret; });
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(second).not.toBe(first);
   } finally {
     if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;
     if (secret === undefined) delete process.env.SESSION_SECRET; else process.env.SESSION_SECRET = secret;
