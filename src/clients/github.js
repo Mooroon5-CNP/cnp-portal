@@ -23,6 +23,11 @@ async function getInstallationOctokit() {
   return _octokit;
 }
 
+// Tests only: Jest cannot run the dynamic import() above, so it injects a fake octokit.
+function setOctokitForTesting(instance) {
+  _octokit = instance;
+}
+
 async function setRepoSecret(owner, repo, secretName, secretValue) {
   const octokit = await getInstallationOctokit();
 
@@ -300,6 +305,7 @@ async function checkConnectivity() {
 
 module.exports = {
   getInstallationOctokit,
+  setOctokitForTesting,
   setRepoSecret,
   createOrUpdateFile,
   getFileSha,

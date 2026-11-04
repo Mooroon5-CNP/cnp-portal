@@ -113,8 +113,13 @@ async function scaffoldRepository({ name, language, port, description }, { sleep
     const files = await loadSkeleton(language, { name, port });
 
     const url = `https://github.com/${owner}/${name}`;
+    // Échec ici = rien n'a été créé par cette requête (ex. nom pris à l'instant par quelqu'un d'autre).
     try {
         await githubClient.createOrgRepo(owner, name, { description: description || `Application ${name} (squelette CNP ${language})`, isPrivate: false });
+    } catch (err) {
+        throw new ScaffoldError(`Impossible de créer le dépôt ${owner}/${name} : ${err.message}`);
+    }
+    try {
         await waitForBranch(owner, name, 'main', sleep);
         const headSha = await githubClient.commitFiles(owner, name, 'main', files, COMMIT_MESSAGE);
         for (const branch of DEFAULT_BRANCHES.filter(b => b !== 'main')) {

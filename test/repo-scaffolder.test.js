@@ -108,6 +108,20 @@ test('a partial failure explains where the repo is and keeps it (no deletion)', 
         .rejects.toThrow(/https:\/\/github\.com\/Mooroon5-CNP\/demo-app.*n'est pas supprimé/);
 });
 
+test('a failed repository creation says nothing was created (no misleading "kept" message)', async () => {
+    github.createOrgRepo.mockRejectedValue(new Error('GitHub App is not allowed to create repositories'));
+    const failure = scaffolder.scaffoldRepository(input, { sleep: noSleep });
+    await expect(failure).rejects.toThrow(/Impossible de créer le dépôt Mooroon5-CNP\/demo-app.*not allowed/);
+    await expect(failure).rejects.not.toThrow(/n'est pas supprimé/);
+    expect(github.commitFiles).not.toHaveBeenCalled();
+});
+
+test('a push failure after creation keeps the repo and says so', async () => {
+    github.commitFiles.mockRejectedValue(new Error('push rejected'));
+    await expect(scaffolder.scaffoldRepository(input, { sleep: noSleep })).rejects.toThrow(/Création incomplète.*push rejected.*n'est pas supprimé/);
+    expect(github.createBranch).not.toHaveBeenCalled();
+});
+
 test('every supported language has a label and the defaults are main + prod', () => {
     expect(Object.keys(scaffolder.LANGUAGES).sort()).toEqual(['cpp', 'fullstack', 'go', 'java', 'node', 'python']);
     expect(scaffolder.DEFAULT_BRANCHES).toEqual(['main', 'prod']);

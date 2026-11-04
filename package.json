@@ -13,6 +13,7 @@
     "dev": "nodemon src/index.js",
     "lint": "eslint src test apps packages public/js --ext .js",
     "test": "jest --forceExit",
+    "test:coverage": "jest --forceExit --coverage",
     "test:integration": "node scripts/test-mcp-integration.mjs",
     "dev:integration": "node scripts/start-local-mcp.cjs",
     "dev:integration:mock": "node scripts/start-local-mcp.cjs --mock",
@@ -57,6 +58,10 @@
   },
   "jest": {
     "testEnvironment": "node",
+    "collectCoverageFrom": ["src/**/*.js"],
+    "coverageThreshold": {
+      "./src/services/repo-scaffolder.js": { "statements": 95, "branches": 85, "functions": 80, "lines": 95 }
+    },
     "testMatch": [
       "**/test/**/*.test.js",
       "**/apps/**/*.test.js"
