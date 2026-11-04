@@ -259,6 +259,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 function wantsJson(req) { return req.get('accept')?.includes('application/json'); }
 function creationError(req, res, message, status) {
     if (wantsJson(req)) return res.status(status).json({ error: message });
+    if (status === 403) return res.status(403).type('text').send(message);
     req.flash('error', message); return res.redirect('/deployments');
 }
 
