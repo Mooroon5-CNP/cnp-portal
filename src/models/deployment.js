@@ -68,6 +68,8 @@ try { db.exec(`ALTER TABLE deployments ADD COLUMN owner_team_id TEXT`); } catch 
 try { db.exec(`ALTER TABLE deployments ADD COLUMN target_cluster TEXT NOT NULL DEFAULT 'gcp'`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN cloud_run_url TEXT`); } catch (_) { /* column already exists */ }
 
+try { db.exec('ALTER TABLE deployments ADD COLUMN failover_requested INTEGER NOT NULL DEFAULT 0'); } catch (_) { /* colonne existante */ }
+
 // Les déploiements historiques gardent leur service et leur workflow existants.
 const environmentColumns = db.pragma('table_info(deployments)').map(column => column.name);
 if (!environmentColumns.includes('deployment_environment')) {
@@ -80,7 +82,7 @@ const insertStmt = db.prepare(`
     (id, app_name, github_repo_url, app_port, config_repo_token, owner_user_id, owner_team_id, onboarding_status, persistent_storage, target_cluster, deployment_environment, created_at, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
-const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, deployment_environment, cloud_run_url, created_at, updated_at FROM deployments ORDER BY created_at DESC');
+const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, deployment_environment, failover_requested, cloud_run_url, created_at, updated_at FROM deployments ORDER BY created_at DESC');
 const getStmt = db.prepare('SELECT * FROM deployments WHERE id = ?');
 const deleteStmt = db.prepare('DELETE FROM deployments WHERE id = ?');
 const updateStatusStmt = db.prepare('UPDATE deployments SET onboarding_status = ?, onboarding_error = ?, updated_at = ? WHERE id = ?');
@@ -102,6 +104,7 @@ function _rowToObj(row) {
         persistentStorage: !!row.persistent_storage,
         targetCluster: row.target_cluster || 'gcp',
         environment: row.deployment_environment || 'legacy',
+        failoverRequested: !!row.failover_requested,
         sourceBranch: row.deployment_environment === 'prod' ? 'prod' : 'main',
         resourceName: row.deployment_environment && row.deployment_environment !== 'legacy' ? `${row.app_name}-${row.deployment_environment}` : row.app_name,
         cloudRunUrl: row.cloud_run_url || null,
@@ -111,13 +114,14 @@ function _rowToObj(row) {
 }
 
 module.exports = {
-    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy' }) => {
+    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy', failoverRequested = false }) => {
         if (!['legacy', 'dev', 'prod'].includes(environment)) throw new Error('Invalid deployment environment');
         const id = uuidv4();
         const now = new Date().toISOString();
         const enc = configRepoToken ? encryptToken(configRepoToken) : null;
         const cluster = ['aws', 'azure'].includes(targetCluster) ? targetCluster : 'gcp';
         insertStmt.run(id, appName, githubRepoUrl, appPort || null, enc, ownerUserId, ownerTeamId || null, 'configuring', persistentStorage ? 1 : 0, cluster, environment, now, now);
+        if (failoverRequested) db.prepare('UPDATE deployments SET failover_requested=1 WHERE id=?').run(id);
         // Grant access to owner team automatically.
         if (ownerTeamId) {
             try { db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id) VALUES (?, ?)').run(id, ownerTeamId); } catch (_) { /* duplicate — already has access */ }

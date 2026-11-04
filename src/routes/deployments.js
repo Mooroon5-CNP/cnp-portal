@@ -269,6 +269,11 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         req.flash('error', err.message);
         return res.redirect('/deployments');
     }
+    const failoverRequested = ['on', 'true', true].includes(req.body.failoverRequested);
+    if (failoverRequested && (environment !== 'prod' || (targetCluster && targetCluster !== 'gcp') || hasPersistentStorage)) {
+        req.flash('error', 'Le failover GCP → AWS nécessite une production GCP sans stockage SQLite local.');
+        return res.redirect('/deployments');
+    }
     const port = Number(appPort || 8080);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         req.flash('error', 'Le port applicatif doit être compris entre 1 et 65535.');
@@ -313,6 +318,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
             environment,
+            failoverRequested,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");

@@ -408,3 +408,13 @@ test('runtime secret configuration rejects plaintext values before publication',
   await expect(service.reconcile(dep)).rejects.toThrow('Invalid runtime secret references');
   expect(published).toHaveLength(0);
 });
+
+test('le failover publie la provenance seulement après succès du pipeline prod', () => {
+  const doc = yaml.load(service.workflow('telemetry-api', { appName: 'telemetry-api', environment: 'prod', failoverRequested: true, appPort: 8080 }));
+  expect(doc.jobs.pipeline.with.target_cloud).toBe('both');
+  expect(doc.jobs.pipeline.with.gitops_mode).toBe('portal');
+  expect(doc.jobs['failover-images'].needs).toEqual(['pipeline']);
+  expect(doc.jobs['failover-images'].if).toContain("needs.pipeline.result == 'success'");
+  expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
+  expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
+});

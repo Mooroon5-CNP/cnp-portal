@@ -75,3 +75,81 @@ réseau attendent deux relectures humaines avant application. Le worker doit
 observer une réplication saine avant activation de ses déclencheurs.
 Les tests de panne sont réalisés par Thomas ; le portail ne coupe jamais GCP
 ou WireGuard pour valider cette phase.
+
+## Généralisation locale — 3 novembre 2026
+
+Le code ne sélectionne plus le pilote par son nom : les profils sont enregistrés
+par application dans `failover_profiles`. Le fichier historique reste une source
+compatible pour le pilote existant. Les candidats portent `app_name` ; la migration
+rattache l'ancien historique à ses chemins GitOps réellement publiés. Préparations,
+prérequis, manifests et revue sont isolés par application. Le SHA exact et la
+baseline distante restent vérifiés avant tout merge.
+
+Dans **Déploiements → Nouveau déploiement**, l'option **Activer le failover GCP →
+AWS** demande une production GCP sans SQLite sur bucket. La CI utilise alors le
+circuit existant `target_cloud: both`, en mode portail : la publication reste
+soumise au manager. Une demande sans profil reste en attente ; elle ne publie pas
+silencieusement un runtime GCP seul.
+
+Le manager accède à **Failover** dans le menu. Il configure le document
+`{profile, credentials, secrets, observations}` de l'application puis prépare
+les lots. Les références de secrets doivent appartenir à l'application. Les noms
+de secrets SQL et priorités ALB doivent être distincts des autres profils.
+Les identités, contrats et bases d'un profil publié ne sont pas modifiables par ce
+formulaire ; seules les évolutions compatibles passent par la revue suivante.
+
+Deux parcours supplémentaires sont disponibles :
+
+- `application_profile: postgres` : schéma déclaratif dans `sql_contract`, avec
+  plusieurs tables du schéma public, une clé primaire simple par table et
+  séquences identity positives. Aucun SQL libre, aucune migration automatique.
+  Le bootstrap valide le schéma existant et le worker aligne les séquences à la
+  promotion. Les applications doivent utiliser le rôle exclusif `cnp_runtime`,
+  les variables DB injectées et les CA vérifiées. Fournir une sonde de vie AWS
+  indépendante de la disponibilité SQL, par exemple `/healthz`.
+- `mode: stateless` et `application_profile: stateless` : pas de base, secret SQL,
+  réplication ou worker SQL. Les lots sont `runtime` puis `dns` ; Route53 utilise
+  directement la sonde HTTPS primaire. Ce mode ne couvre pas des fichiers
+  persistants, sessions locales ou services externes non répliqués.
+
+Exemples : `config-repo/docs/templates/failover-phase1/{postgres,stateless}/`.
+Les paramètres réseau partagés sont réutilisés ; aucune VM ou configuration
+WireGuard n'est créée ou modifiée par les générateurs.
+
+Pour une production déjà présente, **Rattacher la production existante au
+portail** lit le registre, les ressources et l'Application Argo. Le manager
+confirme la révision examinée. L'action écrit seulement le rattachement local,
+conserve le propriétaire GitOps et ne crée pas de fausse exécution CI. Une
+Application en suppression ou une baseline différente bloque l'opération.
+
+Les paquets `secrets`, `bootstrap`, `automation` sont téléchargeables pour le
+circuit opérateur existant. Le paquet automation rassemble tous les profils SQL
+connus afin de ne pas omettre une application du worker partagé. La proposition
+conserve `enable_triggers=false` ; garder les varfiles bootstrap/activation déjà
+appliqués et faire contrôler le plan par `safe_apply.py`. Un paquet téléchargé
+n'est ni un apply ni une preuve de disponibilité.
+
+**État de livraison : développements locaux testés, pas encore déployés dans
+l'image cloud du portail ou du worker.** Le formulaire manager reste un formulaire
+de profil opérateur ; le provisionnement des secrets, l'exécution distante du
+bootstrap et l'activation Terraform ne sont pas encore un parcours automatique
+complet dans le portail. Le changement ne suffit donc pas à déclarer la phase 1
+self-service entièrement terminée. La CI normale conserve les manifests approuvés ;
+une nouvelle image doit encore être renseignée dans une revue runtime.
+
+## Raccordement CI — 4 novembre 2026
+
+Le workflow réutilisable exporte désormais `image_digest`. Le caller failover
+produit une preuve `cnp-images.json` uniquement après succès du pipeline prod.
+Le portail vérifie l'application, les deux registres, la révision courante,
+l'unicité et la validité de l'artefact. Le candidat runtime utilise ces images
+par digest ; l'approbation les revalide et conserve leur provenance en base.
+Une nouvelle CI de production attend une nouvelle revue runtime au lieu de
+réutiliser silencieusement l'ancienne version.
+
+L'action manager « Configurer la CI sur les deux clouds » configure le workflow
+CNP de l'application. Les changements de `ci-templates` et du portail doivent
+être publiés ensemble avant d'utiliser cette action sur un dépôt réel. Ils sont
+encore locaux. Le provisionnement des secrets, l'exécution du bootstrap et
+l'activation du worker restent à raccorder au portail ; les paquets existants
+restent disponibles, sans exécution automatique ajoutée par ce lot.

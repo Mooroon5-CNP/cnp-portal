@@ -20,7 +20,7 @@ let api, input;
 
 beforeEach(() => {
   jest.clearAllMocks();
-  db.exec('DROP TABLE IF EXISTS failover_candidates');
+  db.exec('DROP TABLE IF EXISTS failover_candidates; DROP TABLE IF EXISTS failover_profiles; DROP TABLE IF EXISTS failover_adoptions');
   input = {
     profile: JSON.parse(fs.readFileSync(path.join(root, 'docs/templates/failover-phase1/pixelcalm/recipe.example.json'))),
     credentials: { aws_secret_arns: Object.fromEntries(['bootstrap', 'source-admin', 'runtime'].map(role => [role,
@@ -66,6 +66,12 @@ test('le rendu réel conserve le bucket et produit Cloud SQL chiffré avec le vr
   const kust = yaml.load(candidate.files[`${dir}/kustomization.yaml`]);
   expect(kust.resources).toContain('gcs-bucket.yaml');
   expect(candidate.files[`${dir}/gcs-bucket.yaml`]).toContain('47538189-data');
+  const bucketFile = yaml.load(candidate.files[`${dir}/gcs-bucket.yaml`]);
+  const bucket = bucketFile.kind === 'List' ? bucketFile.items.find(item => item.kind === 'Bucket') : bucketFile;
+  expect(bucket.spec.deletionPolicy).toBe('Orphan');
+  expect(bucket.spec.managementPolicies).toEqual(['Observe']);
+  expect(bucket.spec.forProvider.forceDestroy).toBe(false);
+  expect(bucket.metadata.annotations['crossplane.io/external-name']).toBe(bucket.metadata.name);
   const instance = yaml.load(candidate.files[`${dir}/cloudsql-instance.yaml`]);
   expect(instance.spec.forProvider.settings.ipConfiguration.sslMode).toBe('ENCRYPTED_ONLY');
   expect(instance.spec.deletionPolicy).toBe('Orphan');
@@ -78,6 +84,16 @@ test('le rendu réel conserve le bucket et produit Cloud SQL chiffré avec le vr
 test('runtime est refusé avant publication des bases', async () => {
   await expect(service.prepare('runtime', manager)).rejects.toThrow('préalable');
   expect(github.getInstallationOctokit).not.toHaveBeenCalled();
+});
+test('la rétention RDS choisie reste explicite et ne change pas celle de Cloud SQL', async () => {
+  input.profile.aws.backup_retention_period = 1;
+  const s = service.settings();
+  fs.writeFileSync(s.profile, JSON.stringify(input.profile));
+  const candidate = await service.prepare('protection', manager);
+  const rds = yaml.load(candidate.files[`${dir}/rds-instance.yaml`]);
+  const cloudsql = yaml.load(candidate.files[`${dir}/cloudsql-instance.yaml`]);
+  expect(rds.spec.forProvider.backupRetentionPeriod).toBe(1);
+  expect(cloudsql.spec.forProvider.settings.backupConfiguration.transactionLogRetentionDays).toBe(7);
 });
 test('une proposition en attente ne peut pas être remplacée', async () => {
   await service.prepare('databases', manager);
@@ -130,4 +146,91 @@ test('rejeter une proposition obsolète permet une nouvelle préparation sans ef
   expect((await service.reject(row.id, manager)).rejected).toBe(true);
   expect(api.request.mock.calls.some(([route, args]) => route.startsWith('PATCH') && args.state === 'closed')).toBe(true);
   await expect(service.prepare('databases', manager)).resolves.toHaveProperty('id');
+});
+
+test('deux applications conservent des propositions et prérequis indépendants', async () => {
+  const app = 'second-backend';
+  const document = JSON.parse(JSON.stringify(input).replaceAll('app4-pixelcam', app));
+  document.profile.gcp.credentials_secret_name = 'cnp-second-sql';
+  service.configure(app, document, manager);
+  expect(service.enabled({ appName: app, environment: 'prod', targetCluster: 'gcp' })).toBe(true);
+  await service.prepare('databases', manager, 'app4-pixelcam');
+  await expect(service.prepare('runtime', manager, app)).rejects.toThrow('préalable');
+  const original = api.request.getMockImplementation();
+  api.request.mockImplementation(async (route, args) => {
+    if (route.endsWith('/contents/{path}') && args.path.startsWith(`apps/${app}/`)) {
+      const err = new Error('not found'); err.status = 404; throw err;
+    }
+    return original(route, args);
+  });
+  const candidate = await service.prepare('databases', manager, app);
+  expect(Object.keys(candidate.files).every(file => file.startsWith(`apps/${app}/crossplane/prod/`))).toBe(true);
+  expect(service.rows(app)).toHaveLength(1);
+  expect(service.rows('app4-pixelcam')).toHaveLength(1);
+  await service.approve(candidate.id, head, manager);
+  expect(Object.keys(service.manifests({ appName: app, environment: 'prod', targetCluster: 'gcp' }))
+    .every(file => file.startsWith(`apps/${app}/`))).toBe(true);
+});
+
+test('un profil ou un secret appartenant à une autre application est refusé', () => {
+  expect(() => service.configure('wrong-app', input, manager)).toThrow('appartenir');
+  const document = JSON.parse(JSON.stringify(input));
+  document.secrets.password = 'must-never-be-stored';
+  expect(() => service.configure('app4-pixelcam', document, manager)).toThrow('expurgé');
+});
+
+test('le contrat générique produit des bases dédiées sans nom ou schéma Pixelcalm', async () => {
+  const app = 'telemetry-api';
+  const document = JSON.parse(JSON.stringify(input).replaceAll('app4-pixelcam', app));
+  document.profile.gcp.credentials_secret_name = 'cnp-telemetry-sql';
+  const contract = { database: 'telemetry', tables: [{ name: 'measurements', columns: [
+    { name: 'id', type: 'bigint', primary_key: true, identity: true }, { name: 'value', type: 'numeric' },
+  ] }] };
+  for (const side of ['gcp', 'aws']) Object.assign(document.profile[side], {
+    application_profile: 'postgres', database_name: 'telemetry', sql_contract: contract,
+  });
+  service.configure(app, document, manager);
+  const original = api.request.getMockImplementation();
+  api.request.mockImplementation(async (route, args) => {
+    if (route.endsWith('/contents/{path}') && args.path.startsWith(`apps/${app}/`)) {
+      const err = new Error('not found'); err.status = 404; throw err;
+    }
+    return original(route, args);
+  });
+  const candidate = await service.prepare('databases', manager, app);
+  const sql = yaml.load(candidate.files[`apps/${app}/crossplane/prod/cloudsql-database.yaml`]);
+  expect(sql.metadata.annotations['crossplane.io/external-name']).toBe('telemetry');
+  expect(JSON.stringify(candidate.files)).not.toContain('pixelcalm');
+});
+
+test('un site sans base génère les deux runtimes et un DNS sans base ni verrou SQL', async () => {
+  const app = 'iot-site';
+  const document = { profile: { mode: 'stateless', automation: {},
+    gcp: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000,
+      gcp_lb_ip: '34.54.71.90', gcp_runtime: { image: `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/${app}@sha256:${'a'.repeat(64)}`,
+        service_account: 'cloud-run-sa@cnp-terraform-512313.iam.gserviceaccount.com', subnetwork: 'projects/cnp-terraform-512313/regions/europe-west9/subnetworks/gcp-hybrid-subnet' } },
+    aws: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000,
+      image: `804210702561.dkr.ecr.eu-west-3.amazonaws.com/${app}@sha256:${'a'.repeat(64)}`, listener_priority: 23456 } },
+    credentials: {}, secrets: { app }, observations: {} };
+  service.configure(app, document, manager);
+  const original = api.request.getMockImplementation();
+  api.request.mockImplementation(async (route, args) => {
+    if (route.endsWith('/contents/{path}') && args.path.startsWith(`apps/${app}/`)) {
+      const err = new Error('not found'); err.status = 404; throw err;
+    }
+    return original(route, args);
+  });
+  await expect(service.prepare('databases', manager, app)).rejects.toThrow('pas de base');
+  const candidate = await service.prepare('runtime', manager, app);
+  const dir = `apps/${app}/crossplane/prod`;
+  expect(candidate.files[`${dir}/cloudrun-claim.yaml`]).toBeDefined();
+  expect(candidate.files[`${dir}/ecs-task-definition.yaml`]).toBeDefined();
+  expect(JSON.stringify(candidate.files)).not.toMatch(/DB_PASSWORD|cloudsql|rds-instance/);
+  const task = yaml.load(candidate.files[`${dir}/ecs-task-definition.yaml`]);
+  expect(JSON.parse(task.spec.forProvider.containerDefinitions)[0].portMappings[0].containerPort).toBe(3000);
+  await service.approve(candidate.id, head, manager);
+  const dns = await service.prepare('dns', manager, app);
+  expect(dns.files[`${dir}/healthcheck.yaml`]).toBeDefined();
+  expect(dns.files[`${dir}/healthcheck-latch-http.yaml`]).toBeUndefined();
+  expect(yaml.load(dns.files[`${dir}/record-primary.yaml`]).spec.forProvider.healthCheckIdSelector.matchLabels['cnp-failover']).toBe('health');
 });

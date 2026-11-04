@@ -42,6 +42,9 @@
                 </div>
               </div>
 
+              <% if (deployment.failoverRequested || (deployment.environment === 'prod' && can('k8s:manifest:approve'))) { %>
+              <div class="card" style="margin-bottom:16px"><div class="card-body"><strong>Failover GCP → AWS</strong><p>La publication et la préparation du secours passent par le circuit manager.</p><% if (can('k8s:manifest:approve')) { %><a class="btn btn-secondary" href="/failover?app=<%= encodeURIComponent(deployment.appName) %>">Configurer et vérifier le failover</a><% } %></div></div>
+              <% } %>
               <% if (applicationUrl) { %>
                 <div class="card" id="application-address" style="margin-bottom:16px;">
                   <div class="card-header"><span class="card-title"><%= deployment.onboardingStatus === 'ready' ? 'Adresse de l’environnement' : 'Adresse prévue de l’environnement' %></span></div>

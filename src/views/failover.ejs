@@ -5,11 +5,36 @@
 <a href="/">Tableau de bord</a><h1><%= title %></h1>
 <p>Cloud SQL → réplication native → RDS. Les propositions sont générées par la plateforme et publiées par sa GitHub App après approbation manager. Le bucket existant est conservé.</p>
 <p>Un merge ne prouve pas que les bases, la réplication ou le worker sont opérationnels. Aucun test de panne n’est lancé ici.</p>
-<% for (const stage of ['databases', 'runtime', 'dns']) { %>
-<form action="/failover/prepare/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><button>Préparer : <%= stage %></button></form>
+<form action="/failover" method="get"><label>Application <select name="app" onchange="this.form.submit()"><option value="">Choisir une application</option><% for (const app of profiles) { %><option value="<%= app %>" <%= selectedApp === app ? 'selected' : '' %>><%= app %> — production</option><% } %></select></label><button>Afficher</button></form>
+<% if (typeof deploymentChoices !== 'undefined') { %>
+<h2>Préparer le secours d’un déploiement</h2>
+<form action="/failover/configure-deployment" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>">
+<label>Application <select name="app" required><% for (const deployment of deploymentChoices) { %><option value="<%= deployment.app_name %>"><%= deployment.app_name %></option><% } %></select></label>
+<label>Données <select name="mode"><option value="stateless">Sans base et sans fichiers persistants</option><option value="postgres">PostgreSQL</option></select></label>
+<p><label>Contrat PostgreSQL de l’application (uniquement avec PostgreSQL)<br><textarea name="contract" rows="6" cols="80" placeholder='{"database":"appdb","tables":[{"name":"entries","columns":[{"name":"id","type":"bigint","primary_key":true,"identity":true},{"name":"value","type":"text"}]}]}'></textarea></label></p>
+<button>Préparer le profil de secours</button></form><% } %>
+<details><summary>Configuration avancée du failover d’une application (manager)</summary>
+<p>Le profil contient les paramètres GCP/AWS, les références des secrets initialisés et les observations de cette application. L’enregistrement prépare le parcours ; il n’active aucune bascule.</p>
+<form action="/failover/profiles" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><label>Nom de l’application <input name="app" required pattern="[a-z][a-z0-9-]{0,38}[a-z0-9]"></label><p><label>Configuration JSON (profile, credentials, secrets, observations)<br><textarea name="document" rows="12" cols="90" required></textarea></label></p><button>Vérifier et enregistrer le profil</button></form></details>
+<% if (selectedApp) { %>
+<form action="/failover/ci/configure" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Configurer la CI sur les deux clouds</button></form>
+<form action="/failover/adoption/preview" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Rattacher la production existante au portail</button></form>
+<% if (typeof adoption !== 'undefined') { %><article><h2>Confirmer le rattachement de <%= adoption.app %></h2><p>Dépôt : <%= adoption.githubRepoUrl %>. Cette action ajoute le déploiement au portail et conserve ses ressources et données.</p><p>Révision examinée : <code><%= adoption.head %></code></p><ul><% for (const resource of adoption.resources) { %><li><%= resource %></li><% } %></ul><form action="/failover/adoption/confirm" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= adoption.app %>"><input type="hidden" name="head" value="<%= adoption.head %>"><button>Confirmer le rattachement sans modifier le cloud</button></form></article><% } %>
+
+<% for (const stage of ['protection', 'databases', 'runtime', 'dns']) { %>
+<form action="/failover/prepare/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Préparer : <%= stage %></button></form>
+<% } %>
+<% } %>
+<% if (selectedApp) { %><details><summary>Paquets de préparation SQL et worker</summary><p>Ces paquets ne lancent aucun apply. Le paquet worker conserve les autres profils SQL et garde les déclencheurs désactivés dans la proposition.</p><% for (const stage of ['secrets', 'bootstrap', 'automation']) { %><form action="/failover/packages/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Préparer le paquet <%= stage %></button></form><% } %></details><% } %>
+<% if (selectedApp && typeof operations !== 'undefined') { %>
+<h2>Mise en service</h2>
+<% for (const [action, label] of [['credentials-plan','Préparer les conteneurs de secrets'],['initialize-secrets','Initialiser les secrets'],['observe','Vérifier les bases réelles'],['bootstrap-plan','Préparer la tâche d’initialisation'],['bootstrap','Initialiser la réplication'],['verify','Vérifier la réplication'],['automation-plan','Préparer le worker'],['worker-configure','Configurer le worker en pause'],['worker-verify','Vérifier le worker'],['activation-plan','Préparer l’activation'],['worker-resume','Activer le worker vérifié'],['health','Vérifier l’état opérationnel']]) { %>
+<form method="post" action="/failover/operations/<%= action %>"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button><%= label %></button></form>
+<% } %>
+<% for (const operation of operations) { %><article><strong><%= operation.action %> — <%= operation.state %></strong><pre><%= JSON.stringify(operation.result, null, 2) %></pre><% if (operation.state === 'review') { %><form method="post" action="/failover/operation/<%= operation.id %>/apply"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><button>Approuver et appliquer ce plan sans destruction</button></form><% } %></article><% } %>
 <% } %>
 <% for (const row of rows) { %>
-<article><h2><%= row.stage %> — <%= row.state %></h2>
+<article><h2><%= row.app_name %> · <%= row.stage %> — <%= row.state %></h2>
 <p>Baseline <code><%= row.base_sha %></code></p>
 <a href="<%= row.pr_url %>">Pull request</a> · <a href="/failover/<%= row.id %>">Examiner le candidat</a>
 </article><% } %>

@@ -235,6 +235,13 @@ async function applyApplicationSet(manifest) {
     // Try to update first; if 404, create instead.
     try {
       const { body: existing } = await customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+      if (/^crossplane-autodiscovery-(dev|prod)$/.test(name)) {
+        const paths = manifest.spec.generators[0].git.directories.map(entry => entry.path);
+        const patch = require('../services/application-set-preservation').additivePatch(existing, paths);
+        await customApi.patchNamespacedCustomObject(group, version, namespace, plural, name,
+          patch, undefined, undefined, undefined, { headers: { 'Content-Type': 'application/json-patch+json' } });
+        return;
+      }
       manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
       await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, manifest);
     } catch (e) {

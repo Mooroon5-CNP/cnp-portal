@@ -33,17 +33,59 @@ function identity(dep) {
 }
 function workflowName(appName) { return `cnp-${appName}.yml`; }
 function image(dep, revision) { return `${config.github.registryUrl || config.gcp.imageRegistry}/${dep.appName}:${revision}`; }
-function workflow(appName, dep) {
+function workflow(appName, dep = {}) {
   if (azure.isAzure(dep)) return azure.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
-  return yaml.dump({ name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] } },
+  const document = { name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] } },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
     jobs: { pipeline: {
       uses: `Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@${process.env.CNP_CI_TEMPLATES_REF || 'main'}`,
-      with: { app_name: appName, target_cloud: 'gcp', config_repo_url: `https://github.com/${config.github.configRepoName || 'Mooroon5-CNP/config-repo'}`, gitops_mode: 'portal' },
+      with: { app_name: appName, target_cloud: dep.failoverRequested || failover.enabled(dep) ? 'both' : 'gcp', config_repo_url: `https://github.com/${config.github.configRepoName || 'Mooroon5-CNP/config-repo'}`, gitops_mode: 'portal', app_port: String(dep.appPort || 8080) },
       secrets: { CONFIG_REPO_TOKEN: '${{ secrets.CONFIG_REPO_TOKEN }}' },
     } },
-  }, { lineWidth: -1 });
+  };
+  if (dep.failoverRequested || failover.enabled(dep)) {
+    document.jobs['failover-images'] = {
+      needs: ['pipeline'], 'runs-on': 'ubuntu-latest',
+      if: "${{ github.ref == 'refs/heads/prod' && needs.pipeline.result == 'success' }}",
+      steps: [{ name: 'Record immutable images', env: {
+        CNP_APP: appName, CNP_REVISION: '${{ github.sha }}', CNP_DIGEST: '${{ needs.pipeline.outputs.image_digest }}',
+        CNP_GCP_REGISTRY: config.github.registryUrl || config.gcp.imageRegistry,
+      }, run: `python3 - <<'PY'
+import json, os, re
+assert re.fullmatch(r'sha256:[a-f0-9]{64}', os.environ['CNP_DIGEST'])
+app, digest = os.environ['CNP_APP'], os.environ['CNP_DIGEST']
+record = {'app': app, 'revision': os.environ['CNP_REVISION'], 'digest': digest,
+    'gcp': os.environ['CNP_GCP_REGISTRY'] + '/' + app + '@' + digest,
+    'aws': '804210702561.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
+with open('cnp-images.json', 'w') as file: json.dump(record, file)
+PY` }, { uses: 'actions/upload-artifact@v4', with: {
+        name: 'cnp-failover-images-${{ github.sha }}', path: 'cnp-images.json', 'if-no-files-found': 'error', 'retention-days': 30,
+      } }],
+    };
+  }
+  return yaml.dump(document, { lineWidth: -1 });
+}
+
+async function configureFailoverBuild(dep, user) {
+  if (!user || user.role !== 'manager' || !user.id || dep.environment !== 'prod'
+    || dep.targetCluster !== 'gcp' || !failover.enabled(dep)) throw new Error('Configuration failover manager requise.');
+  const api = await github.getInstallationOctokit();
+  const source = repositories.parseRepoUrl(dep.githubRepoUrl);
+  if (!source) throw new Error('Dépôt applicatif invalide.');
+  await github.checkActionsEnabled(source.owner, source.repo);
+  for (const [name, value] of [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]]) {
+    if (!value) throw new Error(`Configuration CI manquante : ${name}.`);
+    await github.setRepoVariable(source.owner, source.repo, name, value);
+  }
+  if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
+  await github.setRepoSecret(source.owner, source.repo, 'CONFIG_REPO_TOKEN', config.github.configRepoToken);
+  const file = `.github/workflows/${workflowName(dep.appName)}`;
+  for (const branch of ['main', 'prod']) {
+    await commitFiles(api, source, { [file]: workflow(dep.appName, { ...dep, failoverRequested: true }) },
+      `ci(${dep.appName}): publish failover image provenance`, branch);
+  }
+  return { configured: true, cloudChanged: false };
 }
 
 async function readFile(api, repository, path, ref = 'main') {
@@ -77,6 +119,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
   if (azure.isAzure(dep)) return azure.manifests(dep, revision);
+  if (dep.failoverRequested && !failover.enabled(dep)) throw new Error('Configuration failover attendue dans le circuit manager.');
   if (failover.enabled(dep)) return failover.manifests(dep);
   const { name, path } = identity(dep);
   const hash = createHash('sha256').update(`${config.gcp.project}/${name}`).digest('hex').slice(0, 8);
@@ -104,6 +147,7 @@ function manifests(dep, revision) {
   if (dep.persistentStorage) {
     const storage = resource('storage.gcp.upbound.io/v1beta1', 'Bucket', bucket,
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
+    storage.spec.deletionPolicy = 'Orphan';
     const binding = resource('storage.gcp.upbound.io/v1beta1', 'BucketIAMMember', `${bucket}-runtime`,
       { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
@@ -122,7 +166,7 @@ function applicationSet(environment = 'dev', paths = []) {
       spec: { project: `team-cnp-${environment}`, source: { repoURL, targetRevision: 'main', path: '{{path}}' },
         destination: { server: 'https://kubernetes.default.svc', namespace: 'crossplane-system' },
         syncPolicy: { automated: { selfHeal: true, prune: true }, syncOptions: ['CreateNamespace=true'] } } } } };
-  if (environment === 'dev') set.spec.syncPolicy = { preserveResourcesOnDeletion: true };
+  set.spec.syncPolicy = { preserveResourcesOnDeletion: true, applicationsSync: 'create-update' };
   return set;
 }
 
@@ -292,6 +336,8 @@ async function interruptedApproval(api, dep, release) {
 }
 
 async function reconcile(dep) {
+  if (dep.failoverRequested && !failover.enabled(dep)) return { phase: 'approval', message: 'Failover demandé : configuration et validation du manager requises.', failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}` };
+  if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && (failover.adopted(dep) || current(dep))) return failover.deploymentStatus(dep);
   if (locks.has(dep.id)) return locks.get(dep.id);
   const work = (async () => {
     if (!current(dep)) return { phase: 'configuring', message: 'Déploiement non disponible pour publication.' };
@@ -506,4 +552,4 @@ function startReconciler() {
   return timer;
 }
 
-module.exports = { validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };
+module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };
