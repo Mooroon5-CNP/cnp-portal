@@ -263,6 +263,9 @@ async function readiness(dep, revision) {
     if (!(await routing.status(dep))) return { phase: 'deploying', message: 'Cloud Run disponible ; attente du routage HTTPS.', cloudRunUrl: null };
     return { phase: 'success', message: 'Application déployée.', cloudRunUrl: observed.url, applicationUrl: addresses.url(dep) };
   }
+  if (observed.image !== image(dep, revision)) {
+    return { phase: 'deploying', message: 'Nouvelle image publiée dans GitOps ; attente de son application par ArgoCD/Crossplane.', cloudRunUrl: null };
+  }
   if (observed.failure) return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
   return { phase: 'deploying', message: 'CI terminée ; attente de Cloud Run.', cloudRunUrl: null };
 }

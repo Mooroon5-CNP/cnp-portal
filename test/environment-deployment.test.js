@@ -408,3 +408,13 @@ test('runtime secret configuration rejects plaintext values before publication',
   await expect(service.reconcile(dep)).rejects.toThrow('Invalid runtime secret references');
   expect(published).toHaveLength(0);
 });
+
+test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: 'registry.test/project/apps/pixelcam:old', failure: "Revision 'old' failed to start", url: null });
+  const result = await service.reconcile(dep);
+  expect(result).toMatchObject({ phase: 'deploying', revision });
+  expect(result.message).toContain('ArgoCD/Crossplane');
+  expect(result.message).not.toContain("Revision 'old'");
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: `registry.test/project/apps/pixelcam:${revision}`, failure: 'Current revision failed to start', url: null });
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'failed', message: 'Cloud Run : Current revision failed to start' });
+});
