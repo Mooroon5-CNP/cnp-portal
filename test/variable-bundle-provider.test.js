@@ -28,7 +28,7 @@ test('creates only a private isolated bucket and grants its runtime read access'
   expect(policy.etag).toBe('original-etag');
   expect(policy.bindings).toContainEqual({ role: 'roles/storage.objectViewer', members: ['serviceAccount:runtime@test-project.iam.gserviceaccount.com'] });
   expect(policy.bindings.flatMap(binding => binding.members)).not.toContain('allUsers');
-  expect(identity.prepare).toHaveBeenCalledWith(dep);
+  expect(identity.prepare).toHaveBeenCalledWith(dep, require('../src/clients/google-access'));
 });
 test('refuses an incompatible Dockerfile before IAM or bucket creation', async () => {
   github.getInstallationOctokit.mockResolvedValue({ request: async () => ({ data: { content: Buffer.from('FROM node:20-alpine\nCMD ["node", "app.js"]').toString('base64') } }) });

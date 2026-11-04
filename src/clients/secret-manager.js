@@ -24,12 +24,12 @@ function runtimeAccount(dep) {
   const id = `cnp-${createHash('sha256').update(dep.id).digest('hex').slice(0, 24)}`;
   return `${id}@${config.gcp.project}.iam.gserviceaccount.com`;
 }
-async function prepare(dep) {
+async function prepare(dep, credentials = auth) {
   const account = runtimeAccount(dep);
   const provisioner = process.env.GCP_CROSSPLANE_SERVICE_ACCOUNT || `crossplane-gcp-sa@${config.gcp.project}.iam.gserviceaccount.com`;
   if (!/^[\w.-]+@[\w.-]+\.iam\.gserviceaccount\.com$/.test(provisioner)) throw new Error('Identité Crossplane non configurée.');
   try {
-    const headers = await auth.headers();
+    const headers = await credentials.headers();
     const root = `https://iam.googleapis.com/v1/projects/${config.gcp.project}/serviceAccounts`;
     const request = (method, url, data) => axios.request({ method, url, data, headers, timeout: 10000 });
     let created = false;

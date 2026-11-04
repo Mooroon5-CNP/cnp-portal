@@ -6,7 +6,7 @@ const { config } = require('../config/env');
 const protocol = require('../../scripts/runtime/variables.cjs');
 const GCS_PERMISSIONS = ['storage.buckets.create', 'storage.buckets.get', 'storage.buckets.getIamPolicy', 'storage.buckets.setIamPolicy', 'storage.objects.create', 'storage.objects.get', 'iam.serviceAccounts.create', 'iam.serviceAccounts.get', 'iam.serviceAccounts.getIamPolicy', 'iam.serviceAccounts.setIamPolicy'];
 function provider() { return process.env.CNP_VARIABLES_PROVIDER || 'secret-manager'; }
-function client() { return protocol.createClient({ getAccess: auth.token, req: protocol.request, getJWT: protocol.googleJWT }); }
+function client(credentials = auth) { return protocol.createClient({ getAccess: credentials.token, req: protocol.request, getJWT: protocol.googleJWT }); }
 function bucket(dep) { return `cnp-vars-${createHash('sha256').update(`${config.gcp.project}/${dep.id}/${dep.environment}`).digest('hex').slice(0, 32)}`; }
 function target(dep) { return { applicationId: dep.id, environment: dep.environment }; }
 async function capability() {
@@ -28,7 +28,7 @@ async function capability() {
     return { available: true, code: 'READY', message: `Identité ${provider()} disponible ; les droits du scope seront vérifiés lors de la préparation.` };
   } catch (_) { return { available: false, code: 'VARIABLE_STORE_UNAVAILABLE', message: `Stockage ${provider()} indisponible : vérifier l’identité dédiée du portail, les droits et la connexion au fournisseur.` }; }
 }
-async function prepare(dep) {
+async function prepare(dep, credentials = auth) {
   if (dep.environment === 'prod' && process.env.CNP_VARIABLES_PRODUCTION_ENABLED !== 'true') throw new Error('Les bundles de production seront activés après validation du pilote, du rollback et de l’approbation.');
   if (dep.githubRepoUrl) {
     const source = require('../services/github').parseRepoUrl(dep.githubRepoUrl);
@@ -41,8 +41,8 @@ async function prepare(dep) {
     const finalStage = dockerfile.slice([...dockerfile.matchAll(/^FROM .+$/gm)].at(-1)?.index || 0);
     if (!/^LABEL\s+io\.cnp\.variables-contract=["']?1["']?(?:\s|$)/m.test(finalStage)) throw new Error('Installez le chargeur CNP dans ce Dockerfile avant d’ajouter des variables.');
   }
-  await identity.prepare(dep);
-  const headers = await auth.headers();
+  await identity.prepare(dep, credentials);
+  const headers = await credentials.headers();
   if (provider() === 'gcs') {
     const name = bucket(dep); const base = `https://storage.googleapis.com/storage/v1/b/${name}`;
     let metadata;
@@ -65,7 +65,7 @@ async function prepare(dep) {
     const account = await protocol.request(`https://iam.googleapis.com/v1/projects/${config.gcp.project}/serviceAccounts/${identity.runtimeAccount(dep)}`, { headers });
     if (!/^\d+$/.test(account.uniqueId || '')) throw new Error('Identité runtime Google invalide.');
     const role = `cnp-${dep.id}-${dep.environment}`; const path = `cnp-runtime/data/apps/${dep.id}/${dep.environment}/bundles/*`;
-    const bao = await client().bao(process.env.CNP_OPENBAO_CONTROL_ROLE || 'cnp-control');
+    const bao = await client(credentials).bao(process.env.CNP_OPENBAO_CONTROL_ROLE || 'cnp-control');
     await protocol.request(`${bao.origin}/v1/sys/policies/acl/${role}`, { method: 'PUT', headers: bao.headers, body: { policy: `path "${path}" { capabilities = ["read"] }` } });
     const settings = protocol.baoSettings(process.env);
     await protocol.request(`${bao.origin}/v1/auth/jwt/role/${role}`, { method: 'POST', headers: bao.headers, body: {
@@ -74,10 +74,10 @@ async function prepare(dep) {
     } });
   }
 }
-async function write(dep, values) {
+async function write(dep, values, credentials = auth) {
   const bundleId = randomUUID();
   try {
-    const reference = await client().writeBundle(target(dep), values, provider(), { bundleId, bucket: bucket(dep) });
+    const reference = await client(credentials).writeBundle(target(dep), values, provider(), { bundleId, bucket: bucket(dep) });
     return { reference, names: Object.keys(values).sort() };
   } catch (_) { throw new Error('Enregistrement du bundle impossible. Aucune nouvelle configuration publiée.'); }
 }

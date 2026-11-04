@@ -233,3 +233,43 @@ droits au GSA partagé cloud-run-sa.
 Depuis le preview authentifié, /deployments/variables/capability doit confirmer
 la disponibilité du fournisseur. Ce test doit être suivi d’une vraie écriture et
 lecture sur une application témoin ; available=true ne remplace pas cette preuve.
+
+## 9. Déploiement opérateur en une commande
+
+Le contrôle réel depuis GitHub Actions (run 41903644395) a confirmé que
+l’identité github-ci-sa peut construire/publier l’image mais ne possède pas les
+droits Cloud Run/IAM/Storage de préparation du preview. Aucun droit ne lui a été
+accordé et aucune ressource live créée par ce run. Le terminal du sandbox ne peut
+pas joindre Google ou Kubernetes. Ne pas déclarer le déploiement réalisé.
+
+Depuis le terminal opérateur déjà connecté à GCP/GKE, sur cette branche à jour :
+
+```sh
+cd /home/maiabuc/SIGL/CNP/cnp-portal
+node scripts/platform/deploy-preview.cjs
+```
+
+Le script lit .env (ou un chemin privé passé en premier argument) et applique les
+surcharges .env.cloud existantes. Il vérifie le contexte exact, la branche et le
+succès de cnp-preview.yml pour le commit local, puis résout son digest scanné.
+Il prépare le GSA/bucket privés, stocke les valeurs hors de Git/CI, attribue le
+rôle de contrôle restreint au seul GSA du portail preview, applique l’unique
+V2Service isolé via Crossplane, attend l’observation du BundleRef et de la révision
+prête, puis vérifie /healthz avec une identité opérateur authentifiée.
+Il utilise la session gcloud de l’opérateur sans demander d’ADC ni de login aux
+développeurs. Aucun token opérateur n’est copié dans le bundle ou le manifeste.
+
+Pour ArgoCD avec certificat interne, il récupère uniquement le certificat public
+dans le cluster authentifié, configure sa CA et un nom présent dans le certificat,
+puis désactive ARGOCD_INSECURE dans le bundle. Cela conserve la validation TLS,
+sans copier de clé privée. L’ancien mode local de développement reste inchangé.
+Le certificat et son nom peuvent aussi être fournis via ARGOCD_CA_CERT (base64)
+et ARGOCD_TLS_SERVER_NAME ; ils ne dispensent pas de la signature/validation TLS.
+
+Un mot de passe admin absent/non conforme est généré dans un fichier local 0600
+à l’intérieur d’un dossier temporaire privé ; seul son chemin est affiché. Les
+valeurs ne sont jamais imprimées. La base du preview reste temporaire (/tmp),
+le service privé et séparé du portail actuel. Aucun push main ni auto-attribution
+de droits à github-ci-sa. L’exécution peut échouer si le compte opérateur n’a pas
+les droits de création/liaison IAM, Storage ou d’application Kubernetes : l’étape
+et le code sont indiqués sans payload secret.
