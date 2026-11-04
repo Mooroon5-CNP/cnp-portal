@@ -106,14 +106,6 @@ router.post('/adoption/confirm', async (req, res) => {
     return res.redirect(`/deployments/${result.deploymentId}`);
   } catch (err) { return res.status(409).json({ error: err.message }); }
 });
-router.post('/owner/reconcile', async (req, res) => {
-  try { return res.json(await require('../services/failover-owner').reconcile(req.user)); }
-  catch (err) { return res.status(409).json({ error: err.message }); }
-});
-router.post('/repair/dev-backend', async (req, res) => {
-  try { return res.json(await require('../services/failover-dev-routing').repair(req.user)); }
-  catch (err) { return res.status(409).json({ error: err.message }); }
-});
 router.post('/prepare/:stage', async (req, res) => {
   try {
     const candidate = await service.prepare(req.params.stage, req.user, req.body.app);
