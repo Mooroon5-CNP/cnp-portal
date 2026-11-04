@@ -11,7 +11,7 @@
     "cloud:check": "node scripts/cloud/check-connection.js",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "lint": "eslint src test apps packages public/js --ext .js",
+    "lint": "eslint src test apps packages public/js scripts/runtime scripts/platform --ext .js,.cjs",
     "test": "jest --forceExit",
     "test:integration": "node scripts/test-mcp-integration.mjs",
     "dev:integration": "node scripts/start-local-mcp.cjs",
@@ -19,7 +19,8 @@
     "test:live-sources": "node scripts/check-live-sources.cjs",
     "test:generation": "node scripts/test-generation.mjs",
     "test:context": "node scripts/test-context-resolution.mjs",
-    "test:live-environments": "node scripts/test-mcp-live-environments.mjs"
+    "test:live-environments": "node scripts/test-mcp-live-environments.mjs",
+    "platform:variables:check": "node scripts/platform/check-variables.cjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.86",

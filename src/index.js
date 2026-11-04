@@ -21,7 +21,7 @@ app.set('views', path.join(__dirname, 'views'));
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
 // Trust the first proxy (Cloud Run / load balancer) so req.secure reflects
 // the original HTTPS connection, which is required for secure session cookies.

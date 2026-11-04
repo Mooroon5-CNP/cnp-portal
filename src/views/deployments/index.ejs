@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
+<script src="/js/application-variables.js" defer></script>
+<script src="/js/deployment-wizard.js" defer></script>
 
   <body>
     <div class="layout">
@@ -130,11 +132,14 @@
                   </div>
 
                   <div style="background:var(--surface-alt,#f8f9fa);border-radius:6px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--text-muted);">
-                    La plateforme configure automatiquement le pipeline CI/CD, les secrets GitHub et les manifests
-                    Kubernetes. Vous n'avez rien d'autre à faire.
+                    La plateforme configure automatiquement le pipeline CI/CD, les secrets GitHub et la configuration
+                    GitOps. Vous n'avez rien d'autre à faire.
                   </div>
 
-                  <form action="/deployments" method="POST">
+                  <form action="/deployments" method="POST" id="newDeploymentForm" novalidate>
+                    <p data-wizard-progress aria-live="polite">1/3 — Application</p>
+                    <div data-wizard-error class="flash flash-error" role="alert" hidden></div>
+                    <div data-deployment-step="1">
                     <div class="form-group">
                       <label for="githubRepoUrl">URL du dépôt GitHub</label>
                       <input type="url" name="githubRepoUrl" id="githubRepoUrl"
@@ -147,7 +152,7 @@
                       <label for="appName">Nom de l'application</label>
                       <input type="text" name="appName" id="appName"
                         placeholder="mon-app" required
-                        pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
+                        pattern="[a-z][a-z0-9\-]{0,38}[a-z0-9]" maxlength="40"
                         title="Minuscules, chiffres et tirets uniquement">
                       <div class="form-hint">Minuscules et tirets uniquement (ex: mon-app). Réutilisez ce nom pour les environnements dev et prod du même dépôt.</div>
                     </div>
@@ -203,8 +208,21 @@
                       <div class="form-hint">Monte un bucket GCS sur <code>/data</code> — les données survivent aux redémarrages. Le bucket est créé automatiquement par la plateforme.</div>
                     </div>
 
+                    </div>
+                    <div data-deployment-step="2" hidden>
+                      <h4>Variables de l’application</h4>
+                      <%- include('../partials/variable-editor', { names: [] }) %>
+                    </div>
+                    <div data-deployment-step="3" hidden>
+                      <h4>Vérifier avant de déployer</h4>
+                      <div data-deployment-summary></div>
+                      <p class="form-hint">Les valeurs secrètes ne sont pas affichées. La production reste soumise à l’approbation d’un manager.</p>
+                    </div>
+                    <p data-wizard-storage-status role="status" class="flash flash-warning" hidden></p>
                     <div style="display:flex;gap:10px;margin-top:16px;">
-                      <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>
+                      <button type="button" data-wizard-back class="btn btn-secondary" hidden>Précédent</button>
+                      <button type="button" data-wizard-next class="btn btn-primary">Suivant</button>
+                      <button type="submit" id="deploySubmitBtn" class="btn btn-primary" hidden>Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
                     </div>
                   </form>
@@ -305,7 +323,7 @@
                 const closeBtn = document.getElementById('closeNewDeployment');
                 const cancelBtn = document.getElementById('cancelNewDeployment');
                 function showModal() { modal.style.display = 'flex'; }
-                function hideModal() { modal.style.display = 'none'; }
+                function hideModal() { modal.style.display = 'none'; modal.dispatchEvent(new Event('cnp:closed')); }
                 if (openBtn) openBtn.addEventListener('click', showModal);
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);

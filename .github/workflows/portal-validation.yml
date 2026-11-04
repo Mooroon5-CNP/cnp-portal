@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feat/deployment-environment-selection]
+    branches: [feat/deployment-environment-selection, fix/cloudrun-environment]
 
 permissions:
   contents: read
@@ -21,3 +21,16 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm test -- --runInBand
+
+  runtime-contract:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Check original command, Python argv, exit status and SIGTERM
+        run: sh scripts/runtime/smoke.sh

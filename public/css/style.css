@@ -1,3 +1,6 @@
+/* Keep semantic visibility authoritative over button and layout display rules. */
+[hidden] { display: none !important; }
+
 :root {
   --sidebar-bg: #1e2330;
   --sidebar-hover: #2a3042;

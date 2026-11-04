@@ -1,0 +1,12 @@
+<div data-variables-editor data-existing-variables="<%= JSON.stringify(names || []) %>">
+  <p>Ajoutez les variables nécessaires au démarrage de votre application. Les valeurs sont traitées comme des secrets et ne seront pas enregistrées dans Git. Aucune variable n’est obligatoire.</p>
+  <p class="form-hint">Les variables de build ne sont pas prises en charge ici. PORT, HOST et DATA_DIR sont gérés par la plateforme.</p>
+  <button type="button" data-import-variables class="btn btn-secondary">Importer un fichier .env ou .txt</button>
+  <input type="file" data-variable-file accept=".env,.txt,text/plain" hidden>
+  <p class="form-hint">Format NOM=valeur. Le fichier est lu dans votre navigateur. Les variables gérées par la plateforme (PORT, HOST, DATA_DIR…) sont ignorées et signalées. Les noms déjà présents seront remplacés ; vérifiez les valeurs avant de déployer.</p>
+  <p data-import-status role="status" class="form-hint"></p>
+  <div data-variable-rows></div>
+  <button type="button" data-add-variable class="btn btn-secondary">+ Ajouter une variable</button>
+  <p data-variable-status role="status" class="form-hint"></p>
+  <button type="button" data-check-variables class="btn btn-ghost btn-sm" hidden>Revérifier la disponibilité</button>
+</div>

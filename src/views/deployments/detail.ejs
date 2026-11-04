@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
+<script src="/js/application-variables.js" defer></script>
+<script src="/js/variable-settings.js" defer></script>
 
   <body>
     <div class="layout">
@@ -41,6 +43,23 @@
                   <a href="/deployments" class="btn btn-secondary">← Retour</a>
                 </div>
               </div>
+
+              <% if (deployment.targetCluster === 'gcp' && deployment.environment !== 'legacy') { %>
+              <div class="card" style="margin-bottom:16px;" id="application-variables">
+                <div class="card-header"><span class="card-title">Variables de l’application</span></div>
+                <div class="card-body">
+                  <p>Variables enregistrées : <%= variableNames.length ? variableNames.join(', ') : 'aucune' %>. Les valeurs existantes ne sont jamais affichées.</p>
+                  <% if (canManageVariables) { %>
+                  <form id="applicationVariablesForm" method="POST" action="/deployments/<%= deployment.id %>/variables" novalidate>
+                    <%- include('../partials/variable-editor', { names: variableNames }) %>
+                    <p class="form-hint">Les changements préparent un nouveau déploiement après CI. En production, un manager doit approuver le nouveau candidat.</p>
+                    <div data-variables-error class="flash flash-error" role="alert" hidden></div>
+                    <button type="submit" class="btn btn-primary">Enregistrer et préparer le déploiement</button>
+                  </form>
+                  <% } %>
+                </div>
+              </div>
+              <% } %>
 
               <% if (applicationUrl) { %>
                 <div class="card" id="application-address" style="margin-bottom:16px;">

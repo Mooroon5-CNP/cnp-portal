@@ -27,8 +27,12 @@ COPY --chown=node:node packages/ ./packages/
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
 COPY --chown=node:node documentation/ ./documentation/
+COPY --chown=node:node scripts/runtime/ ./scripts/runtime/
+COPY --chown=node:node scripts/platform/ ./scripts/platform/
 
 RUN mkdir -p /app/data && chown node:node /app/data
+
+LABEL io.cnp.variables-contract="1"
 
 USER node
 
@@ -44,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3000/healthz || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "src/index.js"]
+CMD ["node", "scripts/runtime/start.cjs", "/usr/local/bin/node", "src/index.js"]

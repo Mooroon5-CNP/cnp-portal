@@ -1,0 +1,59 @@
+name: CNP portal branch preview
+run-name: "TEST cloudrun-env · ${{ github.ref_name }} · ${{ github.sha }}"
+on:
+  push:
+    branches: [fix/cloudrun-environment]
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: cnp-portal-branch-preview
+  cancel-in-progress: false
+jobs:
+  validate-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the implementation branch
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: test "$BRANCH" = 'fix/cloudrun-environment'
+  mark-test:
+    needs: validate-ref
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mark this test commit with an identifiable Git tag
+        env:
+          TEST_TAG: test/cloudrun-env-20261104-${{ github.sha }}
+        run: |
+          git tag "$TEST_TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TEST_TAG"
+          echo "### Test tag: $TEST_TAG" >> "$GITHUB_STEP_SUMMARY"
+  runtime-contract:
+    needs: validate-ref
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: sh scripts/runtime/smoke.sh
+  build:
+    needs: [validate-ref, mark-test, runtime-contract]
+    uses: Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@cb9fd941bc03511998cf7883a28110eb53c6bd73
+    with:
+      app_name: cnp-portal
+      node_version: '24'
+      target_cloud: gcp
+      config_repo_url: https://github.com/Mooroon5-CNP/config-repo
+      gitops_mode: portal
+    secrets:
+      CONFIG_REPO_TOKEN: ${{ secrets.CONFIG_REPO_TOKEN }}
+# Intentionally no deployment or GitOps mutation. After the scanned image is built,
+# the operator renders/applies the isolated private preview using its pinned digest.

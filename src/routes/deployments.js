@@ -8,6 +8,9 @@ const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
 const environmentService = require('../services/environment-deployment');
+const applicationVariables = require('../services/application-variables');
+const environmentStorage = require('../models/deployment-environment');
+const { randomUUID } = require('crypto');
 const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
@@ -75,7 +78,7 @@ function startEnvironmentOnboarding(dep) {
 }
 
 function canRetryConfiguration(user, dep) {
-    return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
+    return !dep.unsupportedRuntime && usesEnvironment(dep) && dep.onboardingStatus === 'failed'
         && !dep.onboardingError?.startsWith('Nettoyage partiel')
         && (user.role === 'manager' || user.id === dep.ownerUserId);
 }
@@ -253,57 +256,80 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // POST /deployments — create and trigger onboarding
 // ---------------------------------------------------------------------------
 
+function wantsJson(req) { return req.get('accept')?.includes('application/json'); }
+function creationError(req, res, message, status) {
+    if (wantsJson(req)) return res.status(status).json({ error: message });
+    req.flash('error', message); return res.redirect('/deployments');
+}
+
+router.get('/variables/capability', requireAuth, requirePermission('deployments:deploy'), async (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const status = await applicationVariables.check();
+    return res.json({ available: status.available, code: status.code, message: status.message });
+});
+
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
+    let changes;
+    try { changes = applicationVariables.parse(req.body); }
+    catch (error) { return creationError(req, res, error.message, 400); }
+    if (changes.some(change => change.action !== 'set')) return creationError(req, res, 'Action de variable invalide à la création.', 400);
+    if (changes.length && targetCluster === 'azure') return creationError(req, res, 'Variables additionnelles disponibles pour Cloud Run GCP.', 400);
+    if (changes.length && !applicationVariables.transportAllowed(req)) return creationError(req, res, 'Utilisez HTTPS pour transmettre des secrets.', 400);
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
     const hasPersistentStorage = targetCluster !== 'azure'
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
     if (!appName || !githubRepoUrl) {
-        req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
-        return res.redirect('/deployments');
+        return creationError(req, res, "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.", 400);
     }
 
     try { environmentService.validate(environment, appName, targetCluster); }
     catch (err) {
-        req.flash('error', err.message);
-        return res.redirect('/deployments');
+        return creationError(req, res, err.message, 400);
     }
     const port = Number(appPort || 8080);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        req.flash('error', 'Le port applicatif doit être compris entre 1 et 65535.');
-        return res.redirect('/deployments');
+        return creationError(req, res, 'Le port applicatif doit être compris entre 1 et 65535.', 400);
     }
 
     if (!config.github.configRepoToken) {
-        req.flash('error', 'La plateforme n\'est pas configurée (GITHUB_CONFIG_REPO_TOKEN manquant). Contactez l\'administrateur.');
-        return res.redirect('/deployments');
+        return creationError(req, res, 'La plateforme n’est pas configurée. Contactez l’administrateur.', 503);
     }
 
     const parsed = githubService.parseRepoUrl(githubRepoUrl);
     if (!parsed) {
-        req.flash('error', 'URL de dépôt GitHub invalide (exemple : https://github.com/org/repo).');
-        return res.redirect('/deployments');
+        return creationError(req, res, 'URL de dépôt GitHub invalide (exemple : https://github.com/org/repo).', 400);
     }
 
     if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
-        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
-        return res.redirect('/deployments');
+        return creationError(req, res, 'Ce cloud n’est pas disponible. Seuls GCP et Azure sont supportés.', 400);
     }
 
     // Un nom d'application partagé entre environnements garde les mêmes droits d'accès.
     const visibleIds = new Set(deploymentModel.listForUser(req.user).map(row => row.id));
     if (deploymentModel.listForUser(null).some(row => row.app_name === appName && !visibleIds.has(row.id))) {
-        return res.status(403).send('Application non accessible.');
+        return creationError(req, res, 'Application non accessible.', 403);
     }
 
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
 
+    if (deploymentModel.listForUser(null).some(row => row.app_name === appName && row.deployment_environment === environment)) return creationError(req, res, 'Cet environnement est déjà enregistré. Ouvrez son détail.', 409);
+    const candidate = { id: randomUUID(), appName, githubRepoUrl, targetCluster: targetCluster || 'gcp', environment };
+    let variableConfiguration;
+    if (changes.length) {
+        try { await githubClient.checkActionsEnabled(parsed.owner, parsed.repo); }
+        catch (_) { return creationError(req, res, 'Dépôt inaccessible à la GitHub App ou GitHub Actions désactivé.', 403); }
+        try { variableConfiguration = await applicationVariables.prepare(candidate, changes); }
+        catch (_) { return creationError(req, res, 'Stockage des variables indisponible. La demande n’a pas été créée ; vérifiez la configuration plateforme et réessayez.', 503); }
+    }
     // Create the deployment record immediately with status 'configuring'.
     let dep;
     try {
-        dep = deploymentModel.create({
+        dep = require('../models/db').transaction(() => {
+            const created = deploymentModel.create({
+            id: candidate.id,
             appName,
             githubRepoUrl,
             appPort: port,
@@ -313,16 +339,35 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
             environment,
-        });
+            });
+            if (variableConfiguration) environmentStorage.save(created.id, variableConfiguration.refs, variableConfiguration);
+            return created;
+        })();
     } catch (e) {
-        req.flash('error', "Impossible d'enregistrer le déploiement.");
-        return res.redirect('/deployments');
+        return creationError(req, res, "Impossible d'enregistrer le déploiement.", 409);
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
     startEnvironmentOnboarding(dep);
 
+    if (wantsJson(req)) return res.status(202).json({ redirect: `/deployments/${dep.id}` });
     return res.redirect(`/deployments/${dep.id}`);
+});
+
+router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).json({ error: 'Déploiement introuvable.' });
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && dep.ownerUserId !== req.user.id)) return res.status(403).json({ error: 'Accès refusé.' });
+    if (dep.targetCluster !== 'gcp' || dep.unsupportedRuntime || !usesEnvironment(dep) || dep.onboardingStatus !== 'ready') return res.status(409).json({ error: 'Variables non modifiables dans cet état.' });
+    let changes;
+    try { changes = applicationVariables.parse(req.body); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
+    if (!applicationVariables.transportAllowed(req)) return res.status(400).json({ error: 'Utilisez HTTPS pour transmettre des secrets.' });
+    if (!changes.some(change => change.action !== 'keep')) return res.status(400).json({ error: 'Aucune modification à enregistrer.' });
+    try { await applicationVariables.update(dep, changes, guard => environmentService.triggerConfigurationBuild(dep, guard)); }
+    catch (_) { return res.status(503).json({ error: 'Enregistrement ou relance CI impossible. La configuration précédente est conservée.' }); }
+    req.flash('success', 'Variables enregistrées ; nouvelle CI lancée. La production reste soumise à approbation.');
+    return res.json({ redirect: `/deployments/${dep.id}` });
 });
 
 // A partial deletion must never silently resume publishing on a new CI result.
@@ -579,6 +624,9 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
+        variableNames: applicationVariables.names(dep.id),
+        canManageVariables: dep.targetCluster === 'gcp' && usesEnvironment(dep) && !dep.unsupportedRuntime
+            && dep.onboardingStatus === 'ready' && (req.user.role === 'manager' || dep.ownerUserId === req.user.id),
         environmentStatus: selectedStatus,
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.

@@ -1,6 +1,6 @@
 'use strict';
 
-jest.mock('../src/services/environment-deployment', () => ({ onboard: jest.fn(), remove: jest.fn(), resumeAfterCleanupFailure: jest.fn(), workflowName: name => `cnp-${name}.yml` }));
+jest.mock('../src/services/environment-deployment', () => ({ onboard: jest.fn(), validate: jest.fn(), remove: jest.fn(), resumeAfterCleanupFailure: jest.fn(), workflowName: name => `cnp-${name}.yml` }));
 const app = require('../src/index');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
@@ -87,4 +87,34 @@ test('concurrent deletion is rejected without starting another cleanup', async (
   const response = await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
   expect(response.status).toBe(409);
   expect(service.remove).not.toHaveBeenCalled();
+});
+
+test('a record blocked by the removed environment import can retry normal configuration', async () => {
+  const dep = deployment('failed', 'Configuration des variables impossible. Vérifiez les droits du stockage de secrets.');
+  service.onboard.mockResolvedValue();
+  const response = await request(app, { method: 'POST', url: `/deployments/${dep.id}/retry-configuration`, headers: { cookie: auth } });
+  expect(response.status).toBe(302);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(service.onboard).toHaveBeenCalledWith(expect.objectContaining({ id: dep.id }));
+  expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'ready', onboardingError: null });
+});
+test('creation does not require importing env or accessing Secret Manager', async () => {
+  const config = require('../src/config/env').config; const previous = config.github.configRepoToken;
+  config.github.configRepoToken = 'fixture-config-token'; service.onboard.mockResolvedValue();
+  try {
+    const response = await request(app, { method: 'POST', url: '/deployments', headers: { cookie: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ appName: 'normal-app', githubRepoUrl: 'https://github.com/team/normal-app', environment: 'dev', environmentText: 'TOKEN=ignored-old-form-value' }).toString() });
+    expect(response.status).toBe(302);
+    await new Promise(resolve => setImmediate(resolve));
+    const row = deployments.listForUser(null)[0];
+    expect(row.app_name).toBe('normal-app'); expect(row.onboarding_status).toBe('ready');
+    expect(service.onboard).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(row)).not.toContain('ignored-old-form-value');
+  } finally { config.github.configRepoToken = previous; }
+});
+test('the create form has no env import or hosting selector', async () => {
+  const response = await request(app, { url: '/deployments', headers: { cookie: auth } });
+  expect(response.status).toBe(200);
+  expect(response.text).not.toContain('name="environmentText"');
+  expect(response.text).not.toContain('name="useCloudRun"');
 });

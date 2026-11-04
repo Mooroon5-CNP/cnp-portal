@@ -13,6 +13,7 @@ const argo = require('../clients/argocd');
 const routing = require('./application-routing');
 const addresses = require('./application-address');
 const azure = require('./environment-azure');
+const existingEnvironment = require('../models/deployment-environment');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -39,10 +40,15 @@ function workflow(appName, dep) {
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
     jobs: { pipeline: {
       uses: `Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@${process.env.CNP_CI_TEMPLATES_REF || 'main'}`,
-      with: { app_name: appName, target_cloud: 'gcp', config_repo_url: `https://github.com/${config.github.configRepoName || 'Mooroon5-CNP/config-repo'}`, gitops_mode: 'portal' },
+      with: { app_name: appName, ...(appName === 'cnp-portal' ? { node_version: '24' } : {}), target_cloud: 'gcp', config_repo_url: `https://github.com/${config.github.configRepoName || 'Mooroon5-CNP/config-repo'}`, gitops_mode: 'portal' },
       secrets: { CONFIG_REPO_TOKEN: '${{ secrets.CONFIG_REPO_TOKEN }}' },
     } },
   }, { lineWidth: -1 });
+}
+
+function bundleMarker(dep) {
+  const bundle = existingEnvironment.bundle(dep.id);
+  return bundle ? JSON.stringify({ schemaVersion: 1, bundle: bundle.reference }) + '\n' : null;
 }
 
 async function readFile(api, repository, path, ref = 'main') {
@@ -85,7 +91,22 @@ function manifests(dep, revision) {
     { name: 'DD_ENV', value: dep.environment }, { name: 'DD_SERVICE', value: dep.appName },
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
-  const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  const bundle = existingEnvironment.bundle(dep.id);
+  if (bundle) {
+    container.env.push({ name: 'CNP_VARIABLES_REF', value: JSON.stringify(bundle.reference) });
+    if (bundle.reference.provider === 'openbao') {
+      const settings = require('../../scripts/runtime/variables.cjs').baoSettings(process.env);
+      container.env.push({ name: 'CNP_OPENBAO_ADDR', value: settings.origin }, { name: 'CNP_OPENBAO_AUDIENCE', value: settings.audience });
+    }
+  }
+  const savedRefs = existingEnvironment.get(dep.id);
+  // Compatibility only: preserve references from a previously successful import.
+  // No new secrets, IAM grants or Google credentials are required for deployment.
+  const configuredAccount = existingEnvironment.metadata(dep.id).account;
+  const serviceAccount = configuredAccount || (savedRefs.length
+    ? `cnp-${createHash('sha256').update(dep.id).digest('hex').slice(0, 24)}@${config.gcp.project}.iam.gserviceaccount.com`
+    : config.gcp.cloudRunSa);
+  const template = { serviceAccount, containers: [container] };
   if (dep.persistentStorage) {
     template.volumes = [{ name: 'data', gcs: { bucket, readOnly: false } }];
     container.volumeMounts = [{ name: 'data', mountPath: '/data' }];
@@ -103,7 +124,7 @@ function manifests(dep, revision) {
     const storage = resource('storage.gcp.upbound.io/v1beta1', 'Bucket', bucket,
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
     const binding = resource('storage.gcp.upbound.io/v1beta1', 'BucketIAMMember', `${bucket}-runtime`,
-      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
+      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${serviceAccount}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
   }
@@ -124,13 +145,16 @@ function applicationSet(environment = 'dev', paths = []) {
   return set;
 }
 
-function current(dep) {
+function current(dep, allowConfiguration = false) {
+  if (dep.unsupportedRuntime) return false;
   const row = deployments.get(dep.id);
-  return row && row.environment === dep.environment && row.onboardingStatus === 'ready'
+  return row && !row.unsupportedRuntime && row.environment === dep.environment && row.onboardingStatus === 'ready'
+    && (allowConfiguration || !existingEnvironment.busy(dep.id))
     && releases.get(dep.id, '__registration__')?.state === 'registered';
 }
 
 async function prepareOnboarding(dep) {
+  if (dep.unsupportedRuntime) throw new Error('Enregistrement expérimental : aucune migration Cloud Run automatique.');
   validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
   if (azure.isAzure(dep)) azure.assertConfigured();
@@ -227,7 +251,7 @@ async function prepareOnboarding(dep) {
     }
     return files;
   }, `chore(${dep.appName}): register ${dep.environment}`);
-  await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
+  await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: bundleMarker(dep) || `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
 }
 
@@ -309,10 +333,12 @@ async function reconcile(dep) {
     if (release?.state === 'published') return { ...result, ...await readiness(dep, revision) };
     if (!(await sourceIsCurrent(dep, revision))) return { ...result, phase: 'waiting', message: 'La branche a changé ; attente du nouveau pipeline.' };
     if (release?.state === 'pending') return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: release.pr_url };
+    const bundleSnapshot = bundleMarker(dep);
+    if (bundleSnapshot && await readFile(api, repositories.parseRepoUrl(dep.githubRepoUrl), `.cnp-platform-${dep.environment}`, revision) !== bundleSnapshot) return { ...result, phase: 'waiting', message: 'Cette CI ne correspond pas à la configuration demandée.' };
     const token = releases.acquire(dep.id, revision, run.id);
     if (!token) return { ...result, phase: 'deploying', message: 'Préparation GitOps en cours.' };
     const guard = async () => {
-      if (!current(dep) || !releases.owns(dep.id, revision, token) || !(await sourceIsCurrent(dep, revision))) {
+      if (!current(dep) || bundleMarker(dep) !== bundleSnapshot || !releases.owns(dep.id, revision, token) || !(await sourceIsCurrent(dep, revision))) {
         throw new Error('Le déploiement ou sa branche a changé. Réessayez.');
       }
     };
@@ -329,10 +355,14 @@ async function reconcile(dep) {
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
           || !item?.valueSource?.secretKeyRef?.secret || !item?.valueSource?.secretKeyRef?.version
           || Object.keys(item).some(key => !['name', 'valueSource'].includes(key)))) throw new Error('Invalid runtime secret references.');
+        if (existingEnvironment.bundle(dep.id) && runtime.length) throw new Error('Les références opérateur historiques nécessitent une migration explicite avant les bundles.');
         const claimPath = `${identity(dep).path}/cloudrun-claim.yaml`;
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
-        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
+        const saved = existingEnvironment.get(dep.id);
+        const removed = existingEnvironment.metadata(dep.id).removed;
+        const refs = runtime.filter(item => !removed.includes(item.name) && !saved.some(ref => ref.name === item.name)).concat(saved);
+        container.env = container.env.filter(item => !refs.some(secret => secret.name === item.name)).concat(refs);
         files[claimPath] = yaml.dump(claim);
       }
       if (dep.environment === 'dev') {
@@ -361,8 +391,20 @@ async function reconcile(dep) {
   try { return await work; } finally { locks.delete(dep.id); }
 }
 
-async function review(dep, revision, approve, { reviewedBy } = {}) {
-  if (dep.environment !== 'prod' || !current(dep)) throw new Error('Validation réservée à une production active.');
+async function review(dep, revision, approve, options) {
+  if (!existingEnvironment.bundle(dep.id)) return reviewCandidate(dep, revision, approve, options);
+  if (!current(dep)) throw new Error('La configuration est en cours de modification.');
+  const configurationToken = existingEnvironment.acquire(dep.id);
+  try {
+    return await reviewCandidate(dep, revision, approve, options, () => {
+      existingEnvironment.renew(dep.id, configurationToken);
+      return current(dep, true);
+    });
+  } finally { existingEnvironment.release(dep.id, configurationToken); }
+}
+
+async function reviewCandidate(dep, revision, approve, { reviewedBy } = {}, available = () => current(dep)) {
+  if (dep.environment !== 'prod' || !available()) throw new Error('Validation réservée à une production active.');
   const release = releases.get(dep.id, revision);
   if (!release || !['pending', 'approving'].includes(release.state)) throw new Error('Candidat non disponible.');
   const api = await github.getInstallationOctokit();
@@ -370,6 +412,8 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   if (!run || run.head_sha !== revision || run.conclusion !== 'success' || !(await sourceIsCurrent(dep, revision))) {
     throw new Error('Candidat obsolète ; attendez le dernier pipeline.');
   }
+  const snapshot = bundleMarker(dep);
+  if (snapshot && await readFile(api, repositories.parseRepoUrl(dep.githubRepoUrl), `.cnp-platform-${dep.environment}`, revision) !== snapshot) throw new Error('La configuration de ce candidat est obsolète.');
   const token = releases.acquire(dep.id, revision, run.id);
   if (!token) throw new Error('Une validation est déjà en cours.');
   try {
@@ -380,7 +424,7 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
     if (approve) {
       const { data: pr } = await api.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number });
       if (pr.base.ref !== 'main' || pr.head.sha !== release.head_sha || pr.state !== 'open') throw new Error('Le candidat GitHub a changé. Préparez un nouveau candidat.');
-      if (!current(dep) || !(await sourceIsCurrent(dep, revision))) throw new Error('La production a changé pendant la validation.');
+      if (!available() || !(await sourceIsCurrent(dep, revision))) throw new Error('La production a changé pendant la validation.');
       releases.save(dep.id, revision, token, 'approving', { reviewedBy });
       const { data } = await api.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', { ...target(), pull_number: release.pr_number,
         sha: release.head_sha, merge_method: 'squash' });
@@ -397,6 +441,8 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
 }
 
 async function remove(dep) {
+  if (existingEnvironment.busy(dep.id)) throw new Error('Modification des variables en cours. Réessayez la suppression après cette opération.');
+  if (dep.unsupportedRuntime) throw new Error('Enregistrement expérimental : aucune ressource Cloud Run ne sera modifiée.');
   if (onboardingLocks.has(dep.id)) await onboardingLocks.get(dep.id).catch(() => {});
   if (locks.has(dep.id)) await locks.get(dep.id).catch(() => {});
   // Une préflight échouée ne donne aucun droit sur des manifests historiques.
@@ -477,6 +523,18 @@ async function resumeAfterCleanupFailure(dep) {
   deployments.updateOnboardingStatus(dep.id, 'ready');
 }
 
+async function triggerConfigurationBuild(dep, configurationGuard = () => {}) {
+  if (!current(dep, true)) throw new Error('Le déploiement doit être configuré avant de relancer sa CI.');
+  const api = await github.getInstallationOctokit();
+  const source = repositories.parseRepoUrl(dep.githubRepoUrl);
+  if (!source) throw new Error('Dépôt GitHub invalide.');
+  await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: bundleMarker(dep) || `CNP ${dep.environment} variables ${require('crypto').randomUUID()}\n` },
+    `ci(${dep.appName}): update ${dep.environment} variables`, branches[dep.environment], async () => {
+      configurationGuard();
+      if (!current(dep, true)) throw new Error('Le déploiement a changé pendant la modification des variables.');
+    });
+}
+
 function startReconciler() {
   let running = false;
   const tick = async () => {
@@ -484,8 +542,15 @@ function startReconciler() {
     running = true;
     try {
       for (const row of deployments.listForUser(null)) {
-        const dep = deployments.get(row.id);
+        let dep = deployments.get(row.id);
         if (!dep || dep.environment === 'legacy') continue;
+        // Resume only requests stopped by the removed import feature. Preserve
+        // genuine setup/cleanup failures and the normal CI/production gates.
+        if (!dep.unsupportedRuntime && dep.targetCluster === 'gcp' && dep.onboardingStatus === 'failed'
+          && dep.onboardingError?.startsWith('Configuration des variables impossible.')) {
+          deployments.updateOnboardingStatus(dep.id, 'configuring');
+          dep = deployments.get(dep.id);
+        }
         if (dep.onboardingStatus === 'configuring') {
           try {
             await onboard(dep);
@@ -505,4 +570,4 @@ function startReconciler() {
   return timer;
 }
 
-module.exports = { validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };
+module.exports = { validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, triggerConfigurationBuild, startReconciler, commitFiles };
