@@ -41,7 +41,7 @@ function organisation() {
 }
 
 function skeletonsSource() {
-    return { owner: organisation(), repo: 'ci-templates', ref: process.env.CNP_CI_TEMPLATES_REF || 'main' };
+    return { owner: organisation(), repo: 'ci-templates', ref: process.env.CNP_SKELETONS_REF || 'main' };
 }
 
 function validate({ name, language, port }) {

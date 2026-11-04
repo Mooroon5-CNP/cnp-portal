@@ -28,7 +28,7 @@ Dans *Déploiements → Nouveau déploiement*, l'utilisateur choisit d'abord :
 - **Dépôt GitHub prêt et existant** : formulaire historique, inchangé, puis les étapes ci-dessus.
 - **Créer un nouveau dépôt** : le portail crée d'abord le dépôt, puis exécute exactement les étapes ci-dessus dessus.
   1. Vérifie que `Mooroon5-CNP/<nom de l'app>` n'existe pas (un dépôt existant n'est jamais modifié).
-  2. Lit le squelette du langage choisi (`node`, `python`, `go`, `java`, `cpp`, `fullstack`) dans `ci-templates/skeletons/` (branche `CNP_CI_TEMPLATES_REF`, `main` par défaut) et remplace `{{APP_NAME}}` / `{{APP_PORT}}`.
+  2. Lit le squelette du langage choisi (`node`, `python`, `go`, `java`, `cpp`, `fullstack`) dans `ci-templates/skeletons/` (branche `CNP_SKELETONS_REF`, `main` par défaut) et remplace `{{APP_NAME}}` / `{{APP_PORT}}`.
   3. Crée le dépôt **public** dans l'organisation et y pousse le squelette en un seul commit sur `main`.
   4. Crée la branche `prod`.
 

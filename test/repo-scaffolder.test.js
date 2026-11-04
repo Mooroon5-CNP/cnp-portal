@@ -57,9 +57,9 @@ test('the common files are added when the language has none of its own', async (
 });
 
 test('reads the skeletons from ci-templates, on the configured ref', async () => {
-    process.env.CNP_CI_TEMPLATES_REF = 'feat/app-skeletons';
+    process.env.CNP_SKELETONS_REF = 'feat/app-skeletons';
     try { await scaffolder.scaffoldRepository(input, { sleep: noSleep }); }
-    finally { delete process.env.CNP_CI_TEMPLATES_REF; }
+    finally { delete process.env.CNP_SKELETONS_REF; }
     expect(github.listBlobs).toHaveBeenCalledWith('Mooroon5-CNP', 'ci-templates', 'feat/app-skeletons');
 });
 
