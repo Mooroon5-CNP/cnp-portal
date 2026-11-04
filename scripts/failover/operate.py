@@ -50,8 +50,16 @@ def execute(request):
         except Exception: public_ready = False
         services = client('ecs').describe_services(cluster=document['profile'].get('automation', {}).get('ecs_cluster_arn', 'cnp-cluster'), services=[app + '-prod'])['services']
         aws_ready = len(services) == 1 and services[0]['runningCount'] >= 1 and services[0]['pendingCount'] == 0
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+        from render_failover_phase1 import ZONE
+        records = client('route53').list_resource_record_sets(HostedZoneId=ZONE, StartRecordName=app + '.apps.mooroon5.fr', StartRecordType='A', MaxItems='10')['ResourceRecordSets']
+        own = [record for record in records if record['Name'].rstrip('.') == app + '.apps.mooroon5.fr' and record['Type'] == 'A']
+        primary = next((record for record in own if record.get('Failover') == 'PRIMARY'), {})
+        secondary = next((record for record in own if record.get('Failover') == 'SECONDARY'), {})
+        alias = secondary.get('AliasTarget', {}).get('DNSName', '').rstrip('.').removeprefix('dualstack.')
+        dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == 'cnp-alb-1733646164.eu-west-3.elb.amazonaws.com'
         if document['profile'].get('mode') == 'stateless':
-            return {'verified': public_ready and aws_ready, 'public_ready': public_ready, 'aws_ready': aws_ready, 'observed_at': int(time.time()), 'state': 'STATELESS'}
+            return {'verified': public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready, 'dns_ready': dns_ready, 'observed_at': int(time.time()), 'state': 'STATELESS'}
         def decode(item):
             return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
         records = {}
@@ -61,8 +69,8 @@ def execute(request):
         fresh = 0 <= int(time.time()) - replication.get('observed_at', 0) <= 120 and 0 <= int(time.time()) - replication.get('last_message_at', 0) <= 120
         configured = bool(control.get('config_hash')) and control.get('config_hash') == replication.get('config_hash')
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
-        return {'verified': healthy and public_ready and aws_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
-            'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
+        return {'verified': healthy and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
+            'dns_ready': dns_ready, 'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
             'observed_at': int(time.time()), 'zero_loss_proven': False}
     if action == 'allocate-listener':
         import boto3
