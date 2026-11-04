@@ -1,0 +1,35 @@
+name: CNP preview deployment preflight
+run-name: "DEPLOY TEST cloudrun-env · ${{ github.sha }}"
+on:
+  push:
+    branches: [fix/cloudrun-environment]
+    paths:
+      - .github/workflows/cnp-preview-deploy.yml
+      - scripts/platform/preview-preflight.cjs
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: cnp-portal-preview-deployment
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/fix/cloudrun-environment'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Authenticate with the existing CI identity
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+          token_format: access_token
+      - name: Check deployment and private variable storage permissions before any mutation
+        env:
+          CNP_DEPLOY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: node scripts/platform/preview-preflight.cjs
