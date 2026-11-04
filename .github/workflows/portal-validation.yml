@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feat/deployment-environment-selection]
+    branches: [feat/deployment-environment-selection, feat/failover-phase1]
 
 permissions:
   contents: read
