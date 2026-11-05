@@ -113,7 +113,12 @@ async function advance(app) {
       const candidates = profiles.rows(app).filter(value => value.stage === action);
       let candidate = row.reference ? candidates.find(value => value.id === row.reference.slice(10))
         : candidates.find(value => ['pending', 'approving', 'published'].includes(value.state));
-      if (!candidate) candidate = await profiles.prepare(action, actor, app);
+      if (!candidate) {
+        // prepare() renvoie la PR créée, pas son état : relire la proposition enregistrée (elle naît en attente).
+        const created = await profiles.prepare(action, actor, app);
+        candidate = profiles.rows(app).find(value => value.id === created.id);
+        if (!candidate) throw new Error(`Proposition ${action} introuvable après sa préparation.`);
+      }
       if (candidate.state === 'published') { save('running', `${action} publié.`, null, true); return; }
       if (!['pending', 'approving'].includes(candidate.state)) throw new Error(`Proposition ${action} rejetée. Reprendre pour préparer un nouveau candidat.`);
       if (stepByStep()) { save('review', `Validation manager requise : ${action}.`, `candidate:${candidate.id}`); return; }

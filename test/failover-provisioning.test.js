@@ -22,9 +22,10 @@ beforeEach(() => {
   candidates = []; tasks = []; serial = 0;
   profiles.profileFor.mockReturnValue(platform);
   profiles.rows.mockImplementation(app => candidates.filter(value => value.app === app));
+  // Comme le vrai prepare() : la proposition est enregistrée en attente, mais la valeur renvoyée n'a pas d'état.
   profiles.prepare.mockImplementation(async (stage, actor, app) => {
     const row = { id: `candidate-${++serial}`, app, stage, state: 'pending' };
-    candidates.push(row); return row;
+    candidates.push(row); return { id: row.id, stage, prUrl: `https://example.test/pull/${serial}`, head: 'h'.repeat(40) };
   });
   delete process.env.CNP_FAILOVER_STEP_BY_STEP;
   // Approbation automatique : publie le candidat (les contrôles réels sont testés dans failover-environment.test.js).
