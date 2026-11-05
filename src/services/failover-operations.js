@@ -9,7 +9,14 @@ const { isIntrospected } = require('./failover-profile');
 const root = path.resolve(path.dirname(fs.realpathSync(__filename)), '../..');
 const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const actions = ['credentials-plan', 'bootstrap-plan', 'initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'automation-plan', 'worker-configure', 'worker-verify', 'activation-plan', 'worker-resume', 'health'];
+// Plus aucun plan Terraform : l'infrastructure partagée est créée une fois par la pile plateforme, le propre à l'app passe par GitOps.
+const actions = ['initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'worker-configure', 'worker-verify', 'worker-resume', 'health'];
+const platformRegime = document => document.profile.automation?.regime === 'platform';
+// Tâches ECS : celles de la pile plateforme (noms dans le profil), ou celles du pilote, dont les noms sont fixes.
+function taskDefinition(document, kind, existingPilot) {
+  if (platformRegime(document)) return document.profile.automation[`${kind}_task_definition`];
+  return existingPilot ? { bootstrap: 'cnp-failover-bootstrap', worker: 'cnp-failover-automation' }[kind] : null;
+}
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_operations (id TEXT PRIMARY KEY, app TEXT NOT NULL,
     action TEXT NOT NULL, state TEXT NOT NULL, input_hash TEXT NOT NULL, requested_by TEXT NOT NULL,
@@ -51,7 +58,6 @@ function start(app, action, user) {
   const legacySettings = service.settings();
   const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
   if (existingPilot && ['bootstrap', 'bootstrap-roles', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
-  if (action === 'credentials-plan' && document.profile.automation?.regime === 'platform') throw new Error('Régime plateforme : les conteneurs de secrets sont créés par l’initialisation des secrets, sans Terraform.');
   if (['bootstrap', 'bootstrap-roles'].includes(action) && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
   if (['bootstrap-roles', 'schema-check'].includes(action) && !isIntrospected(document)) throw new Error('Étape réservée aux profils dont le schéma est lu dans la base.');
   // Le schéma se lit dans la base de l'application : elle doit tourner (et avoir créé ses tables) avant qu'on le copie.
@@ -61,12 +67,11 @@ function start(app, action, user) {
     if (!previous(app, 'schema-check')?.result?.verified) throw new Error('Le schéma de l’application doit exister sur la source : l’appeler une fois pour qu’elle crée ses tables.');
   }
   if (action === 'verify' && !existingPilot && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
-  if (['automation-plan', 'worker-configure', 'worker-verify'].includes(action) && !previous(app, 'verify')) throw new Error('Vérification de réplication requise.');
-  if (['activation-plan', 'worker-resume'].includes(action)) {
+  if (['worker-configure', 'worker-verify'].includes(action) && !previous(app, 'verify')) throw new Error('Vérification de réplication requise.');
+  if (action === 'worker-resume') {
     const verified = previous(app, 'verify');
     if (!previous(app, 'worker-verify') || !verified || Date.now() - Date.parse(verified.created_at) > 600000) throw new Error('Vérifications récentes de réplication et du worker requises avant activation.');
   }
-  if (action === 'worker-resume' && !previous(app, 'activation-plan')?.result?.worker_task_definition) throw new Error('Plan d’activation non appliqué.');
   const id = randomUUID();
   const request = { action, app, document, work: path.join(workRoot, id) };
   if (action === 'runtime-verify') {
@@ -77,31 +82,18 @@ function start(app, action, user) {
   }
   if (action === 'health' && document.profile.mode !== 'stateless') {
     request.packages = service.operationalPackage(app, 'automation', user);
-    request.task_definition = previous(app, 'activation-plan')?.result?.worker_task_definition;
+    // Pilote : sa tâche active vient de son dernier plan d'activation, conservé dans l'historique.
+    request.task_definition = taskDefinition(document, 'worker', false) || previous(app, 'activation-plan')?.result?.worker_task_definition;
   }
   if (['bootstrap', 'bootstrap-roles', 'schema-check', 'verify'].includes(action)) {
     request.packages = service.operationalPackage(app, 'bootstrap', user);
-    request.task_definition = previous(app, 'bootstrap-plan')?.result?.bootstrap_task_definition || (existingPilot ? 'cnp-failover-bootstrap' : null);
-    if (!request.task_definition) throw new Error('Préparer et appliquer la tâche d’initialisation générique.');
+    request.task_definition = taskDefinition(document, 'bootstrap', existingPilot);
+    if (!request.task_definition) throw new Error('Tâche d’initialisation SQL absente : la pile plateforme doit être appliquée.');
   }
-  if (action.startsWith('worker-') || ['bootstrap-plan', 'automation-plan', 'activation-plan'].includes(action)) {
-    request.packages = service.operationalPackage(app, action === 'bootstrap-plan' ? 'bootstrap' : 'automation', user);
-    request.task_definition = previous(app, 'activation-plan')?.result?.worker_task_definition || previous(app, 'automation-plan')?.result?.worker_task_definition || (existingPilot ? 'cnp-failover-automation' : null);
-    if (action.startsWith('worker-') && !request.task_definition) throw new Error('Préparer et appliquer la tâche du worker.');
-    if (['bootstrap-plan', 'automation-plan', 'activation-plan'].includes(action)) {
-      const settings = service.settings();
-      if (!settings?.bootstrapVariables) throw new Error('Varfile bootstrap partagé absent : ne pas omettre les ressources existantes.');
-      const currentActivation = settings.activationVariables ? JSON.parse(fs.readFileSync(settings.activationVariables)) : {};
-      if (!settings.automationVariables) throw new Error('Configuration existante du worker absente.');
-      request.variables = { ...JSON.parse(fs.readFileSync(settings.bootstrapVariables)), ...JSON.parse(fs.readFileSync(settings.automationVariables)), ...currentActivation };
-      request.kind = action;
-      request.images = settings.images;
-      if (!request.images) throw new Error('Images opérateur génériques non publiées.');
-      request.action = 'automation-plan';
-
-      if (action === 'activation-plan') request.variables.enable_triggers = true;
-
-    }
+  if (action.startsWith('worker-')) {
+    request.packages = service.operationalPackage(app, 'automation', user);
+    request.task_definition = taskDefinition(document, 'worker', existingPilot);
+    if (!request.task_definition) throw new Error('Tâche du worker absente : la pile plateforme doit être appliquée.');
   }
   fs.mkdirSync(request.work, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(request.work, 'request.json'), JSON.stringify(request), { mode: 0o600 });
@@ -120,22 +112,11 @@ async function finish(id, request) {
       const actor = db.prepare('SELECT requested_by FROM failover_operations WHERE id=?').get(id);
       service.configure(request.app, document, { id: actor.requested_by, role: 'manager' });
     }
-    db.prepare('UPDATE failover_operations SET state=?,result=? WHERE id=?').run(
-      request.action.endsWith('-plan') && result.safe && result.changes.length ? 'review' : result.safe === false ? 'blocked' : 'completed', JSON.stringify(result), id);
+    db.prepare('UPDATE failover_operations SET state=?,result=? WHERE id=?').run('completed', JSON.stringify(result), id);
   } catch (error) {
     db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE id=?").run(
       JSON.stringify({ error: error.message, ...(error.actionRequired ? { action_required: true } : {}) }), id);
   }
-}
-function apply(id, user) {
-  manager(user); schema();
-  const row = db.prepare('SELECT * FROM failover_operations WHERE id=?').get(id);
-  if (!row || row.state !== 'review') throw new Error('Plan non disponible pour approbation.');
-  const document = service.profileFor(row.app);
-  if (hash(document) !== row.input_hash) throw new Error('Profil modifié depuis la revue.');
-  db.prepare("UPDATE failover_operations SET state='applying',reviewed_by=? WHERE id=?").run(user.id, id);
-  void finish(id, { action: 'apply', app: row.app, document, work: path.join(workRoot, id) });
-  return { id, state: 'applying' };
 }
 async function createProfile(app, mode, contract, user) {
   manager(user);
@@ -150,6 +131,9 @@ async function createProfile(app, mode, contract, user) {
   const platform = service.platform();
   const template = mode === 'stateless' ? 'stateless' : mode === 'postgres' ? 'postgres' : null;
   if (!template) throw new Error('Choisir sans base ou PostgreSQL.');
+  // Une app PostgreSQL neuve passe toujours par le régime plateforme (aucun plan Terraform par app) : ses tâches ECS doivent exister.
+  if (mode === 'postgres' && !['bootstrap_task_definition', 'worker_task_definition'].every(key => platform.automation[key]))
+    throw new Error('Paramètres de plateforme incomplets : automation.bootstrap_task_definition et automation.worker_task_definition (pile plateforme).');
   const configRepo = process.env.CNP_FAILOVER_CONFIG_REPO || path.resolve(root, '../config-repo');
   const profile = JSON.parse(fs.readFileSync(path.join(configRepo, `docs/templates/failover-phase1/${template}/recipe.example.json`)));
   const used = service.profiles().map(name => service.profileFor(name).profile.aws.listener_priority).filter(Number.isInteger);
@@ -167,9 +151,9 @@ async function createProfile(app, mode, contract, user) {
     profile.gcp.credentials_secret_name = `cnp-${app}-sql`;
     profile.aws.database_security_group_id = platform.aws.database_security_group_id;
     profile.aws.database_ca_pem = platform.aws.database_ca_pem;
-    profile.automation = JSON.parse(JSON.stringify(platform.automation));
-    // Régime plateforme : le mot de passe administrateur de RDS est celui du Secret Kubernetes de l'application, pas un secret géré par RDS.
-    if (profile.automation.regime === 'platform') profile.aws.master_password_secret = profile.gcp.credentials_secret_name;
+    profile.automation = { ...JSON.parse(JSON.stringify(platform.automation)), regime: 'platform' };
+    // Le mot de passe administrateur de RDS est celui du Secret Kubernetes de l'application, pas un secret géré par RDS.
+    profile.aws.master_password_secret = profile.gcp.credentials_secret_name;
   }
   return service.configure(app, { profile, credentials: {}, secrets: { app }, observations: {} }, user);
 }
@@ -177,7 +161,6 @@ function retry(id, user) {
   manager(user); schema();
   const row = db.prepare('SELECT * FROM failover_operations WHERE id=?').get(id);
   if (!row || row.state !== 'failed') throw new Error('Opération non disponible pour reprise.');
-  if (row.reviewed_by) throw new Error('Apply interrompu : préparer un nouveau plan après lecture de l’état réel.');
   const document = service.profileFor(row.app);
   if (hash(document) !== row.input_hash) throw new Error('Profil modifié ; préparer une nouvelle opération.');
   if (list(row.app).some(value => ['running', 'applying'].includes(value.state))) throw new Error('Opération déjà en cours.');
@@ -188,7 +171,7 @@ function retry(id, user) {
 }
 function recoverInterrupted() {
   schema();
-  db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE state IN ('running','applying')")
-    .run(JSON.stringify({ error: 'Portail redémarré pendant l’opération. Reprendre la tâche suivie ; un apply incertain exige un nouveau plan.' }));
+  db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE state='running'")
+    .run(JSON.stringify({ error: 'Portail redémarré pendant l’opération. Reprendre la tâche suivie.' }));
 }
-module.exports = { list, start, apply, retry, createProfile, recoverInterrupted };
+module.exports = { list, start, retry, createProfile, recoverInterrupted };

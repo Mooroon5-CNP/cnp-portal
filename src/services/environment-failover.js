@@ -320,6 +320,8 @@ function operationalPackage(app, stage, user) {
   if (!['bootstrap', 'automation', 'secrets'].includes(stage)) throw new Error('Paquet inconnu.');
   const input = profileFor(app);
   if (stage !== 'automation') return render({ ...input, stage });
+  // Régime plateforme : chaque app a son enregistrement, aucun varfile partagé à reconstituer.
+  if (input.profile.automation?.regime === 'platform') return render({ ...input, stage });
   // Le worker est partagé : ne jamais produire un varfile qui ferait disparaître
   // les applications déjà configurées du plan Terraform suivant.
   const applications = [];

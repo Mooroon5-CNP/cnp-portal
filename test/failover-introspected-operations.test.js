@@ -11,7 +11,8 @@ const operations = require('../src/services/failover-operations');
 
 const user = { id: 'manager', role: 'manager' };
 const app = 'weather-api';
-const introspected = { profile: { gcp: { app_name: app, sql_contract: { database: 'appdb' } }, aws: { app_name: app } }, secrets: { initialized: true } };
+const automation = { regime: 'platform', bootstrap_task_definition: 'cnp-failover-platform-bootstrap', worker_task_definition: 'cnp-failover-platform-worker' };
+const introspected = { profile: { gcp: { app_name: app, sql_contract: { database: 'appdb' } }, aws: { app_name: app }, automation }, secrets: { initialized: true } };
 const legacy = { profile: { gcp: { app_name: app, application_profile: 'pixelcalm' }, aws: { app_name: app } }, secrets: { initialized: true } };
 let clock, requests;
 
@@ -65,28 +66,34 @@ test('la copie du schéma exige les rôles préparés puis un schéma confirmé 
   expect(() => operations.start(app, 'bootstrap', user)).toThrow('doit exister sur la source');
 });
 
-test('l’ordre historique reste inchangé pour un profil historique', () => {
+test('un profil historique autre que le pilote n’a plus de tâche d’initialisation (ses plans Terraform sont retirés)', () => {
   profiles.profileFor.mockReturnValue(legacy);
-  expect(() => operations.start(app, 'bootstrap', user)).toThrow('Préparer et appliquer la tâche');   // ni rôles ni lecture de schéma exigés
+  expect(() => operations.start(app, 'bootstrap', user)).toThrow('pile plateforme');   // ni rôles ni lecture de schéma exigés
+});
+
+test('les tâches ECS viennent de la pile plateforme, sans plan préalable', async () => {
+  record('runtime-verify', 'completed', { verified: true });
+  await settled(operations.start(app, 'schema-check', user).id);
+  record('verify', 'completed', { verified: true });
+  await settled(operations.start(app, 'worker-verify', user).id);
+  expect(requests.map(value => value.task_definition)).toEqual(['cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker']);
 });
 
 test('une cause que le manager peut corriger est conservée jusqu’au résultat de l’opération', async () => {
   record('runtime-verify', 'completed', { verified: true });
-  record('bootstrap-plan', 'completed', { bootstrap_task_definition: 'cnp-failover-bootstrap-v-1234567890' });
   execFile.mockImplementation((command, args, options, callback) => ({
     stdin: { end: jest.fn(body => { requests.push(JSON.parse(body));
       callback(new Error('exit 1'), JSON.stringify({ error: 'Schéma non pris en charge : billing.invoices.', action_required: true })); }) },
   }));
   const { id } = operations.start(app, 'schema-check', user);
   const row = await settled(id);
-  expect(requests[0]).toMatchObject({ action: 'schema-check', app, task_definition: 'cnp-failover-bootstrap-v-1234567890' });
+  expect(requests[0]).toMatchObject({ action: 'schema-check', app, task_definition: 'cnp-failover-platform-bootstrap' });
   expect(row.state).toBe('failed');
   expect(row.result).toEqual({ error: 'Schéma non pris en charge : billing.invoices.', action_required: true });
 });
 
 test('une panne inconnue reste générique et n’est jamais présentée comme une action à faire', async () => {
   record('runtime-verify', 'completed', { verified: true });
-  record('bootstrap-plan', 'completed', { bootstrap_task_definition: 'cnp-failover-bootstrap-v-1234567890' });
   execFile.mockImplementation((command, args, options, callback) => ({
     stdin: { end: jest.fn(() => callback(new Error('exit 1'), JSON.stringify({ error: 'Opération interrompue ; vérifier les prérequis.' }))) },
   }));

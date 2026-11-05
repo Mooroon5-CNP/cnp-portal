@@ -1,35 +1,33 @@
 'use strict';
 
-// Durable initial provisioning. GitOps candidates and saved Terraform plans
-// still require their own manager review; this service never approves them.
+// Durable initial provisioning. GitOps candidates still require their own manager review; this service never approves them.
+// Aucun plan Terraform : l'infrastructure partagée vient de la pile plateforme, appliquée une fois par un humain.
 const { randomUUID } = require('crypto');
 const db = require('../models/db');
 const profiles = require('./environment-failover');
 const operations = require('./failover-operations');
 const { isIntrospected } = require('./failover-profile');
+// Le parcours d'une app : sans base, ou PostgreSQL en régime plateforme. Les profils historiques (le pilote) ne se remettent plus en
+// service par ce parcours : ils n'avaient que des plans Terraform par app, retirés.
+function stepsFor(document) {
+  if (document.profile.mode === 'stateless') return STATELESS_STEPS;
+  if (isIntrospected(document) && document.profile.automation?.regime === 'platform') return PLATFORM_STEPS;
+  throw new Error('Profil historique : mise en service automatique retirée. Créer le profil de l’application en régime plateforme.');
+}
 const manager = user => {
   if (!user?.id || user.role !== 'manager') throw new Error('Validation manager requise.');
 };
-const SQL_STEPS = [
-  ['operation', 'credentials-plan'], ['operation', 'initialize-secrets'],
-  ['candidate', 'databases'], ['operation', 'observe'],
-  ['operation', 'bootstrap-plan'], ['operation', 'bootstrap'], ['operation', 'verify'],
-  ['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'],
-  ['operation', 'observe'], ['operation', 'automation-plan'],
-  ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
-  ['operation', 'activation-plan'], ['operation', 'worker-resume'], ['operation', 'health'],
-];
-// Profil dont le schéma se lit dans la base : les rôles d'abord, puis l'application tourne sur GCP et crée son schéma, puis
-// CNP le lit, le restaure sur la cible et s'abonne. Le runtime n'attend donc plus le bootstrap.
-const INTROSPECTED_STEPS = [
-  ['operation', 'credentials-plan'], ['operation', 'initialize-secrets'],
-  ['candidate', 'databases'], ['operation', 'observe'],
-  ['operation', 'bootstrap-plan'], ['operation', 'bootstrap-roles'],
+// Profil PostgreSQL du régime plateforme : le schéma se lit dans la base. Les rôles d'abord, puis l'application tourne sur GCP et
+// crée son schéma, puis CNP le lit, le restaure sur la cible et s'abonne. Après les DNS (la sonde Route 53 existe), la publication
+// « worker » déclare l'alarme et la configuration ; les déclencheurs de la plateforme sont déjà allumés, sans plan d'activation.
+const PLATFORM_STEPS = [
+  ['operation', 'initialize-secrets'],
+  ['candidate', 'databases'], ['operation', 'observe'], ['operation', 'bootstrap-roles'],
   ['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'schema-check'],
   ['operation', 'bootstrap'], ['operation', 'verify'],
-  ['candidate', 'dns'], ['operation', 'observe'], ['operation', 'automation-plan'],
+  ['candidate', 'dns'], ['operation', 'observe'], ['candidate', 'worker'],
   ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
-  ['operation', 'activation-plan'], ['operation', 'worker-resume'], ['operation', 'health'],
+  ['operation', 'worker-resume'], ['operation', 'health'],
 ];
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
 const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
@@ -50,6 +48,7 @@ function start(app, user) {
   if (!document) throw new Error('Configurer le profil de cette application avant sa mise en service.');
   const existing = get(app);
   if (existing) return existing;
+  stepsFor(document);
   // Do not adopt an initialized database into a fresh bootstrap implicitly.
   if (operations.list(app).some(row => row.action === 'bootstrap') || profiles.rows(app).some(row => row.stage === 'dns' && row.state === 'published')) {
     throw new Error('Mise en service déjà engagée : conserver les étapes existantes et terminer leur vérification.');
@@ -67,12 +66,11 @@ function resume(app, user) {
   if (row.lease_until > Date.now()) throw new Error('Préparation encore en cours.');
   if (row.reference?.startsWith('operation:')) {
     const op = operations.list(app).find(value => value.id === row.reference.slice(10));
-    if (op?.state === 'failed' && !op.reviewed_by) {
+    if (op?.state === 'failed') {
       operations.retry(op.id, user);
       db.prepare("UPDATE failover_provisioning SET requested_by=?,state='running',message=NULL WHERE app=?").run(user.id, app);
       return get(app);
     }
-    // An uncertain apply gets a fresh read/plan and a new exact review.
   }
   const now = new Date().toISOString();
   db.prepare("UPDATE failover_provisioning SET requested_by=?,state='running',reference=NULL,message=NULL,step_started_at=?,updated_at=? WHERE app=?")
@@ -103,7 +101,7 @@ async function advance(app) {
       if (!health || Date.now() - Date.parse(health.created_at) >= 60000) operations.start(app, 'health', actor);
       return;
     }
-    const steps = document.profile.mode === 'stateless' ? STATELESS_STEPS : isIntrospected(document) ? INTROSPECTED_STEPS : SQL_STEPS;
+    const steps = stepsFor(document);
     const step = steps[row.step];
     if (!step) { save('completed', 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.'); return; }
     const [kind, action] = step;
@@ -138,23 +136,21 @@ async function advance(app) {
       return;
     }
     const reference = `operation:${operation.id}`;
-    if (operation.state === 'review') { save('review', 'Examiner et approuver le plan enregistré.', reference); return; }
-    if (['running', 'applying'].includes(operation.state)) { save('running', `En cours : ${action}.`, reference); return; }
+    if (operation.state === 'running') { save('running', `En cours : ${action}.`, reference); return; }
     const requiresProof = ['verify', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
     // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
     if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {
       save('running', `${action} vérifié.`, null, true); return;
     }
-    if (WAITABLE.has(action) && !operation.reviewed_by && Date.now() - Date.parse(row.step_started_at) < 3600000) {
+    if (WAITABLE.has(action) && Date.now() - Date.parse(row.step_started_at) < 3600000) {
       // Read-only readiness checks can be repeated while providers converge.
       // A completed negative check starts a new observation; a failed check
       // reuses its durable operation, never a new SQL initialization.
       // Le message dit au manager quoi faire (ex. appeler l'application) : le lire sur la lecture qui vient de se terminer.
       const hint = operation.result?.message;
       if (operation.state === 'failed') operations.retry(operation.id, actor);
-      else if (operation.state === 'completed') operation = operations.start(app, action, actor);
-      else throw new Error('Plan refusé ; aucun apply automatique.');
+      else operation = operations.start(app, action, actor);
       save('waiting', hint || `Attente de disponibilité : ${action}.`, `operation:${operation.id}`); return;
     }
     throw new Error(operation.result?.error || `Étape ${action} non validée ; reprendre après correction.`);

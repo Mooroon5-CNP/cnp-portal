@@ -26,6 +26,7 @@ const platform = (overrides = {}) => ({
     worker_image: `804210702561.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:${'a'.repeat(64)}`,
     ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:804210702561:cluster/cnp-cluster', ecs_security_group_id: 'sg-0aaaaaaaaaaaaaaaa',
     public_subnet_ids: ['subnet-1', 'subnet-2'], subscription_ca_path_on_rds: null, kube_context: 'ctx',
+    bootstrap_task_definition: 'cnp-failover-platform-bootstrap', worker_task_definition: 'cnp-failover-platform-worker',
   },
   ...overrides,
 });
@@ -120,25 +121,27 @@ test('seul un manager crée un profil, et seulement pour une production GCP', as
 });
 
 describe('régime plateforme du worker', () => {
-  const regime = () => platform({ automation: { ...platform().automation, regime: 'platform' } });
-  test('par défaut (pilote), aucun secret administrateur RDS propre et pas d’étape worker', async () => {
-    await operations.createProfile('weather-api', 'postgres', contract, manager);
-    const document = service.profileFor('weather-api');
-    expect(document.profile.aws.master_password_secret).toBeUndefined();
-    expect(service.stagesFor(document)).toEqual(['databases', 'runtime', 'dns']);
+  test('sans les tâches ECS de la pile plateforme, aucun profil PostgreSQL ne se crée', async () => {
+    const missing = platform();
+    delete missing.automation.worker_task_definition;
+    process.env.CNP_FAILOVER_PLATFORM = write('missing-tasks.json', missing);
+    await expect(operations.createProfile('weather-api', 'postgres', contract, manager)).rejects.toThrow('worker_task_definition');
+    expect(service.profileFor('weather-api')).toBeNull();
   });
-  test('en régime plateforme, RDS prend le mot de passe du Secret de l’application et l’étape worker suit les DNS', async () => {
-    process.env.CNP_FAILOVER_PLATFORM = write('regime.json', regime());
+  test('le profil du pilote garde ses trois étapes, sans étape worker', () => {
+    expect(service.stagesFor({ profile: { automation: {} } })).toEqual(['databases', 'runtime', 'dns']);
+  });
+  test('toute app PostgreSQL neuve est en régime plateforme : RDS prend le mot de passe de son Secret, l’étape worker suit les DNS', async () => {
     await operations.createProfile('weather-api', 'postgres', contract, manager);
     const document = service.profileFor('weather-api');
     expect(document.profile.aws.master_password_secret).toBe('cnp-weather-api-sql');
     expect(document.profile.aws.master_password_secret).toBe(document.profile.gcp.credentials_secret_name);
+    expect(document.profile.automation).toMatchObject({ regime: 'platform', worker_task_definition: 'cnp-failover-platform-worker' });
     expect(service.stagesFor(document)).toEqual(['databases', 'runtime', 'dns', 'worker']);
   });
-  test('en régime plateforme, aucun plan Terraform de secrets : les conteneurs naissent à l’initialisation', async () => {
-    process.env.CNP_FAILOVER_PLATFORM = write('regime-plan.json', regime());
+  test('aucun plan Terraform de secrets : les conteneurs naissent à l’initialisation', async () => {
     await operations.createProfile('weather-api', 'postgres', contract, manager);
-    expect(() => operations.start('weather-api', 'credentials-plan', manager)).toThrow('sans Terraform');
+    expect(() => operations.start('weather-api', 'credentials-plan', manager)).toThrow('inconnue');
   });
   test('une application sans état n’a jamais d’étape worker', () => {
     expect(service.stagesFor({ profile: { mode: 'stateless' } })).toEqual(['runtime', 'dns']);

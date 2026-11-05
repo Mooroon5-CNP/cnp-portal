@@ -56,7 +56,7 @@ router.post('/provisioning/:action', (req, res) => {
 router.post('/operations/:action', (req, res) => {
   try {
     const provisioning = require('../services/failover-provisioning').get(req.body.app);
-    if (provisioning && provisioning.state !== 'completed') throw new Error('Préparation automatique en cours : utiliser sa reprise ou valider le plan affiché.');
+    if (provisioning && provisioning.state !== 'completed') throw new Error('Préparation automatique en cours : utiliser sa reprise ou valider la publication affichée.');
     require('../services/failover-operations').start(req.body.app, req.params.action, req.user);
     return res.redirect(`/failover?app=${encodeURIComponent(req.body.app)}`);
   } catch (error) { return res.status(409).json({ error: error.message }); }
@@ -64,14 +64,6 @@ router.post('/operations/:action', (req, res) => {
 router.post('/operation/:id/retry', (req, res) => {
   try {
     const result = require('../services/failover-operations').retry(req.params.id, req.user);
-    if (req.accepts(['html', 'json']) === 'json') return res.json(result);
-    return res.redirect('/failover');
-  }
-  catch (error) { return res.status(409).json({ error: error.message }); }
-});
-router.post('/operation/:id/apply', (req, res) => {
-  try {
-    const result = require('../services/failover-operations').apply(req.params.id, req.user);
     if (req.accepts(['html', 'json']) === 'json') return res.json(result);
     return res.redirect('/failover');
   }

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, create_autospec, patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'operate.py'
 spec = importlib.util.spec_from_file_location('phase1_operator_test', SOURCE)
@@ -28,17 +28,6 @@ class OperatorTests(unittest.TestCase):
             'credentials': {}, 'secrets': {}, 'observations': {}}
         self.request = {'app': 'weather-api', 'work': self.directory.name, 'document': self.document}
 
-    def test_unchanged_credentials_plan_imports_existing_references(self):
-        outputs = {'aws_secret_arns': {'value': {'runtime': 'existing-runtime'}}, 'gcp_runtime_secret': {'value': 'existing-gcp'}}
-        def cli(args, directory=None):
-            if args[1] == 'plan':
-                Path(next(value[5:] for value in args if value.startswith('-out='))).write_bytes(b'saved-plan')
-            return json.dumps(outputs) if args[1] == 'output' else '{}'
-        with patch.object(operator, 'command', side_effect=cli), patch.object(operator.safe_apply, 'inspect', return_value={'safe': True, 'changes': []}):
-            result = operator.execute({**self.request, 'action': 'credentials-plan'})
-        self.assertEqual(result['credentials'], outputs)
-        self.assertNotIn('applied', result)
-
     def test_platform_secrets_are_created_by_the_api_without_terraform_or_any_cli(self):
         sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
         import test_worker_phase1 as fixtures
@@ -47,8 +36,7 @@ class OperatorTests(unittest.TestCase):
         expected = {'secrets': {'app': app, 'initialized': True}, 'credentials': {'aws_secret_arns': {'value': {}}}}
         request = {'app': app, 'work': self.directory.name, 'action': 'initialize-secrets',
                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}}
-        with patch.object(operator, 'command', side_effect=AssertionError('CLI appelée')), \
-                patch('initialize_secrets.initialize', side_effect=AssertionError('chemin du pilote')), \
+        with patch('initialize_secrets.initialize', side_effect=AssertionError('chemin du pilote')), \
                 patch('platform_secrets.execute', return_value=expected) as run:
             self.assertEqual(operator.execute(request), expected)
         self.assertEqual(run.call_args.args[0], {'app': app, 'kubernetes_secret': profile['gcp']['credentials_secret_name'],
@@ -88,12 +76,38 @@ class OperatorTests(unittest.TestCase):
             'loadBalancers': [{'targetGroupArn': 'group'}]}]}
         elb.describe_target_health.return_value = {'TargetHealthDescriptions': [{'TargetHealth': {'State': 'healthy'}}]}
         fake_boto = types.SimpleNamespace(client=lambda name, **kwargs: {'sts': sts, 'ecs': ecs, 'elbv2': elb}[name])
-        cloud = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
-            'latestReadyRevisionName': 'old-revision', 'latestCreatedRevisionName': 'new-revision'}}
-        with patch.dict(sys.modules, {'boto3': fake_boto}), patch.object(operator, 'command', return_value=json.dumps(cloud)):
-            result = operator.execute({**self.request, 'action': 'runtime-verify'})
-        self.assertFalse(result['verified'])
-        self.assertTrue(result['standby_ready'])
+        self.aws = fake_boto
+        ready = self.runtime(SERVICE)
+        self.assertTrue(ready['verified'])
+        for change in ({'latestReadyRevision': SERVICE['latestReadyRevision'].replace('00002', '00001')},     # ancienne révision prête
+                       {'reconciling': True}, {'terminalCondition': {'state': 'CONDITION_FAILED'}}):
+            with self.subTest(change=change):
+                result = self.runtime({**SERVICE, **change})
+                self.assertFalse(result['primary_ready'])
+                self.assertTrue(result['standby_ready'])
+
+    def runtime(self, service):
+        session = FakeSession({f'https://run.googleapis.com/v2/projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod': service})
+        with patch.dict(sys.modules, {'boto3': self.aws}):
+            return operator.execute({**self.request, 'action': 'runtime-verify', '_google': session})
+
+
+REVISION = 'projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod/revisions/weather-api-prod-00002-abc'
+# Forme réelle de l'API Cloud Run v2 (champs relevés sur le pilote le 5/11, via le statut Crossplane qui la reprend).
+SERVICE = {'terminalCondition': {'state': 'CONDITION_SUCCEEDED', 'type': 'Ready'}, 'reconciling': False,
+           'latestReadyRevision': REVISION, 'latestCreatedRevision': REVISION,
+           'template': {'containers': [{'image': 'europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/weather-api@sha256:' + 'a' * 64}]}}
+
+
+class FakeSession:
+    """Session Google : réponses JSON par URL ; toute autre URL est un refus."""
+    def __init__(self, pages):
+        self.pages, self.urls = pages, []
+
+    def get(self, url, timeout):
+        self.urls.append(url)
+        found = url in self.pages
+        return types.SimpleNamespace(status_code=200 if found else 403, json=lambda: self.pages[url])
 
 
 INTROSPECTED = 'postgres:{"database":"appdb"}'
@@ -224,7 +238,7 @@ class EngineRootTests(unittest.TestCase):
     def engine(self, base, *parts):
         directory = Path(base).joinpath(*parts, 'deployment', 'failover-phase1')
         directory.mkdir(parents=True)
-        (directory / 'safe_apply.py').write_text('')
+        (directory / 'bootstrap.py').write_text('')
         return directory
 
     def script(self, base, *parts):
@@ -271,3 +285,122 @@ class EngineRootTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NoCommandLineTests(unittest.TestCase):
+    """Le portail tournera dans le cluster : aucune CLI (terraform, gcloud, kubectl), aucun plan ni apply."""
+
+    def test_the_operator_never_starts_a_process(self):
+        import ast
+        tree = ast.parse(SOURCE.read_text())
+        imported = {alias.name.split('.')[0] for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                    for alias in (node.names if isinstance(node, ast.Import) else [ast.alias(node.module or '')])}
+        self.assertFalse(imported & {'subprocess', 'shutil', 'safe_apply'}, imported)
+        tools = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and node.value in {'terraform', 'gcloud', 'kubectl'}]
+        self.assertEqual(tools, [])
+        self.assertNotIn('os.system', SOURCE.read_text())
+
+    def test_plan_and_apply_actions_no_longer_exist(self):
+        parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+        parent.mkdir(exist_ok=True, parents=True)
+        with tempfile.TemporaryDirectory(dir=parent) as work:
+            document = {'profile': {'gcp': {'app_name': 'weather-api'}, 'aws': {'app_name': 'weather-api'}, 'automation': {}},
+                        'credentials': {}, 'secrets': {}, 'observations': {}}
+            for action in ('credentials-plan', 'automation-plan', 'apply'):
+                with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'Opération inconnue'):
+                    operator.execute({'app': 'weather-api', 'work': work, 'action': action, 'document': document})
+
+    def test_platform_and_pilot_task_families_only(self):
+        for family in ('cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker', 'cnp-failover-bootstrap', 'cnp-failover-automation-v-0123456789'):
+            self.assertRegex(family, f'^(?:{operator.TASK_FAMILY})$')
+        for family in ('cnp-failover-platform-other', 'other-worker', 'cnp-failover-platform-worker-v-0123456789'):
+            self.assertNotRegex(family, f'^(?:{operator.TASK_FAMILY})$')
+
+
+@unittest.skipUnless(importlib.util.find_spec('kubernetes'), 'bibliothèque kubernetes absente')
+class ObserveTests(unittest.TestCase):
+    """Les observations se lisent par l'API Kubernetes, à la version préférée du cluster (celle que prenait kubectl)."""
+
+    def setUp(self):
+        from kubernetes.client import ApisApi, CustomObjectsApi, V1APIGroup, V1APIGroupList, V1GroupVersionForDiscovery
+        self.apis = create_autospec(ApisApi, instance=True)
+        groups = [('sql.gcp.upbound.io', 'v1beta2'), ('rds.aws.upbound.io', 'v1beta3'), ('route53.aws.upbound.io', 'v1beta1')]
+        self.apis.get_api_versions.return_value = V1APIGroupList(groups=[V1APIGroup(name=name, versions=[], preferred_version=
+            V1GroupVersionForDiscovery(group_version=f'{name}/{version}', version=version)) for name, version in groups])
+        self.custom = create_autospec(CustomObjectsApi, instance=True)
+        self.objects = {}
+        def get(group, version, plural, name):
+            from kubernetes.client.exceptions import ApiException
+            if (plural, name) not in self.objects:
+                raise ApiException(status=self.missing)
+            return {'apiVersion': f'{group}/{version}', **self.objects[(plural, name)]}
+        self.custom.get_cluster_custom_object.side_effect = get
+        self.missing = 404
+
+    def test_preferred_versions_and_absent_probes_before_dns(self):
+        self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {'kind': 'DatabaseInstance'}, ('instances', 'weather-api-prod-db'): {'kind': 'Instance'}}
+        found = operator.observe_objects('weather-api', self.apis, self.custom)
+        self.assertEqual(set(found), {'cloudsql', 'rds'})
+        self.assertEqual(found['rds']['apiVersion'], 'rds.aws.upbound.io/v1beta3')          # pas celle écrite dans Git (v1beta2)
+        self.assertEqual(found['cloudsql']['apiVersion'], 'sql.gcp.upbound.io/v1beta2')
+
+    def test_a_missing_database_or_a_refused_read_stops(self):
+        self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {'kind': 'DatabaseInstance'}}
+        with self.assertRaisesRegex(ValueError, 'Bases'):
+            operator.observe_objects('weather-api', self.apis, self.custom)
+        self.objects[('instances', 'weather-api-prod-db')] = {'kind': 'Instance'}
+        self.missing = 403                                                                   # droits refusés sur les sondes
+        with self.assertRaisesRegex(ValueError, 'sondes refusée'):
+            operator.observe_objects('weather-api', self.apis, self.custom)
+
+    def test_the_action_reads_the_source_ca_from_the_cloud_sql_api(self):
+        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        import test_worker_phase1 as fixtures
+        profile = fixtures.platform_profile()
+        app = profile['gcp']['app_name']
+        self.objects = {('databaseinstances', f'{app}-prod-gcp-db'): {'kind': 'DatabaseInstance'}, ('instances', f'{app}-prod-db'): {'kind': 'Instance'}}
+        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
+                               {'serverCaCert': {'cert': '-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----'}}})
+        parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+        parent.mkdir(exist_ok=True, parents=True)
+        with tempfile.TemporaryDirectory(dir=parent) as work:
+            result = operator.execute({'app': app, 'work': work, 'action': 'observe', '_google': session, '_kubernetes': (self.apis, self.custom),
+                'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
+        self.assertIn('BEGIN CERTIFICATE', result['source_ca'])
+        self.assertEqual(set(result['observations']), {'cloudsql', 'rds'})
+
+
+class HealthNamesTests(unittest.TestCase):
+    """La santé d'une app lit les objets de son régime : jamais la table ni les règles du worker du pilote pour une app plateforme."""
+
+    def health(self, profile):
+        app = profile['gcp']['app_name']
+        clients = {name: Mock() for name in ('sts', 'ecs', 'route53', 'dynamodb', 'events')}
+        clients['sts'].get_caller_identity.return_value = {'Account': '804210702561'}
+        clients['ecs'].describe_services.return_value = {'services': []}
+        clients['route53'].list_resource_record_sets.return_value = {'ResourceRecordSets': []}
+        clients['dynamodb'].get_item.return_value = {}
+        clients['events'].describe_rule.return_value = {'State': 'ENABLED'}
+        clients['events'].list_targets_by_rule.return_value = {'Targets': []}
+        fake_boto = types.SimpleNamespace(client=lambda name, **kwargs: clients[name])
+        parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+        parent.mkdir(exist_ok=True, parents=True)
+        with tempfile.TemporaryDirectory(dir=parent) as work, patch.dict(sys.modules, {'boto3': fake_boto}), \
+                patch('urllib.request.urlopen', side_effect=OSError('hors ligne')):
+            result = operator.execute({'app': app, 'work': work, 'action': 'health', 'task_definition': 'cnp-failover-platform-worker',
+                'packages': {'worker-config.json': {'applications': [{'app': app}]}},
+                'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
+        return result, clients
+
+    def test_each_regime_reads_its_own_state_table_and_rules(self):
+        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        import test_worker_phase1 as fixtures
+        from test_phase1_package import profile as pilot
+        for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),
+                                     (pilot(), 'cnp-failover-automation', 'cnp-failover-automation-')):
+            with self.subTest(table=table):
+                result, clients = self.health(profile)
+                self.assertFalse(result['verified'])
+                self.assertEqual({call.kwargs['TableName'] for call in clients['dynamodb'].get_item.call_args_list}, {table})
+                rules = [call.kwargs['Name'] for call in clients['events'].describe_rule.call_args_list]
+                self.assertEqual(rules, [rule + 'alarm', rule + 'retry'])

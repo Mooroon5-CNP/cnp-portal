@@ -5,14 +5,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import sys
 import time
 from uuid import uuid4
 
 def engine_root(environ=os.environ, here=Path(__file__).resolve()):
-    """Racine du moteur phase 1 (safe_apply.py, credentials/, automation/).
+    """Racine du moteur phase 1 (bootstrap.py, automation.py, platform_secrets.py…).
 
     CNP_FAILOVER_ENGINE_ROOT l'impose (portail déployé, disposition inhabituelle) et n'a alors aucun repli : une
     valeur fausse doit échouer, pas être remplacée en silence par un autre moteur. Sans elle, on reconnaît les deux
@@ -25,7 +23,7 @@ def engine_root(environ=os.environ, here=Path(__file__).resolve()):
         here.parents[3] / 'deployment' / 'failover-phase1',
     ]
     for candidate in candidates:
-        if (candidate / 'safe_apply.py').is_file():
+        if (candidate / 'bootstrap.py').is_file():
             return candidate.resolve()
     raise FileNotFoundError('Moteur phase 1 introuvable : définir CNP_FAILOVER_ENGINE_ROOT.')
 
@@ -40,7 +38,6 @@ except FileNotFoundError as error:
     raise
 sys.path.insert(0, str(ROOT))
 import postgres_contract
-import safe_apply
 
 
 class UserAction(ValueError):
@@ -65,15 +62,56 @@ def bootstrap_operations(action, introspected):
     return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication']}[action]
 
 
-def command(args, directory=None):
-    result = subprocess.run(args, cwd=directory, capture_output=True, text=True, timeout=600)
-    if result.returncode:
-        raise ValueError('Commande opérateur refusée ; consulter les prérequis et reprendre après vérification.')
-    return result.stdout
+# Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
+# l'environnement (pod du portail, sinon poste de l'opérateur et `kube_context` du profil).
+PROJECT = 'cnp-terraform-512313'
+# Ressources Crossplane observées (cluster-scoped). La version est celle que le cluster préfère, comme le faisait `kubectl get`.
+OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-gcp-db'),
+            ('rds', 'rds.aws.upbound.io', 'instances', '{app}-prod-db'),
+            ('healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover'),
+            ('routing_latch', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-latch-http'),
+            ('primary_healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-primary-health')]
+# Noms des déclencheurs et de la table d'état, par régime (le pilote garde les siens).
+NAMES = {'pilot': {'state_table': 'cnp-failover-automation', 'rules': ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']},
+         'platform': {'state_table': 'cnp-failover-platform-state', 'rules': ['cnp-failover-platform-alarm', 'cnp-failover-platform-retry']}}
+TASK_FAMILY = r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?|cnp-failover-platform-(bootstrap|worker)'
 
 
-def digest(file):
-    return hashlib.sha256(file.read_bytes()).hexdigest()
+def google_get(url, session=None):
+    """Lecture d'une API Google avec les identifiants par défaut de l'environnement (Workload Identity dans le cluster)."""
+    if session is None:
+        import google.auth
+        from google.auth.transport.requests import AuthorizedSession
+        credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+        session = AuthorizedSession(credentials)
+    response = session.get(url, timeout=30)
+    if response.status_code != 200:
+        raise ValueError('Lecture GCP refusée ; vérifier les droits de l’identité du portail.')
+    return response.json()
+
+
+def kubernetes_clients(context=None):
+    from kubernetes import client, config
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config(context=context)
+    return client.ApisApi(), client.CustomObjectsApi()
+
+
+def observe_objects(app, apis, custom):
+    """Ressources Crossplane de l'app. Une base absente arrête ; une sonde absente (404) est normale avant les DNS.
+    Toute autre erreur (droits, API) arrête aussi : « pas trouvé » n'est pas « n'existe pas »."""
+    from kubernetes.client.exceptions import ApiException
+    preferred = {group.name: group.preferred_version.version for group in apis.get_api_versions().groups}
+    objects = {}
+    for key, group, plural, name in OBSERVED:
+        try:
+            objects[key] = custom.get_cluster_custom_object(group, preferred[group], plural, name.format(app=app))
+        except ApiException as error:
+            if error.status != 404 or key in {'cloudsql', 'rds'}:
+                raise ValueError('Bases absentes ou inaccessibles' if key in {'cloudsql', 'rds'} else 'Lecture des sondes refusée') from None
+    return objects
 
 
 def execute(request):
@@ -91,12 +129,10 @@ def execute(request):
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
     if action == 'runtime-verify':
         import boto3
-        cloudrun = json.loads(command(['gcloud', 'run', 'services', 'describe', app + '-prod',
-            '--region=europe-west9', '--project=cnp-terraform-512313', '--format=json']))
-        primary_ready = any(value.get('type') == 'Ready' and value.get('status') == 'True'
-            for value in cloudrun.get('status', {}).get('conditions', []))
-        status = cloudrun.get('status', {})
-        primary_ready &= bool(status.get('latestReadyRevisionName')) and status.get('latestReadyRevisionName') == status.get('latestCreatedRevisionName')
+        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
+        # Prête, sans reconfiguration en cours, et la dernière révision créée est celle qui sert.
+        primary_ready = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and cloudrun.get('reconciling') is False
+        primary_ready &= bool(cloudrun.get('latestReadyRevision')) and cloudrun.get('latestReadyRevision') == cloudrun.get('latestCreatedRevision')
         client = boto3.client('ecs', region_name='eu-west-3')
         if boto3.client('sts', region_name='eu-west-3').get_caller_identity()['Account'] != '804210702561':
             raise ValueError('Compte AWS inattendu')
@@ -113,7 +149,7 @@ def execute(request):
         images_ready = not images
         if images and services:
             containers = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']['containerDefinitions']
-            primary_image = cloudrun.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [{}])[0].get('image')
+            primary_image = cloudrun.get('template', {}).get('containers', [{}])[0].get('image')
             images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
         return {'verified': primary_ready and standby_ready and target_ready and images_ready,
             'primary_ready': primary_ready, 'standby_ready': standby_ready, 'target_ready': target_ready,
@@ -139,18 +175,21 @@ def execute(request):
         dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == 'cnp-alb-1733646164.eu-west-3.elb.amazonaws.com'
         if document['profile'].get('mode') == 'stateless':
             return {'verified': public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready, 'dns_ready': dns_ready, 'observed_at': int(time.time()), 'state': 'STATELESS'}
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+        from prepare_failover_phase1 import regime
+        names = NAMES[regime(document['profile'])]
         def decode(item):
             return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
         records = {}
         for name in ['CONTROL', 'REPLICATION']:
-            records[name] = decode(client('dynamodb').get_item(TableName='cnp-failover-automation', Key={'app': {'S': app}, 'record': {'S': name}}, ConsistentRead=True).get('Item', {}))
+            records[name] = decode(client('dynamodb').get_item(TableName=names['state_table'], Key={'app': {'S': app}, 'record': {'S': name}}, ConsistentRead=True).get('Item', {}))
         control, replication = records['CONTROL'], records['REPLICATION']
         fresh = 0 <= int(time.time()) - replication.get('observed_at', 0) <= 120 and 0 <= int(time.time()) - replication.get('last_message_at', 0) <= 120
         import automation
         expected = next(value for value in request['packages']['worker-config.json']['applications'] if value['app'] == app)
         configured = control.get('config_hash') == automation.config_hash(expected) and control.get('config_hash') == replication.get('config_hash')
         triggers_ready = bool(request.get('task_definition'))
-        for rule in ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']:
+        for rule in names['rules']:
             events = client('events')
             try:
                 enabled = events.describe_rule(Name=rule)['State'] == 'ENABLED'
@@ -171,88 +210,6 @@ def execute(request):
         for page in client.get_paginator('describe_rules').paginate(ListenerArn=PLATFORM['https_listener']):
             used.update(int(rule['Priority']) for rule in page['Rules'] if rule['Priority'].isdigit())
         return {'priority': next(value for value in range(20000, 50001) if value not in used)}
-    if action in {'credentials-plan', 'automation-plan'}:
-        stack = action.split('-')[0]
-        source = ROOT / stack
-        target = work / stack
-        target.mkdir(exist_ok=True, mode=0o700)
-        for file in source.glob('*.tf'):
-            shutil.copyfile(file, target / file.name)
-        lock = source / '.terraform.lock.hcl'
-        if lock.exists(): shutil.copyfile(lock, target / lock.name)
-        if stack == 'credentials':
-            if document['secrets'].get('initialized'):
-                return {'safe': True, 'changes': [], 'already_initialized': True}
-            variables = {'prepare_credentials': True, 'app_name': app,
-                'gcp_runtime_service_account': document['profile']['gcp']['gcp_runtime']['service_account']}
-            key = f'aws/failover-credentials/{app}/terraform.tfstate'
-        else:
-            variables = request['variables']
-            # Un état partagé est relu avec TOUS ses varfiles approuvés.
-            # Ne jamais substituer une application au worker actif.
-            key = 'aws/failover-automation/terraform.tfstate'
-        command(['terraform', 'init', '-input=false', '-reconfigure', '-backend-config=key=' + key], target)
-        if stack == 'automation':
-            outputs = json.loads(command(['terraform', 'output', '-json'], target))
-            value = lambda key, default: outputs.get(key, {}).get('value', default)
-            variables['worker_versions'] = value('worker_version_definitions', {})
-            variables['bootstrap_versions'] = value('bootstrap_version_definitions', {})
-            variables['additional_applications'] = value('additional_applications', [])
-            variables['active_worker_version'] = value('active_worker_version', '')
-            image = request['images']['bootstrap']
-            version = hashlib.sha256(image.encode()).hexdigest()
-            variables['bootstrap_versions'][version] = image
-            refs = document['credentials']['aws_secret_arns']
-            refs = refs.get('value', refs)
-            master = document['observations']['rds']['status']['atProvider']['masterUserSecret']
-            master = master[0] if isinstance(master, list) else master
-            variables['bootstrap_secret_arns'] = sorted(set(variables['bootstrap_secret_arns'] + list(refs.values()) + [master['secretArn']]))
-            if request['kind'] != 'bootstrap-plan':
-                incoming = request['packages']['worker-config.json']
-                retained = {value['app']: value for value in variables['applications'] + variables['additional_applications']}
-                retained.update({value['app']: value for value in incoming['applications']})
-                worker = {'applications': [retained[name] for name in sorted(retained)]}
-                legacy = {value['app'] for value in variables['applications']}
-                variables['additional_applications'] = [value for value in worker['applications'] if value['app'] not in legacy]
-                image = request['images']['worker']
-                config = json.dumps(worker, sort_keys=True, separators=(',', ':'))
-                version = hashlib.sha256((image + config).encode()).hexdigest()
-                variables['worker_versions'][version] = {'image': image, 'config': config}
-                if request['kind'] == 'activation-plan': variables['active_worker_version'] = version
-        (target / 'operation.tfvars.json').write_text(json.dumps(variables))
-        plan = target / 'reviewed.tfplan'
-        command(['terraform', 'plan', '-input=false', '-out=' + str(plan), '-var-file=operation.tfvars.json'], target)
-        rendered = json.loads(command(['terraform', 'show', '-json', str(plan)], target))
-        review = safe_apply.inspect(rendered, stack)
-        seal = {'stack': stack, 'plan': digest(plan), 'configuration': {file.name: digest(file) for file in target.glob('*.tf*') if file.name != 'terraform.tfstate'}}
-        if stack == 'automation':
-            seal['bootstrap_version'] = hashlib.sha256(request['images']['bootstrap'].encode()).hexdigest()
-            if request['kind'] != 'bootstrap-plan': seal['worker_version'] = version
-        (work / 'seal.json').write_text(json.dumps(seal))
-        if review['safe'] and not review['changes']:
-            outputs = json.loads(command(['terraform', 'output', '-json'], target))
-            if stack == 'credentials': review['credentials'] = outputs
-            else:
-                review['outputs'] = outputs
-                review['bootstrap_task_definition'] = outputs['bootstrap_version_task_arns']['value'][seal['bootstrap_version']]
-                if seal.get('worker_version'): review['worker_task_definition'] = outputs['worker_version_task_arns']['value'][seal['worker_version']]
-        return review
-    if action == 'apply':
-        seal = json.loads((work / 'seal.json').read_text())
-        target = work / seal['stack']
-        plan = target / 'reviewed.tfplan'
-        if digest(plan) != seal['plan'] or any(digest(target / name) != value for name, value in seal['configuration'].items()):
-            raise ValueError('Plan ou configuration modifiés depuis la revue')
-        review = safe_apply.inspect(json.loads(command(['terraform', 'show', '-json', str(plan)], target)), seal['stack'])
-        if not review['safe']: raise ValueError('Destruction, remplacement ou changement hors phase 1 interdit')
-        command(['terraform', 'apply', '-input=false', str(plan)], target)
-        result = {'applied': True, 'review': review}
-        if seal['stack'] == 'automation':
-            result['outputs'] = json.loads(command(['terraform', 'output', '-json'], target))
-            result['bootstrap_task_definition'] = result['outputs']['bootstrap_version_task_arns']['value'][seal['bootstrap_version']]
-            if seal.get('worker_version'): result['worker_task_definition'] = result['outputs']['worker_version_task_arns']['value'][seal['worker_version']]
-        if seal['stack'] == 'credentials': result['credentials'] = json.loads(command(['terraform', 'output', '-json'], target))
-        return result
     if action == 'initialize-secrets':
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import credentials_profile, platform_secrets_profile, regime
@@ -267,22 +224,13 @@ def execute(request):
         config = credentials_profile(document['profile'], document['credentials'])
         return {'secrets': initialize_secrets.initialize(config, boto3.client('secretsmanager', region_name='eu-west-3'))}
     if action == 'observe':
-        context = document['profile']['automation']['kube_context']
-        import initialize_secrets
-        # Le validateur partagé vérifie aussi le contexte GKE autorisé.
+        # Le validateur partagé vérifie les références de secrets (et le contexte GKE quand il est fourni).
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import credentials_profile
-        initialize_secrets.validate(credentials_profile(document['profile'], document['credentials']))
-        objects = {}
-        for key, resource, name in [('cloudsql', 'databaseinstances.sql.gcp.upbound.io', app + '-prod-gcp-db'),
-                ('rds', 'instances.rds.aws.upbound.io', app + '-prod-db'),
-                ('healthcheck', 'healthchecks.route53.aws.upbound.io', app + '-failover'),
-                ('routing_latch', 'healthchecks.route53.aws.upbound.io', app + '-failover-latch-http'),
-                ('primary_healthcheck', 'healthchecks.route53.aws.upbound.io', app + '-failover-primary-health')]:
-            result = subprocess.run(['kubectl', '--context', context, 'get', resource, name, '-o', 'json'], capture_output=True, text=True, timeout=30)
-            if result.returncode == 0: objects[key] = json.loads(result.stdout)
-            elif key in {'cloudsql', 'rds'}: raise ValueError('Bases absentes ou inaccessibles')
-        instance = json.loads(command(['gcloud', 'sql', 'instances', 'describe', app + '-prod-gcp-db', '--project=cnp-terraform-512313', '--format=json']))
+        credentials_profile(document['profile'], document['credentials'])
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        objects = observe_objects(app, apis, custom)
+        instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{app}-prod-gcp-db', request.get('_google'))
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert']}
     if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
         import boto3
@@ -296,7 +244,7 @@ def execute(request):
         config = packages['bootstrap-config.json'] if action in BOOTSTRAP_ACTIONS else packages['worker-config.json']
         family = request['task_definition']
         actual = ecs.describe_task_definition(taskDefinition=family)['taskDefinition']
-        if not re.fullmatch(r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?', actual['family']): raise ValueError('Tâche opérateur non autorisée')
+        if not re.fullmatch(TASK_FAMILY, actual['family']): raise ValueError('Tâche opérateur non autorisée')
         bootstrap = action in BOOTSTRAP_ACTIONS
         introspected = bootstrap and postgres_contract.is_introspected(config['profile'])
         if action in {'bootstrap-roles', 'schema-check'} and not introspected:
