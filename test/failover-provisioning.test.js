@@ -1,5 +1,5 @@
 'use strict';
-jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn() }));
+jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn() }));
 jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start: jest.fn(), retry: jest.fn(), recoverInterrupted: jest.fn() }));
 const db = require('../src/models/db');
 const profiles = require('../src/services/environment-failover');
@@ -26,6 +26,9 @@ beforeEach(() => {
     const row = { id: `candidate-${++serial}`, app, stage, state: 'pending' };
     candidates.push(row); return row;
   });
+  delete process.env.CNP_FAILOVER_STEP_BY_STEP;
+  // Approbation automatique : publie le candidat (les contrôles réels sont testés dans failover-environment.test.js).
+  profiles.autoApprove.mockImplementation(async id => { candidates.find(value => value.id === id).state = 'published'; return { published: true }; });
   operations.list.mockImplementation(app => tasks.filter(value => value.app === app).slice().reverse());
   operations.start.mockImplementation((app, action) => {
     const row = { id: `operation-${++serial}`, app, action, state: 'running', created_at: new Date().toISOString() };
@@ -52,7 +55,8 @@ test('un profil historique (plans Terraform par app) ne se met plus en service p
   expect(() => workflow.start('weather-api', manager)).toThrow('régime plateforme');
   expect(operations.start).not.toHaveBeenCalled();
 });
-test('les publications attendent leur revue, puis le parcours reprend sans doublon', async () => {
+test('pas à pas (G5) : chaque publication attend la revue manager, puis le parcours reprend sans doublon', async () => {
+  process.env.CNP_FAILOVER_STEP_BY_STEP = 'true';
   workflow.start('weather-api', manager);
   await tick();
   expect(tasks[0].action).toBe('initialize-secrets');
@@ -66,6 +70,38 @@ test('les publications attendent leur revue, puis le parcours reprend sans doubl
   candidates[0].state = 'published';
   await tick(); await tick();
   expect(tasks.at(-1).action).toBe('observe');
+  expect(profiles.autoApprove).not.toHaveBeenCalled();
+});
+test('par défaut, une publication contrôlée s’approuve seule au nom du manager qui a lancé la mise en service', async () => {
+  workflow.start('weather-api', manager);
+  db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('databases'), 'weather-api');
+  const row = await tick();
+  expect(row.state).toBe('running');
+  expect(row.step).toBe(at('databases') + 1);
+  expect(profiles.autoApprove).toHaveBeenCalledWith(candidates[0].id, expect.objectContaining({ id: manager.id, role: 'manager' }));
+  expect(candidates[0].state).toBe('published');
+});
+test('un contrôle automatique en échec bloque avec sa raison, sans rien publier ni avancer', async () => {
+  profiles.autoApprove.mockRejectedValue(new Error('Publication databases refusée par les contrôles automatiques : x.yaml sans deletionPolicy Orphan.'));
+  workflow.start('weather-api', manager);
+  db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('databases'), 'weather-api');
+  const blocked = await tick();
+  expect(blocked.state).toBe('blocked');
+  expect(blocked.message).toContain('deletionPolicy Orphan');
+  expect(blocked.step).toBe(at('databases'));
+  expect(candidates[0].state).toBe('pending');
+  workflow.resume('weather-api', manager);
+  await tick();
+  expect(profiles.prepare).toHaveBeenCalledTimes(1);                 // la même proposition est recontrôlée, pas une seconde
+});
+test('un verrou de publication occupé se réessaie au tour suivant sans bloquer', async () => {
+  profiles.autoApprove.mockRejectedValueOnce(Object.assign(new Error('Publication déjà en cours.'), { retryable: true }));
+  workflow.start('weather-api', manager);
+  db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('databases'), 'weather-api');
+  expect((await tick()).state).toBe('running');
+  const next = await tick();
+  expect(next.step).toBe(at('databases') + 1);
+  expect(profiles.prepare).toHaveBeenCalledTimes(1);
 });
 test('une initialisation SQL interrompue reprend le même identifiant et son journal', async () => {
   workflow.start('weather-api', manager);
@@ -98,13 +134,15 @@ test('une revue longue renouvelle la preuve SQL avant activation, au bon endroit
   expect((await tick()).step).toBe(at('verify', at('worker-verify')));
   await tick(); expect(tasks.at(-1).action).toBe('verify');
 });
-test('le parcours complet respecte les revues, sans aucun plan, et ne se termine qu’après la preuve de santé', async () => {
+test('le parcours complet, sans aucun plan ni revue manuelle, ne se termine qu’après la preuve de santé', async () => {
   workflow.start('weather-api', manager);
+  const states = new Set();
   for (let index = 0; index < 90 && workflow.get('weather-api').state !== 'completed'; index++) {
-    await tick();
+    states.add((await tick()).state);
     if (tasks.at(-1)?.state === 'running') succeed();
-    if (candidates.at(-1)?.state === 'pending') candidates.at(-1).state = 'published';
   }
+  expect(states.has('review')).toBe(false);                          // la seule décision humaine : la mise en service
+  expect(profiles.autoApprove).toHaveBeenCalledTimes(4);
   expect(workflow.get('weather-api').state).toBe('completed');
   expect(tasks.map(value => value.action)).toEqual(['initialize-secrets', 'observe', 'bootstrap-roles', 'runtime-verify', 'schema-check',
     'bootstrap', 'verify', 'observe', 'worker-configure', 'worker-verify', 'verify', 'worker-resume', 'health']);

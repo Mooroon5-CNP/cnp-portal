@@ -141,6 +141,44 @@ test('un timeout après merge se reprend depuis la trace manager sans second mer
   expect((await service.approve(row.id, head, manager)).published).toBe(true);
   expect(api.request.mock.calls.some(([route]) => route.startsWith('PUT'))).toBe(false);
 });
+describe('approbation automatique', () => {
+  const merged = () => api.request.mock.calls.some(([route]) => route.startsWith('PUT'));
+  const tamper = (id, change) => {
+    const row = db.prepare('SELECT files FROM failover_candidates WHERE id=?').get(id);
+    const files = JSON.parse(row.files);
+    change(files);
+    db.prepare('UPDATE failover_candidates SET files=? WHERE id=?').run(JSON.stringify(files), id);
+  };
+  test('une publication réelle passe les contrôles et se merge par le bot', async () => {
+    const row = await service.prepare('databases', manager);
+    expect(service.contentProblems(db.prepare('SELECT * FROM failover_candidates WHERE id=?').get(row.id))).toEqual([]);
+    expect((await service.autoApprove(row.id, manager)).published).toBe(true);
+    expect(service.rows()[0].reviewed_by).toBe(manager.id);
+  });
+  test('chaque écart de contenu refuse sans merge', async () => {
+    const cases = {
+      'hors du dossier': files => { files['apps/other-app/crossplane/prod/x.yaml'] = '{}'; },
+      'sans deletionPolicy Orphan': files => {
+        const name = Object.keys(files).find(key => key.endsWith('cloudsql-instance.yaml'));
+        const value = JSON.parse(files[name]); delete value.spec.deletionPolicy; files[name] = JSON.stringify(value);
+      },
+      'routage modifié hors de l': files => { files['platform/application-routing/urlmap.yaml'] = '{}'; },
+      'référencé mais absent': files => {
+        const name = `${dir}/kustomization.yaml`;
+        const value = JSON.parse(files[name]); value.resources.push('missing.yaml'); files[name] = JSON.stringify(value);
+      },
+    };
+    for (const [expected, change] of Object.entries(cases)) {
+      db.exec('DROP TABLE IF EXISTS failover_candidates');
+      api.request.mockClear();
+      const row = await service.prepare('databases', manager);
+      tamper(row.id, change);
+      await expect(service.autoApprove(row.id, manager)).rejects.toThrow(expected);
+      expect(merged()).toBe(false);
+      expect(service.rows()[0].state).toBe('pending');
+    }
+  });
+});
 test('rejeter une proposition obsolète permet une nouvelle préparation sans effacer de ressource', async () => {
   const row = await service.prepare('databases', manager);
   expect((await service.reject(row.id, manager)).rejected).toBe(true);

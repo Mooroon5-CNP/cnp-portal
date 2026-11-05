@@ -190,10 +190,12 @@ function rows(app) {
   return db.prepare(`SELECT id,app_name,stage,base_sha,head_sha,pr_number,pr_url,state,requested_by,reviewed_by,created_at FROM failover_candidates ${app ? 'WHERE app_name=?' : ''} ORDER BY created_at`).all(...(app ? [app] : []));
 }
 let busy = false;
+// Verrou de publication : il se libère seul, l'appelant automatique réessaie au tour suivant au lieu de se bloquer.
+const busyError = text => Object.assign(new Error(text), { retryable: true });
 async function prepare(stage, user, requestedApp) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
   if (!PLATFORM_STAGES.includes(stage) && stage !== 'protection') throw new Error('Étape phase 1 invalide.');
-  if (busy) throw new Error('Préparation déjà en cours.');
+  if (busy) throw busyError('Préparation déjà en cours.');
   busy = true;
   try {
     schema();
@@ -248,7 +250,7 @@ async function prepare(stage, user, requestedApp) {
 }
 async function approve(id, expectedHead, user) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
-  if (busy) throw new Error('Publication déjà en cours.');
+  if (busy) throw busyError('Publication déjà en cours.');
   busy = true;
   try {
     schema();
@@ -288,9 +290,50 @@ async function approve(id, expectedHead, user) {
     return { id, published: true, sha: result.sha, prUrl: row.pr_url };
   } finally { busy = false; }
 }
+// Ressources qui suivent la vie de l'application (render.py) : toutes les autres doivent survivre au retrait d'un manifest.
+const WORKER_KINDS = new Set(['MetricAlarm', 'TableItem']);
+const ROUTING = 'platform/application-routing/urlmap.yaml';
+// Contrôles du contenu d'une publication avant son approbation automatique. Le contenu est celui enregistré à la préparation,
+// identique à la PR (approve vérifie que la PR pointe toujours sur ce commit).
+function contentProblems(row) {
+  const files = JSON.parse(row.files);
+  const prefix = `apps/${row.app_name}/crossplane/prod/`;
+  const problems = [];
+  const parsed = {};
+  for (const [name, text] of Object.entries(files)) {
+    if (name === ROUTING) {
+      if (row.stage !== 'runtime') problems.push(`${name} : routage modifié hors de l'étape runtime`);
+      continue;
+    }
+    if (!name.startsWith(prefix) || name.slice(prefix.length).includes('/')) { problems.push(`${name} : hors du dossier de l'application`); continue; }
+    try { parsed[name.slice(prefix.length)] = JSON.parse(text); } catch (_) { problems.push(`${name} : contenu illisible`); }
+  }
+  const kustomization = parsed['kustomization.yaml'];
+  if (kustomization?.kind !== 'Kustomization' || !Array.isArray(kustomization.resources)) problems.push('kustomization.yaml absent ou invalide');
+  else for (const name of kustomization.resources) if (!(name in parsed)) problems.push(`${name} : référencé mais absent`);
+  for (const [name, value] of Object.entries(parsed)) {
+    for (const item of value.kind === 'List' ? value.items || [] : [value]) {
+      if (item?.spec?.forProvider === undefined || WORKER_KINDS.has(item.kind)) continue;
+      if (item.spec.deletionPolicy !== 'Orphan') problems.push(`${name} : ${item.kind} ${item.metadata?.name} sans deletionPolicy Orphan`);
+    }
+  }
+  return problems;
+}
+// Approbation automatique (mode par défaut) : mêmes vérifications qu'une approbation manuelle, plus les contrôles de contenu.
+// Un contrôle en échec refuse : rien n'est publié, la proposition reste en attente pour que le manager la rejette.
+async function autoApprove(id, user) {
+  schema();
+  const row = db.prepare('SELECT * FROM failover_candidates WHERE id=?').get(id);
+  if (!row) throw new Error('Candidat absent.');
+  const problems = contentProblems(row);
+  if (problems.length) {
+    throw new Error(`Publication ${row.stage} refusée par les contrôles automatiques : ${problems.slice(0, 5).join(' ; ')}. Rejeter la proposition puis reprendre.`);
+  }
+  return approve(id, row.head_sha, user);
+}
 async function reject(id, user) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
-  if (busy) throw new Error('Publication déjà en cours.');
+  if (busy) throw busyError('Publication déjà en cours.');
   busy = true;
   try {
     schema();
@@ -418,5 +461,5 @@ function readiness(dep) {
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker requise avant de déclarer le failover prêt.',
     failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}`, cloudRunUrl: null };
 }
-module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, reject, manifests, readiness,
+module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
   adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus, stagesFor };

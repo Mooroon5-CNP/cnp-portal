@@ -10,7 +10,7 @@
 <section><h2>Préparation automatique — <%= provisioning.state %></h2><p><%= provisioning.message || 'La plateforme prépare les prochaines étapes.' %></p>
 <% if (provisioning.state === 'blocked') { %><form action="/failover/provisioning/resume" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Reprendre après correction</button></form><% } %>
 <% if (provisioning.reference && provisioning.reference.startsWith('candidate:')) { %><a href="/failover/<%= provisioning.reference.slice(10) %>">Examiner la proposition à valider</a><% } %>
-<p>Les étapes techniques s’enchaînent automatiquement. Les publications GitOps attendent votre validation. Après activation vérifiée, la bascule sur panne est automatique.</p></section>
+<p>Les étapes techniques s’enchaînent automatiquement. Les publications GitOps sont contrôlées puis publiées automatiquement ; un contrôle en échec arrête la mise en service avec sa raison. Après activation vérifiée, la bascule sur panne est automatique.</p></section>
 <% } else if (selectedApp && typeof profileConfigured !== 'undefined' && profileConfigured) { %>
 <form action="/failover/provisioning/start" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Démarrer la préparation automatique</button></form>
 <% } %>

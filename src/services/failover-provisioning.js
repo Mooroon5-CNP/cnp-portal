@@ -31,6 +31,10 @@ const PLATFORM_STEPS = [
 ];
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
 const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
+// Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
+// TEMPORAIRE (G5, premier passage cloud) : CNP_FAILOVER_STEP_BY_STEP=true remet la revue manager de chaque publication.
+// À retirer après la recette de panne (G7).
+const stepByStep = () => ['1', 'true'].includes(String(process.env.CNP_FAILOVER_STEP_BY_STEP || '').toLowerCase());
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_provisioning (
     app TEXT PRIMARY KEY, requested_by TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 0,
@@ -109,12 +113,12 @@ async function advance(app) {
       const candidates = profiles.rows(app).filter(value => value.stage === action);
       let candidate = row.reference ? candidates.find(value => value.id === row.reference.slice(10))
         : candidates.find(value => ['pending', 'approving', 'published'].includes(value.state));
-      if (!candidate) {
-        const created = await profiles.prepare(action, actor, app);
-        save('review', `Validation manager requise : ${action}.`, `candidate:${created.id}`);
-      } else if (candidate.state === 'published') save('running', `${action} publié.`, null, true);
-      else if (['pending', 'approving'].includes(candidate.state)) save('review', `Validation manager requise : ${action}.`, `candidate:${candidate.id}`);
-      else throw new Error(`Proposition ${action} rejetée. Reprendre pour préparer un nouveau candidat.`);
+      if (!candidate) candidate = await profiles.prepare(action, actor, app);
+      if (candidate.state === 'published') { save('running', `${action} publié.`, null, true); return; }
+      if (!['pending', 'approving'].includes(candidate.state)) throw new Error(`Proposition ${action} rejetée. Reprendre pour préparer un nouveau candidat.`);
+      if (stepByStep()) { save('review', `Validation manager requise : ${action}.`, `candidate:${candidate.id}`); return; }
+      await profiles.autoApprove(candidate.id, actor);
+      save('running', `${action} contrôlé et publié automatiquement.`, null, true);
       return;
     }
     if (action === 'worker-resume') {
@@ -156,6 +160,8 @@ async function advance(app) {
     throw new Error(operation.result?.error || `Étape ${action} non validée ; reprendre après correction.`);
   } catch (error) {
     const row = get(app);
+    // Verrou de publication occupé : il se libère seul, on réessaie au tour suivant sans bloquer.
+    if (error.retryable) { save(row.state, error.message, row.reference); return; }
     save('blocked', error.message, row.reference);
   } finally {
     db.prepare('UPDATE failover_provisioning SET lease_owner=NULL,lease_until=0 WHERE app=? AND lease_owner=?').run(app, owner);

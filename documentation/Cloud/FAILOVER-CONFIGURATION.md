@@ -25,6 +25,14 @@ Pour toute autre disposition (et pour un portail déployé), imposer les chemins
 | `CNP_FAILOVER_SETTINGS` | Paramètres partagés historiques du pilote (profil, varfiles du worker) | `../phase1-deployment-20261029/portal-settings.json` |
 | `CNP_FAILOVER_PYTHON` | Python des générateurs (PyYAML requis) | `python3` |
 | `CNP_FAILOVER_OPERATOR_PYTHON` | Python de l'opérateur (`requirements.platform.txt` du moteur) | `CNP_FAILOVER_PYTHON`, sinon `python3` |
+| `CNP_FAILOVER_STEP_BY_STEP` | **Temporaire (premier passage cloud, G5).** `true` : chaque publication GitOps attend la revue manager. À retirer après la recette de panne | absent : approbation automatique |
+
+**Approbation des publications.** Par défaut, la mise en service lancée par un manager est la seule décision humaine : chaque
+publication (`databases`, `runtime`, `dns`, `worker`) est contrôlée puis approuvée automatiquement en son nom. Contrôles : ceux
+d'une approbation manuelle (profil et images inchangés, PR ouverte sur le commit préparé, `main` inchangé, merge par le bot), plus
+le contenu (fichiers dans le dossier de l'app, routage modifié seulement par `runtime`, ressources référencées présentes,
+`deletionPolicy: Orphan` partout sauf l'alarme et la configuration du worker). Un contrôle en échec bloque la mise en service avec sa
+raison ; rien n'est publié, la proposition reste à rejeter avant reprise.
 
 `CNP_FAILOVER_SETTINGS` ne sert plus qu'au pilote (vérifications de son état). Le portail ne lance **plus aucun plan
 Terraform** : l'infrastructure partagée du failover (tables, worker, déclencheurs, tâches ECS) est créée une fois par la pile
