@@ -154,7 +154,7 @@ async function advance(app) {
     }
     const reference = `operation:${operation.id}`;
     if (operation.state === 'running') { save('running', `En cours : ${action}.`, reference); return; }
-    const requiresProof = ['verify', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
+    const requiresProof = ['observe', 'verify', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
     // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
     if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {

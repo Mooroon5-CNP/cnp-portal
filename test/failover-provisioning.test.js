@@ -122,6 +122,16 @@ test('une preuve de réplication négative bloque avant toute activation', async
   expect((await tick()).state).toBe('blocked');
   expect(tasks.map(value => value.action)).toEqual(['verify']);
 });
+test('une observation qui ne prouve pas des bases prêtes fait attendre, sans passer à la suite', async () => {
+  workflow.start('weather-api', manager);
+  db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('observe'), 'weather-api');
+  await tick(); Object.assign(tasks.at(-1), { state: 'completed', result: { verified: false, message: 'En attente : rds pas encore prêt(s).' } });
+  const waiting = await tick();
+  expect(waiting.state).toBe('waiting');
+  expect(waiting.step).toBe(at('observe'));
+  expect(waiting.message).toContain('rds');
+  expect(tasks.map(value => value.action)).toEqual(['observe', 'observe']);
+});
 test('les observations attendent la convergence, sans réinitialiser les bases', async () => {
   workflow.start('weather-api', manager);
   db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('runtime-verify'), 'weather-api');

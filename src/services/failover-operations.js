@@ -74,6 +74,8 @@ function start(app, action, user) {
   }
   const id = randomUUID();
   const request = { action, app, document, work: path.join(workRoot, id) };
+  // La seconde observation, après les DNS, doit aussi trouver les sondes Route 53 prêtes.
+  if (action === 'observe') request.expect_probes = service.rows(app).some(row => row.stage === 'dns' && row.state === 'published');
   if (action === 'runtime-verify') {
     service.rows(app);
     const runtime = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);

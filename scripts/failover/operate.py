@@ -99,6 +99,11 @@ def kubernetes_clients(context=None):
     return client.ApisApi(), client.CustomObjectsApi()
 
 
+def ready(value):
+    conditions = {c.get('type'): c.get('status') for c in (value or {}).get('status', {}).get('conditions', [])}
+    return conditions.get('Ready') == 'True' and conditions.get('Synced') == 'True'
+
+
 def observe_objects(app, apis, custom):
     """Ressources Crossplane de l'app. Une base absente arrête ; une sonde absente (404) est normale avant les DNS.
     Toute autre erreur (droits, API) arrête aussi : « pas trouvé » n'est pas « n'existe pas »."""
@@ -231,7 +236,12 @@ def execute(request):
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
         objects = observe_objects(app, apis, custom)
         instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{app}-prod-gcp-db', request.get('_google'))
-        return {'observations': objects, 'source_ca': instance['serverCaCert']['cert']}
+        # Lire n'est pas prouver : les étapes suivantes exigent des bases prêtes (et, après les DNS, des sondes prêtes).
+        # Une observation non prête fait attendre le parcours au lieu de le laisser passer.
+        wanted = ['cloudsql', 'rds'] + (['healthcheck', 'routing_latch', 'primary_healthcheck'] if request.get('expect_probes') else [])
+        missing = [key for key in wanted if not ready(objects.get(key))]
+        return {'observations': objects, 'source_ca': instance['serverCaCert']['cert'], 'verified': not missing,
+                'message': None if not missing else 'En attente : ' + ', '.join(missing) + ' pas encore prêt(s).'}
     if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
         import boto3
         from botocore.config import Config

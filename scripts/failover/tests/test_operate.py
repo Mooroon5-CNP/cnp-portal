@@ -353,6 +353,35 @@ class ObserveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'sondes refusée'):
             operator.observe_objects('weather-api', self.apis, self.custom)
 
+    def observe(self, objects, expect_probes=False):
+        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        import test_worker_phase1 as fixtures
+        profile = fixtures.platform_profile()
+        app = profile['gcp']['app_name']
+        self.objects = {(plural, name.format(app=app)): value for (plural, name), value in objects.items()}
+        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
+                               {'serverCaCert': {'cert': 'CA'}}})
+        parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+        parent.mkdir(exist_ok=True, parents=True)
+        with tempfile.TemporaryDirectory(dir=parent) as work:
+            return operator.execute({'app': app, 'work': work, 'action': 'observe', '_google': session, '_kubernetes': (self.apis, self.custom),
+                'expect_probes': expect_probes, 'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
+
+    def test_an_observation_proves_nothing_until_both_databases_are_ready(self):
+        ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
+        creating = {'status': {'conditions': [{'type': 'Ready', 'status': 'False'}, {'type': 'Synced', 'status': 'True'}]}}
+        result = self.observe({('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): creating})
+        self.assertIs(result['verified'], False)
+        self.assertIn('rds', result['message'])
+        self.assertIs(self.observe({('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok})['verified'], True)
+
+    def test_after_dns_the_probes_must_be_ready_too(self):
+        ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
+        dbs = {('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok}
+        self.assertIs(self.observe(dbs, expect_probes=True)['verified'], False)
+        probes = {('healthchecks', '{app}-failover'): ok, ('healthchecks', '{app}-failover-latch-http'): ok, ('healthchecks', '{app}-failover-primary-health'): ok}
+        self.assertIs(self.observe({**dbs, **probes}, expect_probes=True)['verified'], True)
+
     def test_the_action_reads_the_source_ca_from_the_cloud_sql_api(self):
         sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
         import test_worker_phase1 as fixtures
