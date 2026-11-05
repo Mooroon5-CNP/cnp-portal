@@ -23,6 +23,11 @@ async function getInstallationOctokit() {
   return _octokit;
 }
 
+// Tests only: Jest cannot run the dynamic import() above, so it injects a fake octokit.
+function setOctokitForTesting(instance) {
+  _octokit = instance;
+}
+
 async function setRepoSecret(owner, repo, secretName, secretValue) {
   const octokit = await getInstallationOctokit();
 
@@ -217,6 +222,82 @@ async function checkActionsEnabled(owner, repo) {
   }
 }
 
+// Get a repository, or null when it does not exist (or is invisible to the App).
+async function getRepoOrNull(owner, repo) {
+  const octokit = await getInstallationOctokit();
+  try {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
+    return data;
+  } catch (err) {
+    if (err.status === 404) return null;
+    if (err.status === 401) _octokit = null;
+    throw new Error(`Failed to look up ${owner}/${repo}: ${err.message}`);
+  }
+}
+
+// Create a repository in an organisation, with an initial commit on the default
+// branch (needed so the Git Data API can push on top of it).
+async function createOrgRepo(org, name, { description = '', isPrivate = false } = {}) {
+  const octokit = await getInstallationOctokit();
+  try {
+    const { data } = await octokit.request('POST /orgs/{org}/repos', {
+      org, name, description, private: isPrivate, auto_init: true,
+    });
+    return data;
+  } catch (err) {
+    if (err.status === 401) _octokit = null;
+    if (err.status === 422) throw new Error(`Repository ${org}/${name} already exists or its name is rejected by GitHub.`);
+    if (err.status === 403 || err.status === 404) {
+      throw new Error(`GitHub App is not allowed to create repositories in ${org} (Administration: write on the organisation is required).`);
+    }
+    throw new Error(`Failed to create repository ${org}/${name}: ${err.message}`);
+  }
+}
+
+// List the blobs of a tree (recursive) at a ref, as [{ path, sha }].
+async function listBlobs(owner, repo, ref) {
+  const octokit = await getInstallationOctokit();
+  const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+    owner, repo, tree_sha: ref, recursive: '1',
+  });
+  if (data.truncated) throw new Error(`Tree of ${owner}/${repo}@${ref} is too large to be read in one call.`);
+  return data.tree.filter(entry => entry.type === 'blob').map(({ path, sha }) => ({ path, sha }));
+}
+
+// Read a blob as a Buffer.
+async function getBlob(owner, repo, sha) {
+  const octokit = await getInstallationOctokit();
+  const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', { owner, repo, file_sha: sha });
+  return Buffer.from(data.content, data.encoding === 'base64' ? 'base64' : 'utf8');
+}
+
+// Push several files as ONE commit on top of a branch (Git Data API).
+// files: [{ path, content: Buffer }]. Returns the new commit SHA.
+async function commitFiles(owner, repo, branch, files, message) {
+  const octokit = await getInstallationOctokit();
+  const parentSha = await getRef(owner, repo, branch);
+  const { data: parent } = await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
+    owner, repo, commit_sha: parentSha,
+  });
+  const tree = [];
+  for (const file of files) {
+    const { data: blob } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+      owner, repo, content: file.content.toString('base64'), encoding: 'base64',
+    });
+    tree.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
+  }
+  const { data: newTree } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
+    owner, repo, base_tree: parent.tree.sha, tree,
+  });
+  const { data: commit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
+    owner, repo, message, tree: newTree.sha, parents: [parentSha],
+  });
+  await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+    owner, repo, ref: `heads/${branch}`, sha: commit.sha, force: false,
+  });
+  return commit.sha;
+}
+
 async function checkConnectivity() {
   const octokit = await getInstallationOctokit();
   await octokit.request('GET /app');
@@ -224,6 +305,7 @@ async function checkConnectivity() {
 
 module.exports = {
   getInstallationOctokit,
+  setOctokitForTesting,
   setRepoSecret,
   createOrUpdateFile,
   getFileSha,
@@ -236,5 +318,10 @@ module.exports = {
   setRepoVariable,
   deleteSecret,
   checkActionsEnabled,
+  getRepoOrNull,
+  createOrgRepo,
+  listBlobs,
+  getBlob,
+  commitFiles,
   checkConnectivity,
 };

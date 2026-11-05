@@ -7,6 +7,7 @@ const { requirePermission, can } = require('../middleware/rbac');
 const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
+const repoScaffolder = require('../services/repo-scaffolder');
 const environmentService = require('../services/environment-deployment');
 const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
@@ -243,6 +244,7 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         allTeams,
         userTeams,
         applicationsBaseDomain: applicationAddress.baseDomain(),
+        repoLanguages: repoScaffolder.LANGUAGES,
         filterTeam,
         user: req.user,
         can: (p) => can(req.user, p),
@@ -254,13 +256,18 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // ---------------------------------------------------------------------------
 
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
+    const { appName, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev', source, repoLanguage } = req.body;
+    // « new » : le portail crée le dépôt (squelette) ; tout autre valeur = dépôt existant (comportement historique).
+    const createsRepository = source === 'new';
+    let githubRepoUrl = req.body.githubRepoUrl;
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
     const hasPersistentStorage = targetCluster !== 'azure'
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
-    if (!appName || !githubRepoUrl) {
-        req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
+    if (!appName || (!createsRepository && !githubRepoUrl)) {
+        req.flash('error', createsRepository
+            ? "Veuillez renseigner le nom de l'application."
+            : "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
         return res.redirect('/deployments');
     }
 
@@ -280,13 +287,12 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
-    const parsed = githubService.parseRepoUrl(githubRepoUrl);
-    if (!parsed) {
+    if (!createsRepository && !githubService.parseRepoUrl(githubRepoUrl)) {
         req.flash('error', 'URL de dépôt GitHub invalide (exemple : https://github.com/org/repo).');
         return res.redirect('/deployments');
     }
 
-    if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
+    if (targetCluster &&!SUPPORTED_CLOUDS.includes(targetCluster)) {
         req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
         return res.redirect('/deployments');
     }
@@ -299,6 +305,20 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
 
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
+
+    // Nouveau dépôt : créé (squelette + branches main/prod) avant l'enregistrement du déploiement.
+    // Il n'existe donc aucune ligne en base si la création échoue ; l'onboarding qui suit est celui des dépôts existants.
+    if (createsRepository) {
+        try {
+            const created = await repoScaffolder.scaffoldRepository({ name: appName, language: repoLanguage, port });
+            githubRepoUrl = created.url;
+            console.log(`[deployments] repository ${created.owner}/${created.repo} created from skeleton ${repoLanguage} by user ${req.user.id}`);
+        } catch (err) {
+            req.flash('error', err instanceof repoScaffolder.ScaffoldError ? err.message : 'Impossible de créer le dépôt GitHub. Réessayez ou contactez l\'administrateur.');
+            if (!(err instanceof repoScaffolder.ScaffoldError)) console.error(`[deployments] repository creation failed for ${appName}: ${err.message}`);
+            return res.redirect('/deployments');
+        }
+    }
 
     // Create the deployment record immediately with status 'configuring'.
     let dep;
