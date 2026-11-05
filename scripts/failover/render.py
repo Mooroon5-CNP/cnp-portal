@@ -133,6 +133,10 @@ def render(request):
 if __name__ == '__main__':
     try:
         print(json.dumps(render(json.load(sys.stdin))))
+    except ValueError as exc:
+        # Les refus des générateurs sont des phrases fixes, sans secret : les afficher dit au manager quoi attendre ou corriger.
+        print('Rendu refusé : ' + str(exc), file=sys.stderr)
+        raise SystemExit(1)
     except Exception as exc:
         print('Rendu phase 1 refusé : ' + type(exc).__name__, file=sys.stderr)
         raise SystemExit(1)

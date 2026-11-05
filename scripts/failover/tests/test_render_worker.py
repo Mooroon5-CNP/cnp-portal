@@ -51,6 +51,13 @@ class WorkerStageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render.render(request(pilot_profile(), outputs()))
 
+    def test_a_refusal_shows_the_generator_reason_and_never_a_path(self):
+        import io, subprocess
+        result = subprocess.run([sys.executable, str(Path(render.__file__))], input=json.dumps(request(pilot_profile(), outputs())),
+                                capture_output=True, text=True, env={**os.environ, 'CNP_FAILOVER_CONFIG_REPO': str(CONFIG_REPO)})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), 'Rendu refusé : Étape réservée au régime plateforme.')
+
     def test_an_application_without_database_cannot_produce_it(self):
         with self.assertRaises(ValueError):
             render.render(request({'mode': 'stateless', 'gcp': {'app_name': APP}}, {}))

@@ -180,10 +180,16 @@ async function baseline(api, repo, ref, app) {
 }
 function render(request) {
   const python = process.env.CNP_FAILOVER_PYTHON || 'python3';
-  return JSON.parse(execFileSync(python, [path.join(sourceRoot, 'scripts/failover/render.py')], {
-    input: JSON.stringify(request), encoding: 'utf8', timeout: 30000,
-    maxBuffer: 4 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
-  }));
+  try {
+    return JSON.parse(execFileSync(python, [path.join(sourceRoot, 'scripts/failover/render.py')], {
+      input: JSON.stringify(request), encoding: 'utf8', timeout: 30000,
+      maxBuffer: 4 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
+    }));
+  } catch (error) {
+    // Seule la dernière ligne d'erreur du générateur, jamais la commande ni ses chemins.
+    const reason = String(error.stderr || '').trim().split('\n').pop();
+    throw new Error(reason || 'Rendu refusé.');
+  }
 }
 function rows(app) {
   schema();
