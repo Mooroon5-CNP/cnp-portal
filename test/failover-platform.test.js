@@ -135,6 +135,11 @@ describe('régime plateforme du worker', () => {
     expect(document.profile.aws.master_password_secret).toBe(document.profile.gcp.credentials_secret_name);
     expect(service.stagesFor(document)).toEqual(['databases', 'runtime', 'dns', 'worker']);
   });
+  test('en régime plateforme, aucun plan Terraform de secrets : les conteneurs naissent à l’initialisation', async () => {
+    process.env.CNP_FAILOVER_PLATFORM = write('regime-plan.json', regime());
+    await operations.createProfile('weather-api', 'postgres', contract, manager);
+    expect(() => operations.start('weather-api', 'credentials-plan', manager)).toThrow('sans Terraform');
+  });
   test('une application sans état n’a jamais d’étape worker', () => {
     expect(service.stagesFor({ profile: { mode: 'stateless' } })).toEqual(['runtime', 'dns']);
     expect(service.stagesFor({ profile: { mode: 'stateless', automation: { regime: 'platform' } } })).toEqual(['runtime', 'dns']);

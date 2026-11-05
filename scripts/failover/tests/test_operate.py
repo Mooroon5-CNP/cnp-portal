@@ -39,6 +39,21 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual(result['credentials'], outputs)
         self.assertNotIn('applied', result)
 
+    def test_platform_secrets_are_created_by_the_api_without_terraform_or_any_cli(self):
+        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        import test_worker_phase1 as fixtures
+        profile = fixtures.platform_profile()
+        app = profile['gcp']['app_name']
+        expected = {'secrets': {'app': app, 'initialized': True}, 'credentials': {'aws_secret_arns': {'value': {}}}}
+        request = {'app': app, 'work': self.directory.name, 'action': 'initialize-secrets',
+                   'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}}
+        with patch.object(operator, 'command', side_effect=AssertionError('CLI appelée')), \
+                patch('initialize_secrets.initialize', side_effect=AssertionError('chemin du pilote')), \
+                patch('platform_secrets.execute', return_value=expected) as run:
+            self.assertEqual(operator.execute(request), expected)
+        self.assertEqual(run.call_args.args[0], {'app': app, 'kubernetes_secret': profile['gcp']['credentials_secret_name'],
+                                                 'gcp_runtime_service_account': profile['gcp']['gcp_runtime']['service_account']})
+
     def check_worker(self, paused, config_hash):
         app = {'app': 'weather-api'}
         control = {'state': 'DISABLED', 'paused': paused, 'config_hash': config_hash}

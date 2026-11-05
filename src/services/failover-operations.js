@@ -51,6 +51,7 @@ function start(app, action, user) {
   const legacySettings = service.settings();
   const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
   if (existingPilot && ['bootstrap', 'bootstrap-roles', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
+  if (action === 'credentials-plan' && document.profile.automation?.regime === 'platform') throw new Error('Régime plateforme : les conteneurs de secrets sont créés par l’initialisation des secrets, sans Terraform.');
   if (['bootstrap', 'bootstrap-roles'].includes(action) && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
   if (['bootstrap-roles', 'schema-check'].includes(action) && !isIntrospected(document)) throw new Error('Étape réservée aux profils dont le schéma est lu dans la base.');
   // Le schéma se lit dans la base de l'application : elle doit tourner (et avoir créé ses tables) avant qu'on le copie.

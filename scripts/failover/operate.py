@@ -255,7 +255,11 @@ def execute(request):
         return result
     if action == 'initialize-secrets':
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-        from prepare_failover_phase1 import credentials_profile
+        from prepare_failover_phase1 import credentials_profile, platform_secrets_profile, regime
+        if regime(document['profile']) == 'platform':
+            # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
+            import platform_secrets
+            return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
         import initialize_secrets
         import boto3
         client = boto3.client('sts', region_name='eu-west-3')
