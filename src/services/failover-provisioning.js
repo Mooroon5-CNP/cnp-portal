@@ -63,6 +63,14 @@ function start(app, user) {
     .run(app, user.id, now, now, now);
   return get(app);
 }
+// Avancement lisible d'une mise en service, pour la page de l'application (aucune action proposée).
+function progress(app) {
+  const row = get(app);
+  if (!row) return null;
+  let total = null;
+  try { total = stepsFor(profiles.profileFor(app)).length; } catch (_) { /* profil absent ou historique */ }
+  return { state: row.state, step: row.step, total, message: row.message };
+}
 function resume(app, user) {
   manager(user);
   const row = get(app);
@@ -188,4 +196,4 @@ function startReconciler() {
   void tick().catch(error => console.warn(error.message));
   return timer;
 }
-module.exports = { get, start, resume, advance, startReconciler };
+module.exports = { get, start, resume, advance, startReconciler, progress };

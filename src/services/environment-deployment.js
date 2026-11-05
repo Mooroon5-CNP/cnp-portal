@@ -119,7 +119,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
   if (azure.isAzure(dep)) return azure.manifests(dep, revision);
-  if (dep.failoverRequested && !failover.enabled(dep)) throw new Error('Configuration failover attendue dans le circuit manager.');
+  if (dep.failoverRequested && !failover.enabled(dep)) throw new Error('Profil de secours de cette application absent.');
   if (failover.enabled(dep)) return failover.manifests(dep);
   const { name, path } = identity(dep);
   const hash = createHash('sha256').update(`${config.gcp.project}/${name}`).digest('hex').slice(0, 8);

@@ -433,16 +433,18 @@ async function deploymentStatus(dep) {
     const { run } = await require('./failover-ci-images').latest(dep);
     if (run.status !== 'completed') return { phase: 'running', message: 'Construction et vérification des images GCP et AWS en cours.', runUrl: run.html_url };
     if (run.conclusion !== 'success') return { phase: 'failed', message: 'Le pipeline a échoué ; la version publiée est conservée.', runUrl: run.html_url };
-    schema();
-    const candidate = db.prepare("SELECT state,image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' ORDER BY created_at DESC LIMIT 1").get(dep.appName);
-    const record = candidate?.image_record && JSON.parse(candidate.image_record);
-    if (!record || record.revision !== run.head_sha || candidate.state !== 'published') return { phase: 'approval',
-      message: 'Images CI prêtes : préparer et approuver le runtime dans le circuit manager.', runUrl: run.html_url,
-      failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}` };
+    // La mise en service s'enchaîne seule (publications contrôlées puis approuvées automatiquement) : on montre où elle en est,
+    // sans proposer d'action. Seul un blocage demande l'intervention d'un manager.
+    const progress = require('./failover-provisioning').progress(dep.appName);
+    if (!progress) return { phase: 'deploying', message: 'Images prêtes sur GCP et AWS ; mise en service du secours pas encore lancée.', runUrl: run.html_url };
+    if (progress.state === 'blocked') return { phase: 'failed', message: `Mise en service du secours bloquée : ${progress.message}`, runUrl: run.html_url };
+    if (progress.state !== 'completed') {
+      const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
+      return { phase: 'deploying', message: `Mise en service du secours${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
+    }
     return readiness(dep);
   } catch (error) {
-    return { phase: 'waiting', message: 'Configurer le pipeline failover et attendre sa première exécution réussie.',
-      failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}` };
+    return { phase: 'waiting', message: 'En attente de la première exécution réussie du pipeline (images GCP et AWS).' };
   }
 }
 function readiness(dep) {
@@ -457,9 +459,8 @@ function readiness(dep) {
     return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif.' : 'Application déployée ; secours vérifié et disponible.',
       applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state };
   }
-  return { phase: 'deploying', message: next ? `Failover : préparer et valider ${next} dans le circuit manager.`
-    : 'Runtimes et DNS publiés ; vérification de la réplication et du worker requise avant de déclarer le failover prêt.',
-    failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}`, cloudRunUrl: null };
+  return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
+    : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
 module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
   adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus, stagesFor };

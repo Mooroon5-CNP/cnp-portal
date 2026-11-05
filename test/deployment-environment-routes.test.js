@@ -244,13 +244,15 @@ test('legacy records retain their original service and branch identity', () => {
     expect(dep.sourceBranch).toBe('main');
 });
 
-test('une configuration failover attendue ouvre le bon parcours sans approbation vide', async () => {
+test('la mise en service du secours s’affiche comme un état, sans bouton ni approbation vide', async () => {
     const dep = create('prod');
-    service.reconcile.mockResolvedValue({ phase: 'approval', message: 'Configuration du failover requise.', failoverUrl: '/failover?app=sample-app' });
+    service.reconcile.mockResolvedValue({ phase: 'deploying', message: 'Mise en service du secours (étape 3/17) : observe vérifié.' });
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
-    expect(response.text).toContain('href="/failover?app=sample-app"');
-    expect(response.text).toContain('Configurer le secours et poursuivre la validation');
+    expect(response.text).toContain('Mise en service du secours (étape 3/17) : observe vérifié.');
+    expect(response.text).not.toContain('Configurer le secours et poursuivre la validation');
+    expect(response.text).not.toContain('Configurer et vérifier le failover');
+    expect(response.text).not.toContain('circuit manager');
     expect(response.text).not.toContain('Approuver la production');
     expect(response.text).not.toContain('/releases//approve');
 });

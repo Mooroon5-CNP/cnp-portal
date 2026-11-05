@@ -42,9 +42,6 @@
                 </div>
               </div>
 
-              <% if (deployment.failoverRequested || (deployment.environment === 'prod' && can('k8s:manifest:approve'))) { %>
-              <div class="card" style="margin-bottom:16px"><div class="card-body"><strong>Failover GCP → AWS</strong><p>La publication et la préparation du secours passent par le circuit manager.</p><% if (can('k8s:manifest:approve')) { %><a class="btn btn-secondary" href="/failover?app=<%= encodeURIComponent(deployment.appName) %>">Configurer et vérifier le failover</a><% } %></div></div>
-              <% } %>
               <% if (applicationUrl) { %>
                 <div class="card" id="application-address" style="margin-bottom:16px;">
                   <div class="card-header"><span class="card-title"><%= deployment.onboardingStatus === 'ready' ? 'Adresse de l’environnement' : 'Adresse prévue de l’environnement' %></span></div>
@@ -160,9 +157,6 @@
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
-                      <% if (environmentStatus.failoverUrl && can('k8s:manifest:approve')) { %>
-                        <a class="btn btn-primary" href="<%= environmentStatus.failoverUrl %>">Configurer le secours et poursuivre la validation</a>
-                      <% } %>
                       <% if (environmentStatus.phase === 'approval' && /^[a-f0-9]{40}$/.test(environmentStatus.revision || '') && !environmentStatus.failoverUrl) { %>
                         <p><a href="<%= environmentStatus.prUrl %>" target="_blank" rel="noreferrer">Consulter le candidat</a>. La validation se fait ici, dans le portail.</p>
                         <% if (can('k8s:manifest:approve')) { %>
