@@ -66,6 +66,18 @@ test('un profil PostgreSQL se construit depuis failover-platform.json, sans aucu
   expect(requests[0]).toMatchObject({ action: 'allocate-listener', app: 'weather-api' });
 });
 
+test('aucun nom de base n’est demandé : la plateforme prend appdb et le transmet par DB_NAME', async () => {
+  await operations.createProfile('weather-api', 'postgres', null, manager);
+  const { profile } = service.profileFor('weather-api');
+  expect([profile.gcp.database_name, profile.aws.database_name]).toEqual(['appdb', 'appdb']);
+  expect(profile.gcp.sql_contract).toEqual({ database: 'appdb' });
+});
+test('le formulaire de mise en service ne demande aucun nom de base', () => {
+  const view = fs.readFileSync(path.join(__dirname, '../src/views/failover.ejs'), 'utf8');
+  const form = view.slice(view.indexOf('/failover/configure-deployment'), view.indexOf('</form>', view.indexOf('/failover/configure-deployment')));
+  expect(form).not.toMatch(/name="database"/);
+  expect(form).toMatch(/name="mode"/);
+});
 test('le profil créé ne contient aucune trace d’une autre application', async () => {
   await operations.createProfile('weather-api', 'postgres', contract, manager);
   expect(JSON.stringify(service.profileFor('weather-api'))).not.toMatch(/app4-pixelcam|pixelcalm|pixelcam/i);
@@ -107,7 +119,7 @@ test('un fichier de plateforme incomplet est refusé en nommant les champs, et r
 test('les tables ne se décrivent plus : un contrat déclaratif ou un nom de base invalide est refusé avant tout enregistrement', async () => {
   const declared = { database: 'todos', tables: [{ name: 'todos', columns: [{ name: 'id', type: 'bigint', primary_key: true }] }] };
   await expect(operations.createProfile('weather-api', 'postgres', declared, manager)).rejects.toThrow('lues dans la base');
-  for (const bad of [null, {}, { database: 'Todos' }, { database: 'x; DROP' }, { database: '' }, { database: 'ok', extra: 1 }]) {
+  for (const bad of [{}, { database: 'Todos' }, { database: 'x; DROP' }, { database: '' }, { database: 'ok', extra: 1 }]) {
     await expect(operations.createProfile('weather-api', 'postgres', bad, manager)).rejects.toThrow(/Nom de base invalide|lues dans la base/);
   }
   expect(service.profileFor('weather-api')).toBeNull();

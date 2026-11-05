@@ -124,6 +124,9 @@ async function createProfile(app, mode, contract, user) {
   const row = deployments.listForUser(user).find(row => row.app_name === app && row.deployment_environment === 'prod');
   if (!row || row.target_cluster !== 'gcp') throw new Error('Déploiement de production GCP requis.');
   if (service.profileFor(app)) throw new Error('Ce déploiement possède déjà son profil.');
+  // La plateforme crée la base des deux côtés et en transmet le nom à l'application (DB_NAME) : rien à demander au développeur.
+  // Un nom fixe, car chaque application a sa propre instance ; un nom tiré de l'application pourrait tomber sur un nom réservé.
+  if (mode === 'postgres' && contract == null) contract = { database: 'appdb' };
   if (mode === 'postgres') {
     if (contract && 'tables' in contract) throw new Error('Les tables ne se décrivent plus : elles sont lues dans la base de l’application. Indiquer seulement le nom de la base.');
     if (!contract || Object.keys(contract).join() !== 'database' || !/^[a-z][a-z0-9_]{0,62}$/.test(contract.database || '')) throw new Error('Nom de base invalide (minuscules, chiffres et _, 63 caractères au plus).');
