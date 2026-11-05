@@ -118,3 +118,25 @@ test('seul un manager crée un profil, et seulement pour une production GCP', as
   deployments.listForUser.mockReturnValue([{ app_name: 'weather-api', deployment_environment: 'prod', target_cluster: 'azure' }]);
   await expect(operations.createProfile('weather-api', 'postgres', contract, manager)).rejects.toThrow('production GCP');
 });
+
+describe('régime plateforme du worker', () => {
+  const regime = () => platform({ automation: { ...platform().automation, regime: 'platform' } });
+  test('par défaut (pilote), aucun secret administrateur RDS propre et pas d’étape worker', async () => {
+    await operations.createProfile('weather-api', 'postgres', contract, manager);
+    const document = service.profileFor('weather-api');
+    expect(document.profile.aws.master_password_secret).toBeUndefined();
+    expect(service.stagesFor(document)).toEqual(['databases', 'runtime', 'dns']);
+  });
+  test('en régime plateforme, RDS prend le mot de passe du Secret de l’application et l’étape worker suit les DNS', async () => {
+    process.env.CNP_FAILOVER_PLATFORM = write('regime.json', regime());
+    await operations.createProfile('weather-api', 'postgres', contract, manager);
+    const document = service.profileFor('weather-api');
+    expect(document.profile.aws.master_password_secret).toBe('cnp-weather-api-sql');
+    expect(document.profile.aws.master_password_secret).toBe(document.profile.gcp.credentials_secret_name);
+    expect(service.stagesFor(document)).toEqual(['databases', 'runtime', 'dns', 'worker']);
+  });
+  test('une application sans état n’a jamais d’étape worker', () => {
+    expect(service.stagesFor({ profile: { mode: 'stateless' } })).toEqual(['runtime', 'dns']);
+    expect(service.stagesFor({ profile: { mode: 'stateless', automation: { regime: 'platform' } } })).toEqual(['runtime', 'dns']);
+  });
+});

@@ -15,6 +15,12 @@ const github = require('../clients/github');
 const sourceRoot = path.resolve(path.dirname(fs.realpathSync(__filename)), '../..');
 
 const STAGES = ['databases', 'runtime', 'dns'];
+// Régime « plateforme » : l'alarme et la configuration du worker sont publiées par GitOps, après les DNS (la sonde Route 53 doit exister).
+const PLATFORM_STAGES = [...STAGES, 'worker'];
+function stagesFor(document) {
+  if (document.profile.mode === 'stateless') return ['runtime', 'dns'];
+  return document.profile.automation?.regime === 'platform' ? PLATFORM_STAGES : STAGES;
+}
 const settingsPath = () => process.env.CNP_FAILOVER_SETTINGS || path.resolve(sourceRoot, '../phase1-deployment-20261029/portal-settings.json');
 function settings() {
   const file = settingsPath();
@@ -186,7 +192,7 @@ function rows(app) {
 let busy = false;
 async function prepare(stage, user, requestedApp) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
-  if (!STAGES.includes(stage) && stage !== 'protection') throw new Error('Étape phase 1 invalide.');
+  if (!PLATFORM_STAGES.includes(stage) && stage !== 'protection') throw new Error('Étape phase 1 invalide.');
   if (busy) throw new Error('Préparation déjà en cours.');
   busy = true;
   try {
@@ -194,8 +200,8 @@ async function prepare(stage, user, requestedApp) {
     const app = selectedApp(requestedApp);
     const pending = db.prepare("SELECT id FROM failover_candidates WHERE app_name=? AND state IN ('pending','approving')").get(app);
     if (pending) throw new Error('Une proposition attend déjà sa validation.');
-    const stages = profileFor(app).profile.mode === 'stateless' ? ['runtime', 'dns'] : STAGES;
-    if (stage !== 'protection' && !stages.includes(stage)) throw new Error('Cette application ne nécessite pas de base SQL.');
+    const stages = stagesFor(profileFor(app));
+    if (stage !== 'protection' && !stages.includes(stage)) throw new Error(stage === 'worker' ? 'Étape réservée au régime plateforme.' : 'Cette application ne nécessite pas de base SQL.');
     for (const previous of (stage === 'protection' ? [] : stages.slice(0, stages.indexOf(stage)))) {
       if (!db.prepare("SELECT id FROM failover_candidates WHERE app_name=? AND stage=? AND state='published'").get(app, previous)) {
         throw new Error(`Étape préalable non publiée : ${previous}.`);
@@ -397,7 +403,7 @@ async function deploymentStatus(dep) {
 function readiness(dep) {
   if (!enabled(dep)) return null;
   const stages = new Set(rows(dep.appName).filter(row => row.state === 'published').map(row => row.stage));
-  const required = profileFor(dep.appName).profile.mode === 'stateless' ? ['runtime', 'dns'] : STAGES;
+  const required = stagesFor(profileFor(dep.appName));
   const next = required.find(stage => !stages.has(stage));
   const operations = require('./failover-operations');
   const health = operations.list(dep.appName).find(row => row.action === 'health' && row.state === 'completed');
@@ -411,4 +417,4 @@ function readiness(dep) {
     failoverUrl: `/failover?app=${encodeURIComponent(dep.appName)}`, cloudRunUrl: null };
 }
 module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, reject, manifests, readiness,
-  adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus };
+  adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus, stagesFor };

@@ -15,10 +15,12 @@ import render_failover_phase1 as gcp
 import render_aws_prod_example as aws
 from prepare_failover_phase1 import merge_kustomization
 
+WORKER_KINDS = {'MetricAlarm', 'TableItem'}
+
 
 def render(request):
     stage = request['stage']
-    if stage not in {'protection', 'databases', 'runtime', 'dns', 'bootstrap', 'automation', 'secrets', 'validate'}:
+    if stage not in {'protection', 'databases', 'runtime', 'dns', 'worker', 'bootstrap', 'automation', 'secrets', 'validate'}:
         raise ValueError('Étape inconnue')
     no_database = request['profile'].get('mode') == 'stateless'
     if stage == 'validate':
@@ -28,6 +30,8 @@ def render(request):
             if request['secrets'].get('initialized'):
                 resolve_credentials(request['profile'], request['credentials'], request['secrets'])
         return {}
+    if stage == 'worker' and no_database:
+        raise ValueError('Aucune configuration de worker pour une application sans état')
     if no_database:
         stateless.validate(request['profile'])
         profile = request['profile']
@@ -54,7 +58,8 @@ def render(request):
         if stage == 'runtime':
             result['platform/application-routing/urlmap.yaml'] = gcp.routing(profile['gcp'], baseline['urlmap'])
     else:
-        result = {} if stage == 'protection' else build(profile, stage, baseline['kustomization'], request.get('observations', {}), baseline.get('urlmap'))
+        result = {} if stage == 'protection' else build(profile, stage, baseline['kustomization'], request.get('observations', {}), baseline.get('urlmap'),
+                                  request.get('credentials'), request.get('secrets'))
     ecs_path = f"apps/{profile['gcp']['app_name']}/crossplane/prod/ecs-task-definition.yaml"
     if stage == 'runtime' and ecs_path in baseline['files']:
         before = json.loads(baseline['files'][ecs_path])
@@ -90,13 +95,17 @@ def render(request):
             after['containers'][0] = {**old_container, **new_container, 'env': list(env.values())}
             value['spec']['forProvider']['template'] = {**before, **after}
         # Conserver les ressources cloud en cas de retrait accidentel de CR.
-        if value.get('spec', {}).get('forProvider') is not None:
+        # Exception : l'alarme et l'enregistrement de configuration du worker suivent la vie de l'application (voir `protect`).
+        if value.get('spec', {}).get('forProvider') is not None and value.get('kind') not in WORKER_KINDS:
             value['spec']['deletionPolicy'] = 'Orphan'
         files[name] = json.dumps(value, ensure_ascii=False, indent=2) + '\n'
     def protect(value):
         if value.get('kind') == 'List':
             for item in value['items']:
                 protect(item)
+        elif value.get('kind') in WORKER_KINDS:
+            # Retirer l'application doit retirer sa configuration : sinon le worker continuerait à surveiller et à agir pour elle.
+            value['spec'].pop('deletionPolicy', None)
         elif value.get('spec', {}).get('forProvider') is not None:
             value['spec']['deletionPolicy'] = 'Orphan'
             if value.get('kind') == 'HealthCheck' and value['metadata']['name'] == profile['gcp']['app_name'] + '-failover-latch':

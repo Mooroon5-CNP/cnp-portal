@@ -167,6 +167,8 @@ async function createProfile(app, mode, contract, user) {
     profile.aws.database_security_group_id = platform.aws.database_security_group_id;
     profile.aws.database_ca_pem = platform.aws.database_ca_pem;
     profile.automation = JSON.parse(JSON.stringify(platform.automation));
+    // Régime plateforme : le mot de passe administrateur de RDS est celui du Secret Kubernetes de l'application, pas un secret géré par RDS.
+    if (profile.automation.regime === 'platform') profile.aws.master_password_secret = profile.gcp.credentials_secret_name;
   }
   return service.configure(app, { profile, credentials: {}, secrets: { app }, observations: {} }, user);
 }
