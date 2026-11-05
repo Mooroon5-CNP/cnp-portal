@@ -127,3 +127,61 @@ test('la santé continue à être observée après la mise en service, sans rejo
   expect(tasks.map(value => value.action)).toEqual(['health', 'health']);
   expect(workflow.get('weather-api').state).toBe('completed');
 });
+
+describe('profil dont le schéma se lit dans la base', () => {
+  const introspected = { profile: { gcp: { sql_contract: { database: 'appdb' } }, aws: {} } };
+  const stepNumber = row => Number(row.id.split('-')[1]);
+  beforeEach(() => profiles.profileFor.mockReturnValue(introspected));
+  test('les rôles passent avant l’application, qui crée son schéma avant sa copie', async () => {
+    workflow.start('weather-api', manager);
+    for (let index = 0; index < 90 && workflow.get('weather-api').state !== 'completed'; index++) {
+      await tick();
+      if (tasks.at(-1)?.state === 'running') succeed();
+      if (candidates.at(-1)?.state === 'pending') candidates.at(-1).state = 'published';
+    }
+    expect(workflow.get('weather-api').state).toBe('completed');
+    expect(tasks.map(value => value.action)).toEqual(['credentials-plan', 'initialize-secrets', 'observe', 'bootstrap-plan',
+      'bootstrap-roles', 'runtime-verify', 'schema-check', 'bootstrap', 'verify', 'observe', 'automation-plan', 'worker-configure',
+      'worker-verify', 'verify', 'activation-plan', 'worker-resume', 'health']);
+    expect(candidates.map(value => value.stage)).toEqual(['databases', 'runtime', 'dns']);
+    const at = action => stepNumber(tasks.find(value => value.action === action));
+    const runtime = stepNumber(candidates.find(value => value.stage === 'runtime'));
+    expect(at('bootstrap-roles')).toBeLessThan(runtime);          // la cible a son rôle avant que l'application démarre
+    expect(runtime).toBeLessThan(at('runtime-verify'));
+    expect(at('runtime-verify')).toBeLessThan(at('schema-check'));
+    expect(at('schema-check')).toBeLessThan(at('bootstrap'));      // le schéma existe avant d'être lu et copié
+  });
+  test('tant que l’application n’a pas créé son schéma, on attend en disant quoi faire, sans bloquer', async () => {
+    workflow.start('weather-api', manager);
+    db.prepare('UPDATE failover_provisioning SET step=8 WHERE app=?').run('weather-api');
+    await tick();
+    expect(tasks.at(-1).action).toBe('schema-check');
+    Object.assign(tasks.at(-1), { state: 'completed', result: { verified: false, schema_ready: false, message: 'Aucune table : appeler l’application une fois.' } });
+    const waiting = await tick();
+    expect(waiting.state).toBe('waiting');
+    expect(waiting.message).toContain('appeler l’application');
+    expect(tasks.map(value => value.action)).toEqual(['schema-check', 'schema-check']);        // nouvelle lecture, pas une reprise
+    Object.assign(tasks.at(-1), { state: 'completed', result: { verified: true } });
+    await tick();
+    expect(workflow.get('weather-api').step).toBe(9);
+    await tick();
+    expect(tasks.at(-1).action).toBe('bootstrap');
+  });
+  test('un schéma non pris en charge bloque avec la cause, sans être rejoué', async () => {
+    workflow.start('weather-api', manager);
+    db.prepare('UPDATE failover_provisioning SET step=8 WHERE app=?').run('weather-api');
+    await tick();
+    Object.assign(tasks.at(-1), { state: 'failed', result: { error: 'Schéma non pris en charge : billing.invoices.', action_required: true } });
+    const blocked = await tick();
+    expect(blocked.state).toBe('blocked');
+    expect(blocked.message).toContain('billing.invoices');
+    expect(operations.retry).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+  });
+  test('une revue longue renouvelle la preuve de réplication au bon endroit du parcours', async () => {
+    workflow.start('weather-api', manager);
+    db.prepare('UPDATE failover_provisioning SET step=18 WHERE app=?').run('weather-api');
+    expect((await tick()).step).toBe(16);
+    await tick(); expect(tasks.at(-1).action).toBe('verify');
+  });
+});

@@ -29,7 +29,7 @@ const platform = (overrides = {}) => ({
   },
   ...overrides,
 });
-const contract = { database: 'todos', tables: [{ name: 'todos', columns: [{ name: 'id', type: 'bigint', primary_key: true, identity: true }] }] };
+const contract = { database: 'todos' };       // le schéma se lit dans la base de l'application : seul son nom est fourni
 const write = (name, value) => { const file = path.join(temp, name); fs.writeFileSync(file, JSON.stringify(value)); return file; };
 let requests;
 
@@ -60,6 +60,8 @@ test('un profil PostgreSQL se construit depuis failover-platform.json, sans aucu
   expect(profile.automation.ecs_cluster_arn).toContain('cluster/cnp-cluster');
   expect(profile.gcp.container_port).toBe(8081);
   expect(profile.gcp.database_name).toBe('todos');
+  expect(profile.gcp.sql_contract).toEqual({ database: 'todos' });
+  expect(profile.aws.sql_contract).toEqual({ database: 'todos' });
   expect(requests[0]).toMatchObject({ action: 'allocate-listener', app: 'weather-api' });
 });
 
@@ -99,6 +101,16 @@ test('un fichier de plateforme incomplet est refusé en nommant les champs, et r
   await expect(operations.createProfile('weather-api', 'postgres', contract, manager))
     .rejects.toThrow(/gcp\.gcp_lb_ip.*aws\.database_security_group_id.*automation\.kube_context/);
   expect(service.profileFor('weather-api')).toBeNull();
+});
+
+test('les tables ne se décrivent plus : un contrat déclaratif ou un nom de base invalide est refusé avant tout enregistrement', async () => {
+  const declared = { database: 'todos', tables: [{ name: 'todos', columns: [{ name: 'id', type: 'bigint', primary_key: true }] }] };
+  await expect(operations.createProfile('weather-api', 'postgres', declared, manager)).rejects.toThrow('lues dans la base');
+  for (const bad of [null, {}, { database: 'Todos' }, { database: 'x; DROP' }, { database: '' }, { database: 'ok', extra: 1 }]) {
+    await expect(operations.createProfile('weather-api', 'postgres', bad, manager)).rejects.toThrow(/Nom de base invalide|lues dans la base/);
+  }
+  expect(service.profileFor('weather-api')).toBeNull();
+  expect(requests).toHaveLength(0);
 });
 
 test('seul un manager crée un profil, et seulement pour une production GCP', async () => {

@@ -21,7 +21,8 @@
 <label>Application <select name="app" required><% for (const deployment of deploymentChoices) { %><option value="<%= deployment.app_name %>"><%= deployment.app_name %></option><% } %></select></label>
 <label>Données <select name="mode"><option value="postgres" selected>PostgreSQL</option><option value="stateless">Sans base et sans fichiers persistants</option></select></label>
 <p>PostgreSQL est le seul moteur de base pris en charge par le failover CNP.</p>
-<p><label>Contrat PostgreSQL de l’application (uniquement avec PostgreSQL)<br><textarea name="contract" rows="6" cols="80" placeholder='{"database":"appdb","tables":[{"name":"entries","columns":[{"name":"id","type":"bigint","primary_key":true,"identity":true},{"name":"value","type":"text"}]}]}'></textarea></label></p>
+<p><label>Nom de la base PostgreSQL de l’application (uniquement avec PostgreSQL)<br><input name="database" value="appdb" pattern="[a-z][a-z0-9_]{0,62}" required></label></p>
+<p>Les tables ne se décrivent pas : CNP lit le schéma dans la base une fois l’application démarrée sur GCP, puis le restaure sur AWS.</p>
 <button>Préparer le profil de secours</button></form><% } %>
 <details><summary>Configuration avancée du failover d’une application (manager)</summary>
 <p>Le profil contient les paramètres GCP/AWS, les références des secrets initialisés et les observations de cette application. L’enregistrement prépare le parcours ; il n’active aucune bascule.</p>

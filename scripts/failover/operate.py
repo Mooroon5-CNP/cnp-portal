@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from uuid import uuid4
 
 def engine_root(environ=os.environ, here=Path(__file__).resolve()):
     """Racine du moteur phase 1 (safe_apply.py, credentials/, automation/).
@@ -38,7 +39,30 @@ except FileNotFoundError as error:
         raise SystemExit(1)
     raise
 sys.path.insert(0, str(ROOT))
+import postgres_contract
 import safe_apply
+
+
+class UserAction(ValueError):
+    """Cause connue, sans secret, que le manager peut corriger : son message est affiché tel quel (une panne inconnue ne l'est jamais)."""
+
+
+# Lectures sans effet : jamais de reprise d'une ancienne tâche (son résultat serait périmé), un nouveau jeton à chaque fois.
+READ_ONLY_OPERATIONS = {'inspect-source'}
+# Actions exécutées par la tâche d'initialisation SQL (image bootstrap) ; les autres passent par celle du worker.
+BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify'}
+
+
+def bootstrap_operations(action, introspected):
+    """Opérations SQL d'une action d'initialisation.
+
+    Profil introspecté : rôles d'abord (avant l'application), puis, une fois son schéma créé, lecture et restauration de ce
+    schéma avant l'abonnement. Profil historique : tout en une fois, comme avant.
+    """
+    if action == 'bootstrap':
+        return (['prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'] if introspected
+                else ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
+    return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication']}[action]
 
 
 def command(args, directory=None):
@@ -256,7 +280,7 @@ def execute(request):
             elif key in {'cloudsql', 'rds'}: raise ValueError('Bases absentes ou inaccessibles')
         instance = json.loads(command(['gcloud', 'sql', 'instances', 'describe', app + '-prod-gcp-db', '--project=cnp-terraform-512313', '--format=json']))
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert']}
-    if action in {'bootstrap', 'verify', 'worker-configure', 'worker-verify', 'worker-resume'}:
+    if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
         import boto3
         from botocore.config import Config
         session = boto3.Session(region_name='eu-west-3')
@@ -265,11 +289,14 @@ def execute(request):
         ecs = session.client('ecs', config=settings)
         variables = document['profile']['automation']
         packages = request['packages']
-        config = packages['bootstrap-config.json'] if action in {'bootstrap', 'verify'} else packages['worker-config.json']
+        config = packages['bootstrap-config.json'] if action in BOOTSTRAP_ACTIONS else packages['worker-config.json']
         family = request['task_definition']
         actual = ecs.describe_task_definition(taskDefinition=family)['taskDefinition']
         if not re.fullmatch(r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?', actual['family']): raise ValueError('Tâche opérateur non autorisée')
-        bootstrap = action in {'bootstrap', 'verify'}
+        bootstrap = action in BOOTSTRAP_ACTIONS
+        introspected = bootstrap and postgres_contract.is_introspected(config['profile'])
+        if action in {'bootstrap-roles', 'schema-check'} and not introspected:
+            raise ValueError('Étape réservée aux profils introspectés')
         config_path = '/tmp/phase1-operation.json'
         payload = json.dumps(config, separators=(',', ':'))
         import base64, zlib
@@ -283,10 +310,11 @@ def execute(request):
                 override = {'name': 'bootstrap', 'command': [script], 'environment': [{'name': 'CNP_OPERATION_CONFIG', 'value': compressed}]}
             else:
                 override = {'name': 'worker', 'command': [operation, '--app', app, '--execute']}
-            if operation in pending:
+            if operation in pending and operation not in READ_ONLY_OPERATIONS:
                 arn = pending[operation]
             else:
-                response = ecs.run_task(clientToken=hashlib.sha256((str(work) + operation).encode()).hexdigest(), cluster=variables['ecs_cluster_arn'], taskDefinition=actual['taskDefinitionArn'], launchType='FARGATE', count=1,
+                nonce = uuid4().hex if operation in READ_ONLY_OPERATIONS else ''
+                response = ecs.run_task(clientToken=hashlib.sha256((str(work) + operation + nonce).encode()).hexdigest(), cluster=variables['ecs_cluster_arn'], taskDefinition=actual['taskDefinitionArn'], launchType='FARGATE', count=1,
                     networkConfiguration={'awsvpcConfiguration': {'subnets': variables['public_subnet_ids'], 'securityGroups': [variables['ecs_security_group_id']], 'assignPublicIp': 'ENABLED'}},
                     overrides={'containerOverrides': [override]}, startedBy='cnp-portal-phase1')
                 if response.get('failures') or len(response.get('tasks', [])) != 1: raise ValueError('Lancement ECS refusé')
@@ -309,14 +337,17 @@ def execute(request):
 
         ledger = work / 'completed.json'
         completed = json.loads(ledger.read_text()) if ledger.exists() else {}
-        operations = ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'] if action == 'bootstrap' else ['verify-replication'] if action == 'verify' else ['configure'] if action == 'worker-configure' else ['resume'] if action == 'worker-resume' else ['status']
+        operations = bootstrap_operations(action, introspected) if bootstrap else ['configure'] if action == 'worker-configure' else ['resume'] if action == 'worker-resume' else ['status']
         for operation in operations:
-            if action == 'bootstrap' and operation in completed: continue
+            # Une initialisation interrompue reprend où elle s'est arrêtée : un rôle déjà créé ne se recrée pas.
+            if action in {'bootstrap', 'bootstrap-roles'} and operation in completed: continue
             completed[operation] = task(operation)
             ledger.write_text(json.dumps(completed))
         if action == 'verify':
             proofs = completed['verify-replication']['results']
-            if not any(value.get('fresh_write_replayed') is True and value.get('enabled') and value.get('tables_ready') and value.get('slot_active') and value.get('last_message_age_seconds') is not None and value['last_message_age_seconds'] <= 30 for value in proofs):
+            # Un schéma introspecté doit être identique des deux côtés ; l'absence de la mesure n'est pas une preuve.
+            schema_ok = lambda value: value.get('schema_in_sync') is True if introspected else value.get('schema_in_sync') is not False
+            if not any(value.get('fresh_write_replayed') is True and value.get('enabled') and value.get('tables_ready') and value.get('slot_active') and value.get('last_message_age_seconds') is not None and value['last_message_age_seconds'] <= 30 and schema_ok(value) for value in proofs):
                 raise ValueError('Réplication fraîche et complète non prouvée')
         if action == 'worker-verify':
             controls = completed['status']['results']
@@ -324,13 +355,28 @@ def execute(request):
             expected = next(value for value in config['applications'] if value['app'] == app)
             if not any(value.get('state') == 'DISABLED' and value.get('paused') is True and value.get('config_hash') == automation.config_hash(expected) for value in controls):
                 raise ValueError('Worker en pause non prouvé')
+        if action == 'schema-check':
+            seen = next((value for value in reversed(completed['inspect-source']['results']) if 'schema_ready' in value), None)
+            if seen is None: raise ValueError('Lecture du schéma de la source non confirmée')
+            if seen.get('unsupported'):
+                raise UserAction('Schéma de l\'application non pris en charge : ' + '; '.join(str(item) for item in seen['unsupported'][:8]) + '.')
+            return {'completed': True, 'tasks': completed, 'activated': False, 'verified': seen['schema_ready'] is True,
+                    'schema_ready': seen['schema_ready'] is True, 'tables': seen.get('tables', 0),
+                    'message': None if seen['schema_ready'] else 'Aucune table dans la base de l\'application : l\'appeler une fois (créer une donnée) pour qu\'elle crée son schéma.'}
         return {'completed': True, 'tasks': completed, 'activated': action == 'worker-resume', 'verified': action in {'verify', 'worker-verify'}}
     raise ValueError('Opération inconnue')
 
 
-if __name__ == '__main__':
+def main():
     os.umask(0o077)
     try: print(json.dumps(execute(json.load(sys.stdin))))
+    except UserAction as error:
+        print(json.dumps({'error': str(error), 'action_required': True}))
+        raise SystemExit(1)
     except Exception:
         print(json.dumps({'error': 'Opération interrompue ; vérifier les prérequis et la dernière étape confirmée. Aucun secret affiché.'}))
         raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()

@@ -5,10 +5,11 @@ const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
 const db = require('../models/db');
 const service = require('./environment-failover');
+const { isIntrospected } = require('./failover-profile');
 const root = path.resolve(path.dirname(fs.realpathSync(__filename)), '../..');
 const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const actions = ['credentials-plan', 'bootstrap-plan', 'initialize-secrets', 'observe', 'bootstrap', 'verify', 'runtime-verify', 'automation-plan', 'worker-configure', 'worker-verify', 'activation-plan', 'worker-resume', 'health'];
+const actions = ['credentials-plan', 'bootstrap-plan', 'initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'automation-plan', 'worker-configure', 'worker-verify', 'activation-plan', 'worker-resume', 'health'];
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_operations (id TEXT PRIMARY KEY, app TEXT NOT NULL,
     action TEXT NOT NULL, state TEXT NOT NULL, input_hash TEXT NOT NULL, requested_by TEXT NOT NULL,
@@ -28,7 +29,11 @@ function run(request) {
       [path.join(root, 'scripts/failover/operate.py')], { timeout: 1800000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
         let result;
         try { result = JSON.parse(stdout); } catch (_) { return reject(new Error('Réponse opérateur indisponible.')); }
-        if (error || result.error) return reject(new Error(result.error || 'Opération refusée.'));
+        if (error || result.error) {
+          const failure = new Error(result.error || 'Opération refusée.');
+          failure.actionRequired = result.action_required === true;
+          return reject(failure);
+        }
         return resolve(result);
       });
     child.stdin.end(JSON.stringify(request));
@@ -45,8 +50,15 @@ function start(app, action, user) {
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
   const legacySettings = service.settings();
   const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
-  if (existingPilot && ['bootstrap', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
-  if (action === 'bootstrap' && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
+  if (existingPilot && ['bootstrap', 'bootstrap-roles', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
+  if (['bootstrap', 'bootstrap-roles'].includes(action) && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
+  if (['bootstrap-roles', 'schema-check'].includes(action) && !isIntrospected(document)) throw new Error('Étape réservée aux profils dont le schéma est lu dans la base.');
+  // Le schéma se lit dans la base de l'application : elle doit tourner (et avoir créé ses tables) avant qu'on le copie.
+  if (action === 'schema-check' && !previous(app, 'runtime-verify')?.result?.verified) throw new Error('Vérifier d’abord que l’application tourne sur GCP.');
+  if (action === 'bootstrap' && isIntrospected(document)) {
+    if (!previous(app, 'bootstrap-roles')) throw new Error('Préparer d’abord les rôles SQL de la cible.');
+    if (!previous(app, 'schema-check')?.result?.verified) throw new Error('Le schéma de l’application doit exister sur la source : l’appeler une fois pour qu’elle crée ses tables.');
+  }
   if (action === 'verify' && !existingPilot && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
   if (['automation-plan', 'worker-configure', 'worker-verify'].includes(action) && !previous(app, 'verify')) throw new Error('Vérification de réplication requise.');
   if (['activation-plan', 'worker-resume'].includes(action)) {
@@ -66,7 +78,7 @@ function start(app, action, user) {
     request.packages = service.operationalPackage(app, 'automation', user);
     request.task_definition = previous(app, 'activation-plan')?.result?.worker_task_definition;
   }
-  if (['bootstrap', 'verify'].includes(action)) {
+  if (['bootstrap', 'bootstrap-roles', 'schema-check', 'verify'].includes(action)) {
     request.packages = service.operationalPackage(app, 'bootstrap', user);
     request.task_definition = previous(app, 'bootstrap-plan')?.result?.bootstrap_task_definition || (existingPilot ? 'cnp-failover-bootstrap' : null);
     if (!request.task_definition) throw new Error('Préparer et appliquer la tâche d’initialisation générique.');
@@ -110,7 +122,8 @@ async function finish(id, request) {
     db.prepare('UPDATE failover_operations SET state=?,result=? WHERE id=?').run(
       request.action.endsWith('-plan') && result.safe && result.changes.length ? 'review' : result.safe === false ? 'blocked' : 'completed', JSON.stringify(result), id);
   } catch (error) {
-    db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE id=?").run(JSON.stringify({ error: error.message }), id);
+    db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE id=?").run(
+      JSON.stringify({ error: error.message, ...(error.actionRequired ? { action_required: true } : {}) }), id);
   }
 }
 function apply(id, user) {
@@ -129,6 +142,10 @@ async function createProfile(app, mode, contract, user) {
   const row = deployments.listForUser(user).find(row => row.app_name === app && row.deployment_environment === 'prod');
   if (!row || row.target_cluster !== 'gcp') throw new Error('Déploiement de production GCP requis.');
   if (service.profileFor(app)) throw new Error('Ce déploiement possède déjà son profil.');
+  if (mode === 'postgres') {
+    if (contract && 'tables' in contract) throw new Error('Les tables ne se décrivent plus : elles sont lues dans la base de l’application. Indiquer seulement le nom de la base.');
+    if (!contract || Object.keys(contract).join() !== 'database' || !/^[a-z][a-z0-9_]{0,62}$/.test(contract.database || '')) throw new Error('Nom de base invalide (minuscules, chiffres et _, 63 caractères au plus).');
+  }
   const platform = service.platform();
   const template = mode === 'stateless' ? 'stateless' : mode === 'postgres' ? 'postgres' : null;
   if (!template) throw new Error('Choisir sans base ou PostgreSQL.');

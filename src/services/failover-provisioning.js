@@ -6,6 +6,7 @@ const { randomUUID } = require('crypto');
 const db = require('../models/db');
 const profiles = require('./environment-failover');
 const operations = require('./failover-operations');
+const { isIntrospected } = require('./failover-profile');
 const manager = user => {
   if (!user?.id || user.role !== 'manager') throw new Error('Validation manager requise.');
 };
@@ -18,8 +19,20 @@ const SQL_STEPS = [
   ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
   ['operation', 'activation-plan'], ['operation', 'worker-resume'], ['operation', 'health'],
 ];
+// Profil dont le schéma se lit dans la base : les rôles d'abord, puis l'application tourne sur GCP et crée son schéma, puis
+// CNP le lit, le restaure sur la cible et s'abonne. Le runtime n'attend donc plus le bootstrap.
+const INTROSPECTED_STEPS = [
+  ['operation', 'credentials-plan'], ['operation', 'initialize-secrets'],
+  ['candidate', 'databases'], ['operation', 'observe'],
+  ['operation', 'bootstrap-plan'], ['operation', 'bootstrap-roles'],
+  ['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'schema-check'],
+  ['operation', 'bootstrap'], ['operation', 'verify'],
+  ['candidate', 'dns'], ['operation', 'observe'], ['operation', 'automation-plan'],
+  ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
+  ['operation', 'activation-plan'], ['operation', 'worker-resume'], ['operation', 'health'],
+];
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
-const WAITABLE = new Set(['observe', 'runtime-verify', 'health']);
+const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_provisioning (
     app TEXT PRIMARY KEY, requested_by TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 0,
@@ -90,7 +103,7 @@ async function advance(app) {
       if (!health || Date.now() - Date.parse(health.created_at) >= 60000) operations.start(app, 'health', actor);
       return;
     }
-    const steps = document.profile.mode === 'stateless' ? STATELESS_STEPS : SQL_STEPS;
+    const steps = document.profile.mode === 'stateless' ? STATELESS_STEPS : isIntrospected(document) ? INTROSPECTED_STEPS : SQL_STEPS;
     const step = steps[row.step];
     if (!step) { save('completed', 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.'); return; }
     const [kind, action] = step;
@@ -110,8 +123,9 @@ async function advance(app) {
       const verified = operations.list(app).find(value => value.action === 'verify' && value.state === 'completed');
       if (!verified || Date.now() - Date.parse(verified.created_at) > 540000) {
         // A long manager review must not activate with a stale SQL proof.
+        const workerVerified = steps.findIndex(value => value[1] === 'worker-verify');
         db.prepare('UPDATE failover_provisioning SET step=?,reference=NULL,step_started_at=? WHERE app=? AND lease_owner=?')
-          .run(SQL_STEPS.findIndex((value, index) => index > 13 && value[1] === 'verify'), new Date().toISOString(), app, owner);
+          .run(steps.findIndex((value, index) => index > workerVerified && value[1] === 'verify'), new Date().toISOString(), app, owner);
         save('running', 'Nouvelle vérification de réplication avant activation.');
         return;
       }
@@ -126,7 +140,9 @@ async function advance(app) {
     const reference = `operation:${operation.id}`;
     if (operation.state === 'review') { save('review', 'Examiner et approuver le plan enregistré.', reference); return; }
     if (['running', 'applying'].includes(operation.state)) { save('running', `En cours : ${action}.`, reference); return; }
-    const requiresProof = ['verify', 'runtime-verify', 'worker-verify', 'health'].includes(action);
+    const requiresProof = ['verify', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
+    // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
+    if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {
       save('running', `${action} vérifié.`, null, true); return;
     }
@@ -134,10 +150,12 @@ async function advance(app) {
       // Read-only readiness checks can be repeated while providers converge.
       // A completed negative check starts a new observation; a failed check
       // reuses its durable operation, never a new SQL initialization.
+      // Le message dit au manager quoi faire (ex. appeler l'application) : le lire sur la lecture qui vient de se terminer.
+      const hint = operation.result?.message;
       if (operation.state === 'failed') operations.retry(operation.id, actor);
       else if (operation.state === 'completed') operation = operations.start(app, action, actor);
       else throw new Error('Plan refusé ; aucun apply automatique.');
-      save('waiting', `Attente de disponibilité : ${action}.`, `operation:${operation.id}`); return;
+      save('waiting', hint || `Attente de disponibilité : ${action}.`, `operation:${operation.id}`); return;
     }
     throw new Error(operation.result?.error || `Étape ${action} non validée ; reprendre après correction.`);
   } catch (error) {

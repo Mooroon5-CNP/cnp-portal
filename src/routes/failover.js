@@ -31,7 +31,7 @@ router.get('/', (req, res) => {
 router.post('/configure-deployment', async (req, res) => {
   try {
     const result = await require('../services/failover-operations').createProfile(req.body.app, req.body.mode,
-      req.body.mode === 'postgres' ? JSON.parse(req.body.contract) : null, req.user);
+      req.body.mode === 'postgres' ? { database: String(req.body.database || 'appdb').trim() } : null, req.user);
     require('../services/failover-provisioning').start(result.app, req.user);
     return res.redirect(`/failover?app=${encodeURIComponent(result.app)}`);
   } catch (error) { return res.status(409).json({ error: error.message }); }
