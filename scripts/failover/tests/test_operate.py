@@ -570,8 +570,11 @@ class TeardownTests(unittest.TestCase):
         self.assertTrue(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Delete'}}))
 
     def test_gone_only_when_nothing_is_left(self):
-        self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}}]}
+        self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}},
+                                    {'kind': 'Instance', 'metadata': {'name': 'going', 'deletionTimestamp': 'x'}, 'spec': {}}]}
         result = self.run_action('teardown-gone')
-        self.assertEqual((result['verified'], result['remaining']), (False, ['Instance/rds']))
+        self.assertEqual((result['verified'], result['remaining']), (False, ['Instance/going', 'Instance/rds']))
+        # Retirées de Git : l'opérateur les supprime lui-même (une seule fois), sans attendre Argo CD.
+        self.assertEqual([call.args[3] for call in self.custom.delete_cluster_custom_object.call_args_list], ['rds'])
         self.items = {}
         self.assertIs(self.run_action('teardown-gone')['verified'], True)

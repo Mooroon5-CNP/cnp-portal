@@ -304,6 +304,11 @@ def execute(request):
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
         items = app_resources(app, apis, custom)
         if action == 'teardown-gone':
+            # Étape appelée seulement après le retrait des manifests de Git : Argo CD ne les recréera pas. Les supprimer ici
+            # évite de dépendre de sa synchronisation automatique, qui ne reprend plus après un échec et refuse de tout élaguer.
+            for group, version, plural, item in items:
+                if not item['metadata'].get('deletionTimestamp'):
+                    custom.delete_cluster_custom_object(group, version, plural, item['metadata']['name'])
             remaining = sorted(f"{item['kind']}/{item['metadata']['name']}" for _, _, _, item in items)
             return {'verified': not remaining, 'remaining': remaining,
                     'message': None if not remaining else f'En attente de la destruction de {len(remaining)} ressource(s).'}
