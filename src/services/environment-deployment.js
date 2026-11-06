@@ -478,7 +478,10 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
       if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
       // Preserve the existing GCP cascade-before-source-removal ordering, using
       // the scoped Kubernetes client already used for Azure (no Argo REST 415/403).
-      await kubernetes.cascadeDeleteArgocdApplication(name);
+      // Après la suppression du failover, les ressources sont déjà détruites : l'Application appartient à l'ApplicationSet
+      // prod, qui la retire avec le dossier. L'effacer ici laissait le contrôleur la croire présente (cache) et ne jamais la
+      // recréer au redéploiement suivant (constaté le 06/11/2026 sur cnp-test-azure, réparé par un redémarrage du contrôleur).
+      if (!afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
     }
   }
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
