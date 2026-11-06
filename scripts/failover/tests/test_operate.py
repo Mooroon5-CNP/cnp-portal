@@ -565,6 +565,14 @@ class TeardownTests(unittest.TestCase):
         self.custom.patch_cluster_custom_object.assert_not_called()
         self.assertIs(result['verified'], True)                              # et ne retient pas la suppression
 
+    def test_a_resource_created_without_delete_right_gets_it_back(self):
+        self.items = {'instances': [{'apiVersion': 'x', 'kind': 'HealthCheck', 'metadata': {'name': 'latch'},
+            'spec': {'deletionPolicy': 'Orphan', 'managementPolicies': ['Observe', 'Create', 'Update']}}]}
+        result = self.run_action('teardown-released')
+        self.assertEqual(result['pending'], ['latch'])
+        self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[4],
+                         {'spec': {'deletionPolicy': 'Delete', 'managementPolicies': ['Observe', 'Create', 'Update', 'Delete']}})
+
     def test_an_orphan_resource_is_never_considered_released(self):
         self.assertFalse(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Orphan'}}))
         self.assertTrue(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Delete'}}))

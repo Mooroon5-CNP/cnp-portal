@@ -55,6 +55,9 @@ test('la libération passe tout en Delete, lève la protection des bases, sans s
   expect(freed.spec.forProvider.settings).toEqual({ tier: 'db-f1-micro', deletionProtectionEnabled: false });
   expect(teardown.release(rds).spec.forProvider).toEqual({ deletionProtection: false, skipFinalSnapshot: true, deleteAutomatedBackups: true });
   expect(teardown.release(bucket).spec.deletionPolicy).toBe('Orphan');
+  // Créé par Crossplane sans droit de suppression (verrou DNS) : la suppression de l'app le lui rend.
+  const latch = { kind: 'HealthCheck', spec: { deletionPolicy: 'Orphan', managementPolicies: ['Observe', 'Create', 'Update'], forProvider: {} } };
+  expect(teardown.release(latch).spec).toMatchObject({ deletionPolicy: 'Delete', managementPolicies: ['Observe', 'Create', 'Update', 'Delete'] });
   const list = teardown.release({ kind: 'List', items: [sql, bucket] });
   expect(list.items.map(item => item.spec.deletionPolicy)).toEqual(['Delete', 'Orphan']);
   expect(sql.spec.deletionPolicy).toBe('Orphan');                      // l'original n'est pas modifié
@@ -79,6 +82,8 @@ test('le parcours complet libère, retire, attend la disparition, nettoie puis o
   row = await step(); row = await step();                               // oubli
   expect(deployment.remove).toHaveBeenCalledWith(dep, { afterFailoverTeardown: true });
   expect(deployments.delete).toHaveBeenCalledWith('dep-1');
+  expect(teardown.get('weather-api').state).toBe('completed');            // et ne se relance pas
+  await step(); expect(deployment.remove).toHaveBeenCalledTimes(1);
 });
 
 test('une attente trop longue bloque avec ce qui reste, sans rien supprimer de plus', async () => {

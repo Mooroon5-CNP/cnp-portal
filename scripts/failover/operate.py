@@ -124,9 +124,9 @@ def app_resources(app, apis, custom):
 
 
 def destructible(item):
-    """Crossplane peut détruire la ressource réelle (et non seulement l'observer)."""
+    """Ressource que Crossplane a créée (et peut donc détruire), par opposition à une ressource seulement observée."""
     policies = item.get('spec', {}).get('managementPolicies') or ['*']
-    return '*' in policies or 'Delete' in policies
+    return '*' in policies or 'Delete' in policies or 'Create' in policies
 
 
 def released(item):
@@ -134,7 +134,7 @@ def released(item):
     spec, actual = item.get('spec', {}), item.get('status', {}).get('atProvider', {})
     if not destructible(item):
         return True            # observation seule : retirer le manifeste ne détruit jamais la ressource réelle
-    if spec.get('deletionPolicy') != 'Delete':
+    if spec.get('deletionPolicy') != 'Delete' or not {'*', 'Delete'} & set(spec.get('managementPolicies') or ['*']):
         return False
     if item.get('kind') == 'DatabaseInstance':
         return actual.get('deletionProtection') is not True and (actual.get('settings') or {}).get('deletionProtectionEnabled') is not True
@@ -318,6 +318,11 @@ def execute(request):
                 # Une ressource en pause (par exemple après un test de panne) ne serait jamais détruite.
                 custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'],
                                                    {'metadata': {'annotations': {'crossplane.io/paused': None}}})
+                pending.append(item['metadata']['name'])
+            elif destructible(item) and not {'*', 'Delete'} & set(item['spec'].get('managementPolicies') or ['*']):
+                # Créée sans droit de suppression (verrou DNS) : sans Delete, Crossplane laisserait la vraie ressource derrière lui.
+                custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'],
+                    {'spec': {'deletionPolicy': 'Delete', 'managementPolicies': [*item['spec']['managementPolicies'], 'Delete']}})
                 pending.append(item['metadata']['name'])
             elif destructible(item) and item.get('spec', {}).get('deletionPolicy') != 'Delete':
                 # Git demande déjà Delete (commit de libération) ; Argo CD l'applique par vagues, et une vague en erreur (base

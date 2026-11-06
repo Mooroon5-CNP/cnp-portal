@@ -52,7 +52,11 @@ function release(document) {
   const value = JSON.parse(JSON.stringify(document));
   for (const item of value.kind === 'List' ? value.items || [] : [value]) {
     const spec = item?.spec;
-    if (!spec?.forProvider || (spec.managementPolicies && !spec.managementPolicies.includes('Delete') && !spec.managementPolicies.includes('*'))) continue;
+    const policies = spec?.managementPolicies;
+    // Observation seule (ressource que Crossplane n'a pas créée, comme le bucket historique) : jamais détruite.
+    if (!spec?.forProvider || (policies && !policies.includes('*') && !policies.includes('Delete') && !policies.includes('Create'))) continue;
+    // Créée par Crossplane sans droit de suppression (verrou DNS) : la suppression de l'app la lui rend.
+    if (policies && !policies.includes('*') && !policies.includes('Delete')) spec.managementPolicies = [...policies, 'Delete'];
     spec.deletionPolicy = 'Delete';
     if (item.kind === 'DatabaseInstance') {
       spec.forProvider.deletionProtection = false;
@@ -150,7 +154,7 @@ async function advance(app) {
     const [kind, action] = STEPS[row.step] || [];
     if (!kind) { save('completed', 'Application et secours supprimés.'); return; }
     if (kind === 'commit') { await commit(action, row); save('running', `${action} publié.`, null, true); return; }
-    if (kind === 'local') { await forget(row); return; }
+    if (kind === 'local') { await forget(row); save('completed', 'Application et secours supprimés.', null, true); return; }
     const actor = { id: row.requested_by, role: 'manager' };
     let operation = row.reference ? operations.list(app).find(value => value.id === row.reference.slice(10)) : null;
     if (!operation) {
