@@ -93,8 +93,8 @@ class OperatorTests(unittest.TestCase):
 
 
 REVISION = 'projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod/revisions/weather-api-prod-00002-abc'
-# Forme réelle de l'API Cloud Run v2 (champs relevés sur le pilote le 5/11, via le statut Crossplane qui la reprend).
-SERVICE = {'terminalCondition': {'state': 'CONDITION_SUCCEEDED', 'type': 'Ready'}, 'reconciling': False,
+# Forme réelle de l'API Cloud Run v2, relevée sur cnp-test-azure-prod le 6/11 : `reconciling` est ABSENT quand il est faux.
+SERVICE = {'terminalCondition': {'state': 'CONDITION_SUCCEEDED', 'type': 'Ready'},
            'latestReadyRevision': REVISION, 'latestCreatedRevision': REVISION,
            'template': {'containers': [{'image': 'europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/weather-api@sha256:' + 'a' * 64}]}}
 

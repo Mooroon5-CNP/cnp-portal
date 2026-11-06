@@ -136,7 +136,8 @@ def execute(request):
         import boto3
         cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
         # Prête, sans reconfiguration en cours, et la dernière révision créée est celle qui sert.
-        primary_ready = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and cloudrun.get('reconciling') is False
+        # L'API omet `reconciling` quand il est faux (JSON des API Google : valeurs par défaut non écrites).
+        primary_ready = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and not cloudrun.get('reconciling', False)
         primary_ready &= bool(cloudrun.get('latestReadyRevision')) and cloudrun.get('latestReadyRevision') == cloudrun.get('latestCreatedRevision')
         client = boto3.client('ecs', region_name='eu-west-3')
         if boto3.client('sts', region_name='eu-west-3').get_caller_identity()['Account'] != '804210702561':
