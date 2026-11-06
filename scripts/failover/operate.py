@@ -104,6 +104,37 @@ def ready(value):
     return conditions.get('Ready') == 'True' and conditions.get('Synced') == 'True'
 
 
+def app_resources(app, apis, custom):
+    """Toutes les ressources Crossplane de l'app en prod, retrouvées par les étiquettes que posent les générateurs, dans tous les
+    groupes Upbound : aucune liste de types écrite à la main, donc rien d'oublié quand un type s'ajoute."""
+    found = []
+    for group in apis.get_api_versions().groups:
+        if not group.name.endswith('.upbound.io'):
+            continue
+        seen = set()
+        for version in group.versions:
+            for resource in custom.get_api_resources(group.name, version.version).resources:
+                if '/' in resource.name or resource.namespaced or resource.name in seen:
+                    continue
+                seen.add(resource.name)
+                listed = custom.list_cluster_custom_object(group.name, version.version, resource.name,
+                                                           label_selector=f'app={app},cnp.io/environment=prod')
+                found += [(group.name, version.version, resource.name, item) for item in listed.get('items', [])]
+    return found
+
+
+def released(item):
+    """Une ressource peut être détruite par son retrait : politique Delete, aucune pause, protection des bases levée chez le fournisseur."""
+    spec, actual = item.get('spec', {}), item.get('status', {}).get('atProvider', {})
+    if spec.get('deletionPolicy') != 'Delete':
+        return False
+    if item.get('kind') == 'DatabaseInstance':
+        return actual.get('deletionProtection') is not True and (actual.get('settings') or {}).get('deletionProtectionEnabled') is not True
+    if item.get('kind') == 'Instance' and item.get('apiVersion', '').startswith('rds.'):
+        return actual.get('deletionProtection') is not True
+    return True
+
+
 def observe_objects(app, apis, custom):
     """Ressources Crossplane de l'app. Une base absente arrête ; une sonde absente (404) est normale avant les DNS.
     Toute autre erreur (droits, API) arrête aussi : « pas trouvé » n'est pas « n'existe pas »."""
@@ -252,13 +283,49 @@ def execute(request):
         credentials_profile(document['profile'], document['credentials'])
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
         objects = observe_objects(app, apis, custom)
-        instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{app}-prod-gcp-db', request.get('_google'))
+        name = document['profile']['gcp'].get('database_instance') or f'{app}-prod-gcp-db'      # nom chez Google (génération)
+        instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{name}', request.get('_google'))
         # Lire n'est pas prouver : les étapes suivantes exigent des bases prêtes (et, après les DNS, des sondes prêtes).
         # Une observation non prête fait attendre le parcours au lieu de le laisser passer.
         wanted = ['cloudsql', 'rds'] + (['healthcheck', 'routing_latch', 'primary_healthcheck'] if request.get('expect_probes') else [])
         missing = [key for key in wanted if not ready(objects.get(key))]
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert'], 'verified': not missing,
                 'message': None if not missing else 'En attente : ' + ', '.join(missing) + ' pas encore prêt(s).'}
+    if action in {'teardown-released', 'teardown-gone'}:
+        # Suppression de l'app : la ressource doit être libérée avant son retrait de Git, puis avoir disparu (et le fournisseur avec).
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        items = app_resources(app, apis, custom)
+        if action == 'teardown-gone':
+            remaining = sorted(f"{item['kind']}/{item['metadata']['name']}" for _, _, _, item in items)
+            return {'verified': not remaining, 'remaining': remaining,
+                    'message': None if not remaining else f'En attente de la destruction de {len(remaining)} ressource(s).'}
+        pending = []
+        for group, version, plural, item in items:
+            if (item['metadata'].get('annotations') or {}).get('crossplane.io/paused'):
+                # Une ressource en pause (par exemple après un test de panne) ne serait jamais détruite.
+                custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'],
+                                                   {'metadata': {'annotations': {'crossplane.io/paused': None}}})
+                pending.append(item['metadata']['name'])
+            elif not released(item):
+                pending.append(item['metadata']['name'])
+        return {'verified': bool(items) and not pending, 'resources': len(items), 'pending': sorted(pending),
+                'message': None if items and not pending else 'En attente de la libération de : ' + ', '.join(sorted(pending)[:6])}
+    if action == 'teardown-cleanup':
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+        from prepare_failover_phase1 import platform_secrets_profile, regime
+        import platform_secrets
+        if regime(document['profile']) != 'platform':
+            raise UserAction('Suppression complète réservée aux applications du régime plateforme.')
+        result = platform_secrets.remove(platform_secrets_profile(document['profile']),
+                                         *platform_secrets.clients(document['profile']['automation'].get('kube_context')))
+        import boto3
+        table = boto3.client('dynamodb', region_name='eu-west-3')
+        keys = [item for page in table.get_paginator('query').paginate(TableName=NAMES['platform']['state_table'],
+                KeyConditionExpression='app = :a', ExpressionAttributeValues={':a': {'S': app}}, ProjectionExpression='app, #r',
+                ExpressionAttributeNames={'#r': 'record'}) for item in page['Items']]
+        for key in keys:
+            table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
+        return {**result, 'worker_records_removed': len(keys), 'verified': True}
     if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
         import boto3
         from botocore.config import Config

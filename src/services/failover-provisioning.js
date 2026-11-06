@@ -189,6 +189,7 @@ function startReconciler() {
     running = true;
     try {
       for (const row of db.prepare("SELECT app FROM failover_provisioning WHERE state IN ('running','review','waiting','completed')").all()) await advance(row.app);
+      await require('./failover-teardown').tick();
     } finally { running = false; }
   };
   const timer = setInterval(() => void tick().catch(error => console.warn(error.message)), 30000);

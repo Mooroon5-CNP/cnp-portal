@@ -445,8 +445,9 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   } finally { releases.release(dep.id, revision, token); }
 }
 
-async function remove(dep) {
-  if (failover.enabled(dep)) throw new Error('Suppression interdite pour le profil failover phase 1.');
+async function remove(dep, { afterFailoverTeardown = false } = {}) {
+  // Une app failover se supprime par failover-teardown (bases, secours, secrets), qui termine en appelant cette fonction.
+  if (failover.enabled(dep) && !afterFailoverTeardown) throw new Error('Suppression complète du failover requise d’abord.');
   if (onboardingLocks.has(dep.id)) await onboardingLocks.get(dep.id).catch(() => {});
   if (locks.has(dep.id)) await locks.get(dep.id).catch(() => {});
   // Une préflight échouée ne donne aucun droit sur des manifests historiques.

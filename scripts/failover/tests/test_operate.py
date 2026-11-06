@@ -497,3 +497,67 @@ class HealthNamesTests(unittest.TestCase):
                 self.assertEqual(rules, [rule + 'alarm', rule + 'retry'])
                 # Les règles lancent la révision active, que le portail connaît seulement par le nom de la tâche.
                 self.assertTrue(result['triggers_ready'])
+
+
+@unittest.skipUnless(importlib.util.find_spec('kubernetes'), 'bibliothèque kubernetes absente')
+class TeardownTests(unittest.TestCase):
+    """Suppression complète : toutes les ressources de l'app, retrouvées par étiquettes, sont libérées puis doivent disparaître."""
+
+    def setUp(self):
+        from kubernetes.client import (ApisApi, CustomObjectsApi, V1APIGroup, V1APIGroupList, V1GroupVersionForDiscovery,
+                                       V1APIResourceList, V1APIResource)
+        served = {'sql.gcp.upbound.io': ['databaseinstances'], 'rds.aws.upbound.io': ['instances'], 'apps.example.io': ['others']}
+        self.apis = create_autospec(ApisApi, instance=True)
+        version = lambda name: V1GroupVersionForDiscovery(group_version=f'{name}/v1', version='v1')
+        self.apis.get_api_versions.return_value = V1APIGroupList(groups=[V1APIGroup(name=name, versions=[version(name)],
+            preferred_version=version(name)) for name in served])
+        self.custom = create_autospec(CustomObjectsApi, instance=True)
+        self.custom.get_api_resources.side_effect = lambda group, v: V1APIResourceList(group_version=f'{group}/v1', resources=[
+            V1APIResource(name=plural, kind=plural, namespaced=False, singular_name=plural, verbs=['list']) for plural in served[group]])
+        self.items = {}
+        self.custom.list_cluster_custom_object.side_effect = lambda group, v, plural, label_selector: {'items': self.items.get(plural, [])}
+
+    def run_action(self, action):
+        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        import test_worker_phase1 as fixtures
+        profile = fixtures.platform_profile()
+        parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+        parent.mkdir(exist_ok=True, parents=True)
+        with tempfile.TemporaryDirectory(dir=parent) as work:
+            return operator.execute({'app': profile['gcp']['app_name'], 'work': work, 'action': action, '_kubernetes': (self.apis, self.custom),
+                'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
+
+    def test_resources_are_found_by_label_in_upbound_groups_only(self):
+        self.items = {'instances': [{'apiVersion': 'rds.aws.upbound.io/v1', 'kind': 'Instance', 'metadata': {'name': 'db'}, 'spec': {}}],
+                      'others': [{'kind': 'Other', 'metadata': {'name': 'not-ours'}, 'spec': {}}]}
+        found = operator.app_resources('weather-api', self.apis, self.custom)
+        self.assertEqual([item['metadata']['name'] for *_, item in found], ['db'])
+        selectors = {call.kwargs['label_selector'] for call in self.custom.list_cluster_custom_object.call_args_list}
+        self.assertEqual(selectors, {'app=weather-api,cnp.io/environment=prod'})
+
+    def test_a_paused_resource_is_unpaused_and_a_protected_database_is_not_released(self):
+        self.items = {'databaseinstances': [{'apiVersion': 'sql.gcp.upbound.io/v1', 'kind': 'DatabaseInstance',
+            'metadata': {'name': 'sql', 'annotations': {'crossplane.io/paused': 'true'}}, 'spec': {'deletionPolicy': 'Delete'},
+            'status': {'atProvider': {'deletionProtection': False, 'settings': {'deletionProtectionEnabled': False}}}}],
+            'instances': [{'apiVersion': 'rds.aws.upbound.io/v1', 'kind': 'Instance', 'metadata': {'name': 'rds'},
+            'spec': {'deletionPolicy': 'Delete'}, 'status': {'atProvider': {'deletionProtection': True}}}]}
+        result = self.run_action('teardown-released')
+        self.assertIs(result['verified'], False)
+        self.assertEqual(result['pending'], ['rds', 'sql'])
+        patch_call = self.custom.patch_cluster_custom_object.call_args
+        self.assertEqual(patch_call.args[3], 'sql')
+        self.assertEqual(patch_call.args[4], {'metadata': {'annotations': {'crossplane.io/paused': None}}})
+        self.items['databaseinstances'][0]['metadata']['annotations'] = {}
+        self.items['instances'][0]['status']['atProvider']['deletionProtection'] = False
+        self.assertIs(self.run_action('teardown-released')['verified'], True)
+
+    def test_an_orphan_resource_is_never_considered_released(self):
+        self.assertFalse(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Orphan'}}))
+        self.assertTrue(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Delete'}}))
+
+    def test_gone_only_when_nothing_is_left(self):
+        self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}}]}
+        result = self.run_action('teardown-gone')
+        self.assertEqual((result['verified'], result['remaining']), (False, ['Instance/rds']))
+        self.items = {}
+        self.assertIs(self.run_action('teardown-gone')['verified'], True)

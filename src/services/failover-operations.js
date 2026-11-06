@@ -11,6 +11,8 @@ const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // Plus aucun plan Terraform : l'infrastructure partagée est créée une fois par la pile plateforme, le propre à l'app passe par GitOps.
 const actions = ['initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'worker-configure', 'worker-verify', 'worker-resume', 'health'];
+// Suppression complète (failover-teardown) : libération, disparition des ressources, puis secrets et état du worker.
+const TEARDOWN = ['teardown-released', 'teardown-gone', 'teardown-cleanup'];
 const platformRegime = document => document.profile.automation?.regime === 'platform';
 // Tâches ECS : celles de la pile plateforme (noms dans le profil), ou celles du pilote, dont les noms sont fixes.
 function taskDefinition(document, kind, existingPilot) {
@@ -51,8 +53,19 @@ function previous(app, action) {
 }
 function start(app, action, user) {
   manager(user); schema();
-  if (!actions.includes(action)) throw new Error('Opération inconnue.');
+  if (!actions.includes(action) && !TEARDOWN.includes(action)) throw new Error('Opération inconnue.');
   const document = service.profileFor(app);
+  if (TEARDOWN.includes(action)) {
+    if (!document) throw new Error('Profil absent.');
+    if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
+    const id = randomUUID();
+    const request = { action, app, document, work: path.join(workRoot, id) };
+    fs.mkdirSync(request.work, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(request.work, 'request.json'), JSON.stringify(request), { mode: 0o600 });
+    db.prepare('INSERT INTO failover_operations VALUES (?,?,?,?,?,?,?,?,?)').run(id, app, action, 'running', hash(document), user.id, null, new Date().toISOString(), null);
+    void finish(id, request);
+    return { id, state: 'running' };
+  }
   if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify'].includes(action))) throw new Error('Profil SQL requis.');
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
   const legacySettings = service.settings();
@@ -159,6 +172,8 @@ async function createProfile(app, mode, contract, user) {
     profile.automation = { ...JSON.parse(JSON.stringify(platform.automation)), regime: 'platform' };
     // Le mot de passe administrateur de RDS est celui du Secret Kubernetes de l'application, pas un secret géré par RDS.
     profile.aws.master_password_secret = profile.gcp.credentials_secret_name;
+    // Google bloque le nom d'une instance supprimée environ une semaine : une génération permet de redéployer aussitôt.
+    profile.gcp.database_instance = `${app}-prod-gcp-db-${Date.now().toString(36)}`;
   }
   return service.configure(app, { profile, credentials: {}, secrets: { app }, observations: {} }, user);
 }

@@ -634,6 +634,19 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
 
     if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
 
+    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
+    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
+    if (require('../services/environment-failover').enabled(dep)) {
+        try {
+            require('../services/failover-teardown').start(dep, req.user);
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
+        } catch (e) {
+            req.flash('error', `Suppression impossible : ${e.message}`);
+        }
+        return res.redirect(`/deployments/${dep.id}`);
+    }
+
     try {
         if (usesEnvironment(dep)) {
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
@@ -698,6 +711,19 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
     if (request) deletionRequestModel.approve(request.id, req.user.id);
 
     if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
+
+    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
+    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
+    if (require('../services/environment-failover').enabled(dep)) {
+        try {
+            require('../services/failover-teardown').start(dep, req.user);
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
+        } catch (e) {
+            req.flash('error', `Suppression impossible : ${e.message}`);
+        }
+        return res.redirect(`/deployments/${dep.id}`);
+    }
 
     try {
         if (usesEnvironment(dep)) {
