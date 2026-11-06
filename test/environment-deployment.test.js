@@ -186,13 +186,16 @@ test('deletion closes pending candidates and only removes the selected environme
   expect((await service.reconcile(dep)).phase).toBe('configuring');
 });
 
-test('after a failover teardown, the ApplicationSet keeps ownership of its Application', async () => {
+test('after a failover teardown, the Application is removed only once its folder has left Git', async () => {
   production(); await service.reconcile(dep);
   for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
   deployments.updateOnboardingStatus(dep.id, 'deleting');
   await service.remove(dep, { afterFailoverTeardown: true });
   expect(trees.at(-1).tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/prod/') && file.sha === null)).toBe(true);
-  expect(kubernetes.cascadeDeleteArgocdApplication).not.toHaveBeenCalled();
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(1);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
+  const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
 });
 
 test('invalid environments and malformed image revisions fail before manifest generation', () => {
