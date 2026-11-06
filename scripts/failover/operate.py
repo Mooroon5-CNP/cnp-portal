@@ -123,9 +123,17 @@ def app_resources(app, apis, custom):
     return found
 
 
+def destructible(item):
+    """Crossplane peut détruire la ressource réelle (et non seulement l'observer)."""
+    policies = item.get('spec', {}).get('managementPolicies') or ['*']
+    return '*' in policies or 'Delete' in policies
+
+
 def released(item):
     """Une ressource peut être détruite par son retrait : politique Delete, aucune pause, protection des bases levée chez le fournisseur."""
     spec, actual = item.get('spec', {}), item.get('status', {}).get('atProvider', {})
+    if not destructible(item):
+        return True            # observation seule : retirer le manifeste ne détruit jamais la ressource réelle
     if spec.get('deletionPolicy') != 'Delete':
         return False
     if item.get('kind') == 'DatabaseInstance':
@@ -305,6 +313,11 @@ def execute(request):
                 # Une ressource en pause (par exemple après un test de panne) ne serait jamais détruite.
                 custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'],
                                                    {'metadata': {'annotations': {'crossplane.io/paused': None}}})
+                pending.append(item['metadata']['name'])
+            elif destructible(item) and item.get('spec', {}).get('deletionPolicy') != 'Delete':
+                # Git demande déjà Delete (commit de libération) ; Argo CD l'applique par vagues, et une vague en erreur (base
+                # arrêtée après une bascule, par exemple) retient les suivantes. L'appliquer ici reste conforme à Git.
+                custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'], {'spec': {'deletionPolicy': 'Delete'}})
                 pending.append(item['metadata']['name'])
             elif not released(item):
                 pending.append(item['metadata']['name'])

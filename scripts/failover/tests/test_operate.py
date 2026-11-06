@@ -551,6 +551,20 @@ class TeardownTests(unittest.TestCase):
         self.items['instances'][0]['status']['atProvider']['deletionProtection'] = False
         self.assertIs(self.run_action('teardown-released')['verified'], True)
 
+    def test_an_orphan_resource_is_set_to_delete_directly_when_argo_waves_are_stuck(self):
+        self.items = {'instances': [{'apiVersion': 'rds.aws.upbound.io/v1', 'kind': 'Service', 'metadata': {'name': 'svc'},
+            'spec': {'deletionPolicy': 'Orphan'}}]}
+        result = self.run_action('teardown-released')
+        self.assertEqual(result['pending'], ['svc'])
+        self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:], ('svc', {'spec': {'deletionPolicy': 'Delete'}}))
+
+    def test_an_observe_only_resource_is_never_set_to_delete(self):
+        self.items = {'instances': [{'apiVersion': 'x', 'kind': 'Bucket', 'metadata': {'name': 'historic'},
+            'spec': {'deletionPolicy': 'Orphan', 'managementPolicies': ['Observe']}}]}
+        result = self.run_action('teardown-released')
+        self.custom.patch_cluster_custom_object.assert_not_called()
+        self.assertIs(result['verified'], True)                              # et ne retient pas la suppression
+
     def test_an_orphan_resource_is_never_considered_released(self):
         self.assertFalse(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Orphan'}}))
         self.assertTrue(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Delete'}}))
