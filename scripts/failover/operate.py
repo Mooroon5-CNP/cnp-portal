@@ -273,10 +273,16 @@ def execute(request):
                 override = {'name': 'bootstrap', 'command': [script], 'environment': [{'name': 'CNP_OPERATION_CONFIG', 'value': compressed}]}
             else:
                 override = {'name': 'worker', 'command': [operation, '--app', app, '--execute']}
-            if operation in pending and operation not in READ_ONLY_OPERATIONS:
-                arn = pending[operation]
-            else:
-                nonce = uuid4().hex if operation in READ_ONLY_OPERATIONS else ''
+            arn = pending.get(operation) if operation not in READ_ONLY_OPERATIONS else None
+            if arn:
+                # Reprise : une tâche en cours ou réussie est réutilisée (jamais deux fois la même opération SQL). Une tâche
+                # terminée en échec ne l'est pas : relire son échec bloquerait toute reprise, d'où une nouvelle tentative numérotée.
+                previous = ecs.describe_tasks(cluster=variables['ecs_cluster_arn'], tasks=[arn])['tasks']
+                if previous and previous[0].get('lastStatus') == 'STOPPED' and any(c.get('exitCode') != 0 for c in previous[0].get('containers', [])):
+                    pending[operation + '#attempt'] = pending.get(operation + '#attempt', 0) + 1
+                    arn = None
+            if not arn:
+                nonce = uuid4().hex if operation in READ_ONLY_OPERATIONS else str(pending.get(operation + '#attempt') or '')
                 response = ecs.run_task(clientToken=hashlib.sha256((str(work) + operation + nonce).encode()).hexdigest(), cluster=variables['ecs_cluster_arn'], taskDefinition=actual['taskDefinitionArn'], launchType='FARGATE', count=1,
                     networkConfiguration={'awsvpcConfiguration': {'subnets': variables['public_subnet_ids'], 'securityGroups': [variables['ecs_security_group_id']], 'assignPublicIp': 'ENABLED'}},
                     overrides={'containerOverrides': [override]}, startedBy='cnp-portal-phase1')
