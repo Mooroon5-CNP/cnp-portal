@@ -158,7 +158,8 @@ class BootstrapOrchestrationTests(unittest.TestCase):
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'g', 'awslogs-stream-prefix': 'p'}}}]}}
         status = {'task/failed': 1, 'task/new': 0}
-        ecs.describe_tasks.side_effect = lambda cluster, tasks: {'tasks': [{'lastStatus': 'STOPPED', 'containers': [{'exitCode': status[tasks[0]]}]}]}
+        ecs.describe_tasks.side_effect = lambda cluster, tasks: {'tasks': [{'lastStatus': 'STOPPED', 'containers': [{'exitCode': status[tasks[0]]}]}]
+            if tasks[0] in status else [], 'failures': [] if tasks[0] in status else [{'reason': 'MISSING'}]}
         ecs.run_task.return_value = {'tasks': [{'taskArn': 'task/new'}]}
         logs.get_log_events.return_value = {'events': []}
         session = Mock()
@@ -171,6 +172,26 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         self.assertNotIn(first_token, tokens)                          # pas le jeton du lancement échoué
         saved = json.loads((work / 'task-requests.json').read_text())
         self.assertEqual((saved['prepare-target'], saved['prepare-target#attempt']), ('task/new', 1))
+
+    def test_a_task_ecs_no_longer_knows_is_retried_too(self):
+        work = Path(self.directory.name)
+        (work / 'task-requests.json').write_text(json.dumps({'prepare-source': 'task/forgotten'}))
+        sts, ecs, logs = Mock(), Mock(), Mock()
+        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
+            'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
+                {'options': {'awslogs-group': 'g', 'awslogs-stream-prefix': 'p'}}}]}}
+        ecs.describe_tasks.side_effect = lambda cluster, tasks: ({'tasks': [{'lastStatus': 'STOPPED', 'containers': [{'exitCode': 0}]}]}
+            if tasks[0] == 'task/new' else {'tasks': [], 'failures': [{'reason': 'MISSING'}]})
+        ecs.run_task.return_value = {'tasks': [{'taskArn': 'task/new'}]}
+        logs.get_log_events.return_value = {'events': []}
+        session = Mock()
+        session.client.side_effect = lambda name, **kwargs: {'sts': sts, 'ecs': ecs, 'logs': logs}[name]
+        with patch.dict(sys.modules, {'boto3': types.SimpleNamespace(Session=lambda **kwargs: session)}):
+            operator.execute({'app': 'weather-api', 'document': self.document, 'work': str(work), 'action': 'bootstrap',
+                'task_definition': 'cnp-failover-platform-bootstrap', 'packages': {'bootstrap-config.json': {'profile': 'recipe'}}})
+        saved = json.loads((work / 'task-requests.json').read_text())
+        self.assertEqual((saved['prepare-source'], saved['prepare-source#attempt']), ('task/new', 1))
 
     def test_operation_order_depends_on_the_profile(self):
         self.assertEqual(operator.bootstrap_operations('bootstrap', True),

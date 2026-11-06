@@ -277,8 +277,10 @@ def execute(request):
             if arn:
                 # Reprise : une tâche en cours ou réussie est réutilisée (jamais deux fois la même opération SQL). Une tâche
                 # terminée en échec ne l'est pas : relire son échec bloquerait toute reprise, d'où une nouvelle tentative numérotée.
+                # Une tâche qu'ECS ne connaît plus (oubliée environ une heure après son arrêt) n'a pas réussi : une réussite serait
+                # inscrite au journal des opérations terminées, qui la ferait sauter.
                 previous = ecs.describe_tasks(cluster=variables['ecs_cluster_arn'], tasks=[arn])['tasks']
-                if previous and previous[0].get('lastStatus') == 'STOPPED' and any(c.get('exitCode') != 0 for c in previous[0].get('containers', [])):
+                if not previous or previous[0].get('lastStatus') == 'STOPPED' and any(c.get('exitCode') != 0 for c in previous[0].get('containers', [])):
                     pending[operation + '#attempt'] = pending.get(operation + '#attempt', 0) + 1
                     arn = None
             if not arn:
