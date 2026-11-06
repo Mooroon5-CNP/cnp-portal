@@ -12,6 +12,9 @@ jest.mock('../src/services/environment-deployment', () => ({
     onboard: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
 }));
 
+jest.mock('../src/services/failover-operations', () => ({ createProfile: jest.fn() }));
+jest.mock('../src/services/failover-provisioning', () => ({ start: jest.fn() }));
+
 const request = require('supertest');
 const express = require('express');
 const path = require('path');
@@ -255,4 +258,46 @@ test('la mise en service du secours s’affiche comme un état, sans bouton ni a
     expect(response.text).not.toContain('circuit manager');
     expect(response.text).not.toContain('Approuver la production');
     expect(response.text).not.toContain('/releases//approve');
+});
+
+describe('confirmation d’une production avec failover', () => {
+    const operations = require('../src/services/failover-operations');
+    const provisioning = require('../src/services/failover-provisioning');
+    const failoverProd = () => {
+        const dep = deployments.create({ ...input, appPort: 8080, environment: 'prod', ownerUserId: managerId, failoverRequested: true });
+        deployments.updateOnboardingStatus(dep.id, 'ready');
+        return deployments.get(dep.id);
+    };
+    beforeEach(() => {
+        service.reconcile.mockResolvedValue({ phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true });
+        operations.createProfile.mockResolvedValue({ app: 'sample-app' });
+    });
+    test('seul un manager voit le bouton, et rien d’autre à remplir ni d’autre page', async () => {
+        const dep = failoverProd();
+        const manager = await request(app).get(`/deployments/${dep.id}`);
+        expect(manager.text).toContain('Confirmer le déploiement');
+        expect(manager.text).not.toContain('/failover?app=');
+        const dev = await request(app).get(`/deployments/${dep.id}`).set('X-role', 'dev');
+        expect(dev.text).not.toContain('Confirmer le déploiement');
+        expect(dev.text).toContain('en attente de la confirmation d’un manager');
+    });
+    test('la confirmation crée le profil PostgreSQL sans champ et lance la mise en service', async () => {
+        const dep = failoverProd();
+        const response = await request(app).post(`/deployments/${dep.id}/failover/confirm`);
+        expect(response.status).toBe(302);
+        expect(operations.createProfile).toHaveBeenCalledWith('sample-app', 'postgres', null, expect.objectContaining({ id: managerId }));
+        expect(provisioning.start).toHaveBeenCalledWith('sample-app', expect.objectContaining({ id: managerId }));
+    });
+    test('un développeur ne peut pas confirmer par appel direct', async () => {
+        const dep = failoverProd();
+        const response = await request(app).post(`/deployments/${dep.id}/failover/confirm`).set('X-role', 'dev');
+        expect(response.status).toBe(403);
+        expect(operations.createProfile).not.toHaveBeenCalled();
+    });
+    test('sans failover demandé, rien n’est créé', async () => {
+        const dep = create('prod');
+        await request(app).post(`/deployments/${dep.id}/failover/confirm`);
+        expect(operations.createProfile).not.toHaveBeenCalled();
+        expect(provisioning.start).not.toHaveBeenCalled();
+    });
 });

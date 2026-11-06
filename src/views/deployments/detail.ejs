@@ -159,6 +159,11 @@
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
+                      <% if (environmentStatus.failoverConfirm && can('k8s:manifest:approve')) { %>
+                        <form method="POST" action="/deployments/<%= deployment.id %>/failover/confirm" class="inline-form">
+                          <button type="submit" class="btn btn-primary">Confirmer le déploiement</button>
+                        </form>
+                      <% } %>
                       <% if (environmentStatus.phase === 'approval' && /^[a-f0-9]{40}$/.test(environmentStatus.revision || '') && !environmentStatus.failoverUrl) { %>
                         <p><a href="<%= environmentStatus.prUrl %>" target="_blank" rel="noreferrer">Consulter le candidat</a>. La validation se fait ici, dans le portail.</p>
                         <% if (can('k8s:manifest:approve')) { %>

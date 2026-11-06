@@ -343,6 +343,21 @@ router.post('/:id/resume-deployment', requireAuth, requirePermission('deployment
     return res.redirect(`/deployments/${dep.id}`);
 });
 
+// Production avec failover : la confirmation du manager crée le profil de secours (PostgreSQL, rien à remplir : la base,
+// ses identifiants et son schéma sont pris en charge par la plateforme) et lance la mise en service, qui s'enchaîne seule.
+router.post('/:id/failover/confirm', requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé.');
+    try {
+        if (!dep.failoverRequested || dep.environment !== 'prod') throw new Error('Aucun failover demandé pour ce déploiement.');
+        await require('../services/failover-operations').createProfile(dep.appName, 'postgres', null, req.user);
+        require('../services/failover-provisioning').start(dep.appName, req.user);
+        req.flash('success', 'Déploiement confirmé : la mise en service sur GCP et AWS, la réplication et la bascule se mettent en place.');
+    } catch (error) { req.flash('error', error.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
 // Retry only failed setup; never deploy, adopt or clean up resources via a GET.
 router.post('/:id/retry-configuration', requireAuth, requirePermission('deployments:deploy'), (req, res) => {
     const dep = deploymentModel.get(req.params.id);
