@@ -366,12 +366,19 @@ class ObserveTests(unittest.TestCase):
     """Les observations se lisent par l'API Kubernetes, à la version préférée du cluster (celle que prenait kubectl)."""
 
     def setUp(self):
-        from kubernetes.client import ApisApi, CustomObjectsApi, V1APIGroup, V1APIGroupList, V1GroupVersionForDiscovery
+        from kubernetes.client import (ApisApi, CustomObjectsApi, V1APIGroup, V1APIGroupList, V1GroupVersionForDiscovery,
+                                       V1APIResourceList, V1APIResource)
         self.apis = create_autospec(ApisApi, instance=True)
-        groups = [('sql.gcp.upbound.io', 'v1beta2'), ('rds.aws.upbound.io', 'v1beta3'), ('route53.aws.upbound.io', 'v1beta1')]
-        self.apis.get_api_versions.return_value = V1APIGroupList(groups=[V1APIGroup(name=name, versions=[], preferred_version=
-            V1GroupVersionForDiscovery(group_version=f'{name}/{version}', version=version)) for name, version in groups])
+        # Découverte réelle relevée le 6/11 : route53 préfère v1beta2, qui ne sert QUE les records ; les sondes sont en v1beta1.
+        groups = {'sql.gcp.upbound.io': {'v1beta2': ['databaseinstances'], 'v1beta1': ['databaseinstances']},
+                  'rds.aws.upbound.io': {'v1beta3': ['instances'], 'v1beta2': ['instances'], 'v1beta1': ['instances']},
+                  'route53.aws.upbound.io': {'v1beta2': ['records'], 'v1beta1': ['records', 'healthchecks']}}
+        version = lambda name, v: V1GroupVersionForDiscovery(group_version=f'{name}/{v}', version=v)
+        self.apis.get_api_versions.return_value = V1APIGroupList(groups=[V1APIGroup(name=name, versions=[version(name, v) for v in served],
+            preferred_version=version(name, next(iter(served)))) for name, served in groups.items()])
         self.custom = create_autospec(CustomObjectsApi, instance=True)
+        self.custom.get_api_resources.side_effect = lambda group, v: V1APIResourceList(group_version=f'{group}/{v}', resources=[
+            V1APIResource(name=plural, kind=plural, namespaced=False, singular_name=plural, verbs=['get']) for plural in groups[group][v]])
         self.objects = {}
         def get(group, version, plural, name):
             from kubernetes.client.exceptions import ApiException
@@ -387,6 +394,15 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(set(found), {'cloudsql', 'rds'})
         self.assertEqual(found['rds']['apiVersion'], 'rds.aws.upbound.io/v1beta3')          # pas celle écrite dans Git (v1beta2)
         self.assertEqual(found['cloudsql']['apiVersion'], 'sql.gcp.upbound.io/v1beta2')
+
+    def test_probes_are_read_where_they_are_served_not_in_the_group_preferred_version(self):
+        ok = {'kind': 'HealthCheck'}
+        self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {}, ('instances', 'weather-api-prod-db'): {},
+                        ('healthchecks', 'weather-api-failover'): ok, ('healthchecks', 'weather-api-failover-latch-http'): ok,
+                        ('healthchecks', 'weather-api-failover-primary-health'): ok}
+        found = operator.observe_objects('weather-api', self.apis, self.custom)
+        self.assertEqual(found['healthcheck']['apiVersion'], 'route53.aws.upbound.io/v1beta1')      # pas v1beta2 (records seulement)
+        self.assertEqual(set(found), {'cloudsql', 'rds', 'healthcheck', 'routing_latch', 'primary_healthcheck'})
 
     def test_a_missing_database_or_a_refused_read_stops(self):
         self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {'kind': 'DatabaseInstance'}}

@@ -108,11 +108,21 @@ def observe_objects(app, apis, custom):
     """Ressources Crossplane de l'app. Une base absente arrête ; une sonde absente (404) est normale avant les DNS.
     Toute autre erreur (droits, API) arrête aussi : « pas trouvé » n'est pas « n'existe pas »."""
     from kubernetes.client.exceptions import ApiException
-    preferred = {group.name: group.preferred_version.version for group in apis.get_api_versions().groups}
+    # Comme kubectl : la version est choisie ressource par ressource, la première qui la sert dans l'ordre de priorité du groupe.
+    # La version préférée du GROUPE ne suffit pas : route53 préfère v1beta2, qui ne sert que les records ; les sondes sont en v1beta1.
+    versions = {group.name: [v.version for v in group.versions] for group in apis.get_api_versions().groups}
+    served = {}
+    def version(group, plural):
+        for candidate in versions[group]:
+            if (group, candidate) not in served:
+                served[(group, candidate)] = {r.name for r in custom.get_api_resources(group, candidate).resources}
+            if plural in served[(group, candidate)]:
+                return candidate
+        raise ValueError('Ressource Crossplane non servie par le cluster')
     objects = {}
     for key, group, plural, name in OBSERVED:
         try:
-            objects[key] = custom.get_cluster_custom_object(group, preferred[group], plural, name.format(app=app))
+            objects[key] = custom.get_cluster_custom_object(group, version(group, plural), plural, name.format(app=app))
         except ApiException as error:
             if error.status != 404 or key in {'cloudsql', 'rds'}:
                 raise ValueError('Bases absentes ou inaccessibles' if key in {'cloudsql', 'rds'} else 'Lecture des sondes refusée') from None
