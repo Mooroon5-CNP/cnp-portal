@@ -26,7 +26,9 @@ const PLATFORM_STEPS = [
   ['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'schema-check'],
   ['operation', 'bootstrap'], ['operation', 'verify'],
   ['candidate', 'dns'], ['operation', 'observe'], ['candidate', 'worker'],
-  ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
+  // Argo CD lit Git toutes les ~3 min : sans cette observation, la configuration du worker partait 30 s après la fusion,
+  // avant que sa configuration existe dans DynamoDB (constaté le 06/11/2026 en mode automatique).
+  ['operation', 'observe'], ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
   ['operation', 'worker-resume'], ['operation', 'health'],
 ];
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];

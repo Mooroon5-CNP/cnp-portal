@@ -372,7 +372,8 @@ class ObserveTests(unittest.TestCase):
         # Découverte réelle relevée le 6/11 : route53 préfère v1beta2, qui ne sert QUE les records ; les sondes sont en v1beta1.
         groups = {'sql.gcp.upbound.io': {'v1beta2': ['databaseinstances'], 'v1beta1': ['databaseinstances']},
                   'rds.aws.upbound.io': {'v1beta3': ['instances'], 'v1beta2': ['instances'], 'v1beta1': ['instances']},
-                  'route53.aws.upbound.io': {'v1beta2': ['records'], 'v1beta1': ['records', 'healthchecks']}}
+                  'route53.aws.upbound.io': {'v1beta2': ['records'], 'v1beta1': ['records', 'healthchecks']},
+                  'cloudwatch.aws.upbound.io': {'v1beta1': ['metricalarms']}, 'dynamodb.aws.upbound.io': {'v1beta1': ['tableitems']}}
         version = lambda name, v: V1GroupVersionForDiscovery(group_version=f'{name}/{v}', version=v)
         self.apis.get_api_versions.return_value = V1APIGroupList(groups=[V1APIGroup(name=name, versions=[version(name, v) for v in served],
             preferred_version=version(name, next(iter(served)))) for name, served in groups.items()])
@@ -413,7 +414,7 @@ class ObserveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'sondes refusée'):
             operator.observe_objects('weather-api', self.apis, self.custom)
 
-    def observe(self, objects, expect_probes=False):
+    def observe(self, objects, expect_probes=False, expect_worker=False):
         sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
@@ -425,7 +426,7 @@ class ObserveTests(unittest.TestCase):
         parent.mkdir(exist_ok=True, parents=True)
         with tempfile.TemporaryDirectory(dir=parent) as work:
             return operator.execute({'app': app, 'work': work, 'action': 'observe', '_google': session, '_kubernetes': (self.apis, self.custom),
-                'expect_probes': expect_probes, 'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
+                'expect_probes': expect_probes, 'expect_worker': expect_worker, 'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
 
     def test_an_observation_proves_nothing_until_both_databases_are_ready(self):
         ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
@@ -441,6 +442,17 @@ class ObserveTests(unittest.TestCase):
         self.assertIs(self.observe(dbs, expect_probes=True)['verified'], False)
         probes = {('healthchecks', '{app}-failover'): ok, ('healthchecks', '{app}-failover-latch-http'): ok, ('healthchecks', '{app}-failover-primary-health'): ok}
         self.assertIs(self.observe({**dbs, **probes}, expect_probes=True)['verified'], True)
+
+    def test_after_the_worker_its_alarm_and_configuration_must_exist(self):
+        # Argo CD n'a pas encore appliqué le commit du worker : la configuration du worker ne doit pas partir.
+        ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
+        dbs = {('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok}
+        probes = {('healthchecks', '{app}-failover'): ok, ('healthchecks', '{app}-failover-latch-http'): ok, ('healthchecks', '{app}-failover-primary-health'): ok}
+        result = self.observe({**dbs, **probes}, expect_probes=True, expect_worker=True)
+        self.assertIs(result['verified'], False)
+        self.assertIn('worker_config', result['message'])
+        worker = {('metricalarms', 'cnp-failover-platform-{app}'): ok, ('tableitems', '{app}-failover-config'): ok}
+        self.assertIs(self.observe({**dbs, **probes, **worker}, expect_probes=True, expect_worker=True)['verified'], True)
 
     def test_the_action_reads_the_source_ca_from_the_cloud_sql_api(self):
         sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))

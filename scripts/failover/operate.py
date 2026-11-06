@@ -70,7 +70,9 @@ OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-
             ('rds', 'rds.aws.upbound.io', 'instances', '{app}-prod-db'),
             ('healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover'),
             ('routing_latch', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-latch-http'),
-            ('primary_healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-primary-health')]
+            ('primary_healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-primary-health'),
+            ('worker_alarm', 'cloudwatch.aws.upbound.io', 'metricalarms', 'cnp-failover-platform-{app}'),
+            ('worker_config', 'dynamodb.aws.upbound.io', 'tableitems', '{app}-failover-config')]
 # Noms des déclencheurs et de la table d'état, par régime (le pilote garde les siens).
 NAMES = {'pilot': {'state_table': 'cnp-failover-automation', 'rules': ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']},
          'platform': {'state_table': 'cnp-failover-platform-state', 'rules': ['cnp-failover-platform-alarm', 'cnp-failover-platform-retry']}}
@@ -143,7 +145,7 @@ def released(item):
     return True
 
 
-def observe_objects(app, apis, custom):
+def observe_objects(app, apis, custom, worker=False):
     """Ressources Crossplane de l'app. Une base absente arrête ; une sonde absente (404) est normale avant les DNS.
     Toute autre erreur (droits, API) arrête aussi : « pas trouvé » n'est pas « n'existe pas »."""
     from kubernetes.client.exceptions import ApiException
@@ -160,6 +162,8 @@ def observe_objects(app, apis, custom):
         raise ValueError('Ressource Crossplane non servie par le cluster')
     objects = {}
     for key, group, plural, name in OBSERVED:
+        if key.startswith('worker_') and not worker:
+            continue                                    # publiés en dernier : lus seulement par l'observation qui suit le worker
         try:
             objects[key] = custom.get_cluster_custom_object(group, version(group, plural), plural, name.format(app=app))
         except ApiException as error:
@@ -290,12 +294,13 @@ def execute(request):
         from prepare_failover_phase1 import credentials_profile
         credentials_profile(document['profile'], document['credentials'])
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
-        objects = observe_objects(app, apis, custom)
+        objects = observe_objects(app, apis, custom, worker=bool(request.get('expect_worker')))
         name = document['profile']['gcp'].get('database_instance') or f'{app}-prod-gcp-db'      # nom chez Google (génération)
         instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{name}', request.get('_google'))
         # Lire n'est pas prouver : les étapes suivantes exigent des bases prêtes (et, après les DNS, des sondes prêtes).
         # Une observation non prête fait attendre le parcours au lieu de le laisser passer.
         wanted = ['cloudsql', 'rds'] + (['healthcheck', 'routing_latch', 'primary_healthcheck'] if request.get('expect_probes') else [])
+        wanted += ['worker_alarm', 'worker_config'] if request.get('expect_worker') else []
         missing = [key for key in wanted if not ready(objects.get(key))]
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert'], 'verified': not missing,
                 'message': None if not missing else 'En attente : ' + ', '.join(missing) + ' pas encore prêt(s).'}

@@ -10,7 +10,7 @@ const manager = { id: 'provision-manager', role: 'manager' };
 const platform = { profile: { gcp: { sql_contract: { database: 'appdb' } }, aws: {}, automation: { regime: 'platform' } } };
 // Index des étapes du parcours plateforme, pour placer un test au bon endroit sans dépendre d'un numéro écrit à la main.
 const STEPS = ['initialize-secrets', 'databases', 'observe', 'bootstrap-roles', 'runtime', 'runtime-verify', 'schema-check',
-  'bootstrap', 'verify', 'dns', 'observe', 'worker', 'worker-configure', 'worker-verify', 'verify', 'worker-resume', 'health'];
+  'bootstrap', 'verify', 'dns', 'observe', 'worker', 'observe', 'worker-configure', 'worker-verify', 'verify', 'worker-resume', 'health'];
 const at = (name, after = -1) => STEPS.findIndex((value, index) => index > after && value === name);
 let candidates, tasks, serial;
 beforeEach(() => {
@@ -156,7 +156,7 @@ test('le parcours complet, sans aucun plan ni revue manuelle, ne se termine qu�
   expect(profiles.autoApprove).toHaveBeenCalledTimes(4);
   expect(workflow.get('weather-api').state).toBe('completed');
   expect(tasks.map(value => value.action)).toEqual(['initialize-secrets', 'observe', 'bootstrap-roles', 'runtime-verify', 'schema-check',
-    'bootstrap', 'verify', 'observe', 'worker-configure', 'worker-verify', 'verify', 'worker-resume', 'health']);
+    'bootstrap', 'verify', 'observe', 'observe', 'worker-configure', 'worker-verify', 'verify', 'worker-resume', 'health']);
   expect(candidates.map(value => value.stage)).toEqual(['databases', 'runtime', 'dns', 'worker']);
   expect(tasks.some(value => value.action.endsWith('-plan'))).toBe(false);
   const order = name => Number((tasks.find(value => value.action === name) || candidates.find(value => value.stage === name)).id.split('-')[1]);
