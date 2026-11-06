@@ -35,9 +35,13 @@ function start(dep, user) {
   if (!user?.id) throw new Error('Utilisateur requis.');
   if (!profiles.enabled(dep)) throw new Error('Aucun failover à supprimer pour ce déploiement.');
   schema();
-  if (get(dep.appName)) return get(dep.appName);
+  // Une suppression en cours est reprise telle quelle ; une suppression terminée (app redéployée depuis sous le même nom)
+  // laisse place à une nouvelle. Sinon le bouton ne faisait plus rien (constaté le 06/11/2026).
+  const previous = get(dep.appName);
+  if (previous && previous.state !== 'completed') return previous;
   const now = new Date().toISOString();
   db.transaction(() => {
+    db.prepare("DELETE FROM failover_teardown WHERE app=? AND state='completed'").run(dep.appName);
     // La surveillance de santé de la mise en service s'arrête : l'application va disparaître.
     try { db.prepare('DELETE FROM failover_provisioning WHERE app=?').run(dep.appName); } catch (_) { /* table absente */ }
     db.prepare(`INSERT INTO failover_teardown (app,deployment_id,requested_by,state,started_at,step_started_at,updated_at)

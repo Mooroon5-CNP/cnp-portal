@@ -101,3 +101,13 @@ test('rien n’est lancé pour une application sans failover', () => {
   require('../src/services/environment-failover').enabled.mockReturnValueOnce(false);
   expect(() => teardown.start(dep, user)).toThrow('Aucun failover');
 });
+
+test('une app redéployée puis supprimée à nouveau repart d’une suppression neuve', () => {
+  const first = teardown.start(dep, user);
+  db.prepare("UPDATE failover_teardown SET state='completed',step=6 WHERE app=?").run(dep.appName);
+  const second = teardown.start(dep, user);
+  expect(second.state).toBe('running');
+  expect(second.step).toBe(0);
+  expect(teardown.start(dep, user).started_at).toBe(second.started_at);  // une suppression en cours est reprise, pas relancée
+  expect(first.app).toBe(second.app);
+});
