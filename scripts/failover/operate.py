@@ -205,12 +205,18 @@ def execute(request):
         expected = next(value for value in request['packages']['worker-config.json']['applications'] if value['app'] == app)
         configured = control.get('config_hash') == automation.config_hash(expected) and control.get('config_hash') == replication.get('config_hash')
         triggers_ready = bool(request.get('task_definition'))
+        # Le portail connaît la tâche par son nom (régime plateforme) ou par un ARN de révision (pilote) : comparer des ARN de
+        # révision, celui que les règles lancent réellement.
+        try:
+            expected_task = client('ecs').describe_task_definition(taskDefinition=request['task_definition'])['taskDefinition']['taskDefinitionArn'] if triggers_ready else None
+        except Exception:
+            expected_task, triggers_ready = None, False
         for rule in names['rules']:
             events = client('events')
             try:
                 enabled = events.describe_rule(Name=rule)['State'] == 'ENABLED'
                 targets = events.list_targets_by_rule(Rule=rule)['Targets']
-                triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == request.get('task_definition') for value in targets)
+                triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == expected_task for value in targets)
             except Exception: triggers_ready = False
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
         return {'verified': healthy and configured and triggers_ready and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,

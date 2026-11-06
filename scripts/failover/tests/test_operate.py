@@ -470,7 +470,9 @@ class HealthNamesTests(unittest.TestCase):
         clients['route53'].list_resource_record_sets.return_value = {'ResourceRecordSets': []}
         clients['dynamodb'].get_item.return_value = {}
         clients['events'].describe_rule.return_value = {'State': 'ENABLED'}
-        clients['events'].list_targets_by_rule.return_value = {'Targets': []}
+        arn = 'arn:aws:ecs:eu-west-3:804210702561:task-definition/cnp-failover-platform-worker:2'
+        clients['ecs'].describe_task_definition.return_value = {'taskDefinition': {'taskDefinitionArn': arn}}
+        clients['events'].list_targets_by_rule.return_value = {'Targets': [{'EcsParameters': {'TaskDefinitionArn': arn}}]}
         fake_boto = types.SimpleNamespace(client=lambda name, **kwargs: clients[name])
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
         parent.mkdir(exist_ok=True, parents=True)
@@ -493,3 +495,5 @@ class HealthNamesTests(unittest.TestCase):
                 self.assertEqual({call.kwargs['TableName'] for call in clients['dynamodb'].get_item.call_args_list}, {table})
                 rules = [call.kwargs['Name'] for call in clients['events'].describe_rule.call_args_list]
                 self.assertEqual(rules, [rule + 'alarm', rule + 'retry'])
+                # Les règles lancent la révision active, que le portail connaît seulement par le nom de la tâche.
+                self.assertTrue(result['triggers_ready'])
