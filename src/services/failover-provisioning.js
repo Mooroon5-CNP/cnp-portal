@@ -40,9 +40,7 @@ const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'],
 // puis vérifiée avant la reprise du worker.
 const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'worker-pause'], ['operation', 'resync'],
   ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
-// TEMPORAIRE : la reconstruction exige l'image du bootstrap qui connaît « resync-schema ». Retirer ce réglage (et toujours
-// prendre SQL_UPDATE_STEPS pour une app avec base) une fois cette image appliquée par la pile plateforme.
-const schemaSync = () => ['1', 'true'].includes(String(process.env.CNP_FAILOVER_SCHEMA_SYNC || '').toLowerCase());
+
 const UPDATE_CHECK_MS = 120000;
 const lastUpdateCheck = new Map();
 const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
@@ -61,7 +59,7 @@ function schema() {
   }
 }
 const stepsOf = (row, document) => row.phase !== 'update' ? stepsFor(document)
-  : document.profile.mode !== 'stateless' && schemaSync() ? SQL_UPDATE_STEPS : UPDATE_STEPS;
+  : document.profile.mode === 'stateless' ? UPDATE_STEPS : SQL_UPDATE_STEPS;
 // Révision de production à déployer, ou null : seulement sur une app saine que GCP sert (une mise à jour pendant que le
 // secours AWS est actif attendra le retour sur GCP), au plus une lecture GitHub toutes les 2 min.
 async function pendingRevision(app, health) {

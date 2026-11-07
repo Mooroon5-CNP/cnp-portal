@@ -232,7 +232,8 @@ describe('mise à jour d’une app en service', () => {
     deployments.get.mockReturnValue({ id: 'dep', appName: 'weather-api', environment: 'prod' });
     profiles.runtimeRevision.mockReturnValue('a'.repeat(40));
   }
-  test('une nouvelle CI de production republie les runtimes, vérifie les deux côtés puis revient en surveillance', async () => {
+  test('une app sans base republie ses runtimes, les vérifie puis revient en service', async () => {
+    profiles.profileFor.mockReturnValue({ profile: { mode: 'stateless', gcp: {}, aws: {} } });
     inService();
     ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
     let row = await tick();
@@ -248,9 +249,8 @@ describe('mise à jour d’une app en service', () => {
     expect(row.message).toContain('Mise à jour déployée');
     expect(workflow.progress('weather-api').phase).toBe('provision');
   });
-  test('avec la reconstruction du schéma activée, une app avec base met le worker en pause et reconstruit la copie', async () => {
-    process.env.CNP_FAILOVER_SCHEMA_SYNC = 'true';
-    try {
+  test('une app avec base met le worker en pause et reconstruit sa copie si la migration a changé le schéma', async () => {
+    {
       inService();
       ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
       await tick(); await tick();                                          // passage en mise à jour, puis runtime publié
@@ -262,7 +262,7 @@ describe('mise à jour d’une app en service', () => {
       }
       expect(actions).toEqual(['runtime-verify', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
       expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
-    } finally { delete process.env.CNP_FAILOVER_SCHEMA_SYNC; }
+    }
   });
   test('aucune mise à jour quand la révision est déjà servie, ou quand le secours AWS est actif', async () => {
     inService();
