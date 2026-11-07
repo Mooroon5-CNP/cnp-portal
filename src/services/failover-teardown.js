@@ -106,10 +106,12 @@ async function commit(action, row) {
       for (const [name, value] of Object.entries(files)) result[`${dir}/${name}`] = JSON.stringify(release(value), null, 2) + '\n';
       return result;
     }
-    // Retrait : la liste des ressources se vide (Argo CD les élague, Crossplane détruit chez le fournisseur), la route partagée
-    // de l'application part dans le même commit pour libérer son service GCP.
+    // Retrait : le dossier entier sort de Git (l'opérateur supprime ensuite les ressources lui-même), la route partagée de
+    // l'application part dans le même commit pour libérer son service GCP. Le dossier part dès maintenant, pas à la fin :
+    // l'ApplicationSet ne relit Git que toutes les ~3 min, et une Application retirée 2 s après le dossier a été recréée
+    // aussitôt, puis jamais supprimée (create-update), le 07/11/2026. La destruction des bases laisse ce délai.
     for (const name of Object.keys(files)) result[`${dir}/${name}`] = null;
-    if (kustomization) result[`${dir}/kustomization.yaml`] = yaml.dump({ ...kustomization, resources: [] });
+    if (kustomization) result[`${dir}/kustomization.yaml`] = null;
     const map = await (async () => {
       try {
         const { data } = await api.request('GET /repos/{owner}/{repo}/contents/{path}', { ...repo, path: routing.ROUTING_PATH, ref: head });

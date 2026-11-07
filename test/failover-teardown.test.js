@@ -75,7 +75,7 @@ test('le parcours complet libère, retire, attend la disparition, nettoie puis o
   row = await step();                                                    // retrait publié
   const removed = commits[1].files;
   expect(removed['apps/weather-api/crossplane/prod/sql.yaml']).toBeNull();
-  expect(yaml.load(removed['apps/weather-api/crossplane/prod/kustomization.yaml']).resources).toEqual([]);
+  expect(removed['apps/weather-api/crossplane/prod/kustomization.yaml']).toBeNull();          // le dossier entier sort de Git
   expect(yaml.load(removed['platform/application-routing/urlmap.yaml']).removedFor).toBe('weather-api-prod');
   row = await step(); expect(tasks.at(-1).action).toBe('teardown-gone'); succeed();
   row = await step(); row = await step(); expect(tasks.at(-1).action).toBe('teardown-cleanup'); succeed();
