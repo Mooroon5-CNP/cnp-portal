@@ -198,4 +198,4 @@ function recoverInterrupted() {
   db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE state='running'")
     .run(JSON.stringify({ error: 'Portail redémarré pendant l’opération. Reprendre la tâche suivie.' }));
 }
-module.exports = { list, start, retry, createProfile, recoverInterrupted };
+module.exports = { list, start, retry, createProfile, recoverInterrupted, run };

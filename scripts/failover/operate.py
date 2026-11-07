@@ -251,6 +251,14 @@ def execute(request):
     import re
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,38}[a-z0-9]', app):
         raise ValueError('Application invalide')
+    if action in {'app-sql-secrets', 'app-sql-cleanup'}:
+        # Base Cloud SQL d'un déploiement sans failover (dev) : mot de passe de l'app, créé avant publication, retiré à la suppression.
+        import platform_secrets
+        kube, gsm = request.get('_clients') or (platform_secrets.Kubernetes.from_environment(request.get('kube_context')),
+                                                platform_secrets.SecretManager.from_environment())
+        if action == 'app-sql-secrets':
+            return platform_secrets.app_sql_initialize(app, request['environment'], request['service_account'], kube, gsm)
+        return platform_secrets.app_sql_remove(app, request['environment'], kube, gsm)
     document = request['document']
     if document['profile']['gcp']['app_name'] != app or document['profile']['aws']['app_name'] != app:
         raise ValueError('Identité du profil différente')

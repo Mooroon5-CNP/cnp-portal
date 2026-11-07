@@ -153,6 +153,37 @@ function manifests(dep, revision) {
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
   }
+  if (dep.database === 'postgres') {
+    // Base PostgreSQL de l'app (dev, sans failover). Cloud Run s'y connecte par la connexion Cloud SQL intégrée (socket
+    // /cloudsql/<instance>, rôle roles/cloudsql.client du compte runtime) : IP publique SANS aucun réseau autorisé, seul ce
+    // connecteur authentifié et chiffré l'atteint. Le mot de passe est créé avant publication (Secret Kubernetes lu par
+    // Crossplane, copie Secret Manager lue par Cloud Run). Supprimée avec l'app : aucune protection, deletionPolicy Delete.
+    const instance = `${name}-db-${createHash('sha256').update(dep.id).digest('hex').slice(0, 6)}`;   // nom bloqué ~1 semaine après suppression
+    const secret = { name: `cnp-${name}-sql`, namespace: 'crossplane-system', key: 'runtime-password' };
+    const wave = (object, value) => { object.metadata.annotations['argocd.argoproj.io/sync-wave'] = String(value); return object; };
+    const sqlInstance = wave(resource('sql.gcp.upbound.io/v1beta2', 'DatabaseInstance', `${name}-db`, {
+      project: config.gcp.project, region: config.gcp.region, databaseVersion: 'POSTGRES_15', deletionProtection: false,
+      settings: { edition: 'ENTERPRISE', tier: 'db-f1-micro', availabilityType: 'ZONAL', diskSize: 10, diskAutoresize: true,
+        deletionProtectionEnabled: false, backupConfiguration: { enabled: false },
+        ipConfiguration: { ipv4Enabled: true, sslMode: 'ENCRYPTED_ONLY' } } }), 0);
+    sqlInstance.metadata.annotations['crossplane.io/external-name'] = instance;
+    const sqlDatabase = wave(resource('sql.gcp.upbound.io/v1beta1', 'Database', `${name}-db-app`,
+      { project: config.gcp.project, instanceRef: { name: `${name}-db` } }), 1);
+    sqlDatabase.metadata.annotations['crossplane.io/external-name'] = 'appdb';
+    const sqlUser = wave(resource('sql.gcp.upbound.io/v1beta2', 'User', `${name}-db-user`,
+      { project: config.gcp.project, type: 'BUILT_IN', instanceRef: { name: `${name}-db` }, passwordSecretRef: secret }), 1);
+    sqlUser.metadata.annotations['crossplane.io/external-name'] = 'cnp_runtime';
+    for (const object of [sqlInstance, sqlDatabase, sqlUser]) object.spec.deletionPolicy = 'Delete';
+    files[`${path}/cloudsql.yaml`] = [sqlInstance, sqlDatabase, sqlUser].map(object => yaml.dump(object)).join('---\n');
+    resources.push('cloudsql.yaml');
+    const connection = `${config.gcp.project}:${config.gcp.region}:${instance}`;
+    template.volumes = [...(template.volumes || []), { name: 'cloudsql', cloudSqlInstance: { instances: [connection] } }];
+    container.volumeMounts = [...(container.volumeMounts || []), { name: 'cloudsql', mountPath: '/cloudsql' }];
+    container.env.push({ name: 'DB_HOST', value: `/cloudsql/${connection}` }, { name: 'DB_PORT', value: '5432' },
+      { name: 'DB_NAME', value: 'appdb' }, { name: 'DB_USER', value: 'cnp_runtime' }, { name: 'DB_ENGINE', value: 'postgres' },
+      { name: 'DB_PASSWORD', valueSource: { secretKeyRef: { secret: `${name}-db-password`, version: 'latest' } } });
+    files[`${path}/cloudrun-claim.yaml`] = yaml.dump(claim);           // réécrit avec le socket et les variables de la base
+  }
   files[`${path}/kustomization.yaml`] = yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources });
   return files;
 }
@@ -176,10 +207,19 @@ function current(dep) {
     && releases.get(dep.id, '__registration__')?.state === 'registered';
 }
 
+// Mot de passe de la base Cloud SQL d'une app de dev : créé (une seule fois) avant toute publication, car Crossplane le lit pour
+// créer l'utilisateur et Cloud Run dans Secret Manager. Par l'opérateur Python (clients Kubernetes et Secret Manager).
+async function databaseSecrets(dep, action) {
+  if (dep.database !== 'postgres' || azure.isAzure(dep)) return null;
+  const operator = require('./failover-operations');
+  return operator.run({ action, app: dep.appName, environment: dep.environment, service_account: config.gcp.cloudRunSa });
+}
+
 async function prepareOnboarding(dep) {
   validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
   if (azure.isAzure(dep)) azure.assertConfigured();
+  await databaseSecrets(dep, 'app-sql-secrets');
   const api = await github.getInstallationOctokit();
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
   const destination = target();
@@ -463,7 +503,7 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
   const { path, name } = identity(dep);
   const onAzure = azure.isAzure(dep);
   const files = {};
-  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
   for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
@@ -511,6 +551,9 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
   // portail de la retirer, une fois le dossier sorti de Git. Retirée avant, alors que le dossier existait encore, le contrôleur
   // ne l'a plus recréée au redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
   if (afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
+  // Base Cloud SQL de dev : ses manifestes sont retirés avec le reste (vagues Argo : Cloud Run, puis base et utilisateur, puis
+  // instance) ; ses deux secrets partent ensuite.
+  await databaseSecrets(dep, 'app-sql-cleanup');
   // Secrets et workflow restent partagés avec l'autre environnement.
 }
 

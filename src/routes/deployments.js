@@ -274,6 +274,12 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         req.flash('error', 'Le failover GCP → AWS nécessite une production GCP sans stockage SQLite local.');
         return res.redirect('/deployments');
     }
+    // Base PostgreSQL Cloud SQL sans failover : dev GCP seulement pour l'instant (la prod avec base passe par le failover).
+    const database = req.body.database === 'postgres' ? 'postgres' : null;
+    if (database && (environment !== 'dev' || (targetCluster && targetCluster !== 'gcp') || hasPersistentStorage || failoverRequested)) {
+        req.flash('error', 'La base PostgreSQL (Cloud SQL) est proposée en dev sur GCP, sans stockage SQLite.');
+        return res.redirect('/deployments');
+    }
     const port = Number(appPort || 8080);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         req.flash('error', 'Le port applicatif doit être compris entre 1 et 65535.');
@@ -319,6 +325,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             targetCluster: targetCluster || 'gcp',
             environment,
             failoverRequested,
+            database,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");

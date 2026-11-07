@@ -203,6 +203,14 @@
                       <div class="form-hint">Monte un bucket GCS sur <code>/data</code> — les données survivent aux redémarrages. Le bucket est créé automatiquement par la plateforme.</div>
                     </div>
 
+                    <div class="form-group">
+                      <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:500;">
+                        <input type="checkbox" name="database" value="postgres" style="width:18px;height:18px;accent-color:#6366f1;">
+                        Base PostgreSQL (Cloud SQL)
+                      </label>
+                      <div class="form-hint">Dev sur GCP. La plateforme crée une base PostgreSQL 15 dédiée et la donne à l’application par <code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code>, <code>DB_USER</code>, <code>DB_PASSWORD</code>. Supprimée avec l’application.</div>
+                    </div>
+
                       <div class="form-group"><label><input type="checkbox" name="failoverRequested"> Activer le failover GCP → AWS</label><div class="form-hint">Production uniquement. L’image est publiée sur les deux clouds. Un manager prépare et valide le runtime secondaire et, si nécessaire, la réplication PostgreSQL. Le statut reste en préparation jusqu’aux vérifications.</div></div>
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>

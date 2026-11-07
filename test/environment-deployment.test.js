@@ -9,6 +9,7 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
 jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), removeApplicationSetPath: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
+jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 
 const yaml = require('js-yaml');
@@ -238,6 +239,41 @@ test('deleting an environment takes its path out of the ApplicationSet list, and
   await service.remove(dep);
   expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-dev', 'apps/pixelcam/crossplane/dev');
   expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledTimes(1);
+});
+
+test('a dev app with a PostgreSQL database gets its own Cloud SQL, reached through the Cloud Run socket', () => {
+  const files = service.manifests({ ...dep, database: 'postgres' }, revision);
+  const path = 'apps/pixelcam/crossplane/dev';
+  expect(yaml.load(files[`${path}/kustomization.yaml`]).resources).toContain('cloudsql.yaml');
+  const [instance, database, user] = yaml.loadAll(files[`${path}/cloudsql.yaml`]);
+  expect(instance.spec.forProvider.settings.ipConfiguration).toEqual({ ipv4Enabled: true, sslMode: 'ENCRYPTED_ONLY' });   // aucun réseau autorisé
+  expect([instance.spec.forProvider.deletionProtection, instance.spec.deletionPolicy]).toEqual([false, 'Delete']);
+  expect(database.metadata.annotations['crossplane.io/external-name']).toBe('appdb');
+  expect(user.spec.forProvider.passwordSecretRef).toEqual({ name: 'cnp-pixelcam-dev-sql', namespace: 'crossplane-system', key: 'runtime-password' });
+  expect([instance, database, user].map(object => object.metadata.annotations['argocd.argoproj.io/sync-wave'])).toEqual(['0', '1', '1']);
+  const run = yaml.load(files[`${path}/cloudrun-claim.yaml`]).spec.forProvider.template;
+  const connection = `test-project:europe-west9:${instance.metadata.annotations['crossplane.io/external-name']}`;
+  expect(run.volumes).toContainEqual({ name: 'cloudsql', cloudSqlInstance: { instances: [connection] } });
+  const env = Object.fromEntries(run.containers[0].env.map(entry => [entry.name, entry.value ?? entry.valueSource]));
+  expect(env).toMatchObject({ DB_HOST: `/cloudsql/${connection}`, DB_NAME: 'appdb', DB_USER: 'cnp_runtime',
+    DB_PASSWORD: { secretKeyRef: { secret: 'pixelcam-dev-db-password', version: 'latest' } } });
+  expect(JSON.stringify(files)).not.toMatch(/runtime-password"?:\s*"[A-Za-z0-9_-]{20,}/);              // aucune valeur secrète
+  expect(service.manifests(dep, revision)[`${path}/cloudsql.yaml`]).toBeUndefined();                 // sans base : rien
+});
+
+test('the database password is created before onboarding and removed with the app', async () => {
+  const operator = require('../src/services/failover-operations');
+  const withDatabase = deployments.create({ environment: 'dev', appName: 'sqlapp', appPort: 8080, githubRepoUrl: 'https://github.com/team/sqlapp',
+    ownerUserId: 'owner', database: 'postgres' });
+  expect(withDatabase.database).toBe('postgres');
+  await service.onboard(withDatabase).catch(() => {});
+  expect(operator.run).toHaveBeenCalledWith({ action: 'app-sql-secrets', app: 'sqlapp', environment: 'dev', service_account: 'run@test' });
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'sqlapp', environments: ['dev'] }] }));
+  releases.save(withDatabase.id, '__registration__', releases.acquire(withDatabase.id, '__registration__', 0), 'registered');
+  deployments.updateOnboardingStatus(withDatabase.id, 'deleting');
+  await service.remove(deployments.get(withDatabase.id));
+  expect(operator.run).toHaveBeenCalledWith({ action: 'app-sql-cleanup', app: 'sqlapp', environment: 'dev', service_account: 'run@test' });
+  expect(() => deployments.create({ environment: 'dev', appName: 'bad', githubRepoUrl: 'x', ownerUserId: 'o', database: 'mysql' })).toThrow('Base inconnue');
 });
 
 test('an expired lease cannot overwrite the state owned by another worker', () => {
