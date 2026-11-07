@@ -589,6 +589,27 @@ class TeardownTests(unittest.TestCase):
         self.assertFalse(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Orphan'}}))
         self.assertTrue(operator.released({'kind': 'Service', 'spec': {'deletionPolicy': 'Delete'}}))
 
+    def test_cloud_sql_children_are_released_only_when_their_instance_is_gone(self):
+        child = {'apiVersion': 'sql.gcp.upbound.io/v1beta1', 'kind': 'Database',
+                 'metadata': {'name': 'app-db', 'deletionTimestamp': 'x'}, 'spec': {}}
+        def run(status):
+            sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+            import test_worker_phase1 as fixtures
+            profile = fixtures.platform_profile()
+            session = Mock()
+            session.get.return_value = types.SimpleNamespace(status_code=status)
+            parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+            parent.mkdir(exist_ok=True, parents=True)
+            with tempfile.TemporaryDirectory(dir=parent) as work:
+                return operator.execute({'app': profile['gcp']['app_name'], 'work': work, 'action': 'teardown-gone',
+                    '_kubernetes': (self.apis, self.custom), '_google': session,
+                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
+        self.items = {'databaseinstances': [child]}                       # le faux cluster ne sert que ce pluriel SQL
+        self.assertIs(run(403)['verified'], False)                         # un refus ne prouve rien
+        self.custom.patch_cluster_custom_object.assert_not_called()
+        self.assertIs(run(404)['verified'], True)                          # instance disparue : la base ne peut plus exister
+        self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:], ('app-db', {'metadata': {'finalizers': None}}))
+
     def test_gone_only_when_nothing_is_left(self):
         self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}},
                                     {'kind': 'Instance', 'metadata': {'name': 'going', 'deletionTimestamp': 'x'}, 'spec': {}}]}

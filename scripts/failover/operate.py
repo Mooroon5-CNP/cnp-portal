@@ -79,14 +79,19 @@ NAMES = {'pilot': {'state_table': 'cnp-failover-automation', 'rules': ['cnp-fail
 TASK_FAMILY = r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?|cnp-failover-platform-(bootstrap|worker)'
 
 
-def google_get(url, session=None):
-    """Lecture d'une API Google avec les identifiants par défaut de l'environnement (Workload Identity dans le cluster)."""
+def google_session(session=None):
+    """Identifiants par défaut de l'environnement (Workload Identity dans le cluster)."""
     if session is None:
         import google.auth
         from google.auth.transport.requests import AuthorizedSession
         credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
         session = AuthorizedSession(credentials)
-    response = session.get(url, timeout=30)
+    return session
+
+
+def google_get(url, session=None):
+    """Lecture d'une API Google ; tout autre statut que 200 est un refus."""
+    response = google_session(session).get(url, timeout=30)
     if response.status_code != 200:
         raise ValueError('Lecture GCP refusée ; vérifier les droits de l’identité du portail.')
     return response.json()
@@ -314,6 +319,19 @@ def execute(request):
             for group, version, plural, item in items:
                 if not item['metadata'].get('deletionTimestamp'):
                     custom.delete_cluster_custom_object(group, version, plural, item['metadata']['name'])
+            # Base ou utilisateur Cloud SQL dont l'instance a disparu avant eux : Google répond 403 (et non 404) sur leur
+            # lecture, Crossplane ne peut jamais confirmer leur suppression (constaté le 07/11/2026). Seul un 404 explicite de
+            # l'instance prouve qu'ils n'existent plus ; leur ressource Crossplane est alors libérée.
+            children = [entry for entry in items if entry[0] == 'sql.gcp.upbound.io' and entry[3]['kind'] in {'Database', 'User'}
+                        and entry[3]['metadata'].get('deletionTimestamp')]
+            if children:
+                name = document['profile']['gcp'].get('database_instance') or f'{app}-prod-gcp-db'
+                url = f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{name}'
+                if google_session(request.get('_google')).get(url, timeout=30).status_code == 404:
+                    for group, version, plural, item in children:
+                        custom.patch_cluster_custom_object(group, version, plural, item['metadata']['name'],
+                                                           {'metadata': {'finalizers': None}})
+                    items = [entry for entry in items if entry not in children]
             remaining = sorted(f"{item['kind']}/{item['metadata']['name']}" for _, _, _, item in items)
             return {'verified': not remaining, 'remaining': remaining,
                     'message': None if not remaining else f'En attente de la destruction de {len(remaining)} ressource(s).'}
