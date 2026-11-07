@@ -47,7 +47,10 @@ class UserAction(ValueError):
 # Lectures sans effet : jamais de reprise d'une ancienne tâche (son résultat serait périmé), un nouveau jeton à chaque fois.
 READ_ONLY_OPERATIONS = {'inspect-source'}
 # Actions exécutées par la tâche d'initialisation SQL (image bootstrap) ; les autres passent par celle du worker.
-BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff'}
+BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff', 'failback-sync', 'failback-reset'}
+# Opérations du worker lancées par le portail (tâche du worker, une opération par action).
+WORKER_ACTIONS = {'worker-configure': 'configure', 'worker-verify': 'status', 'worker-resume': 'resume', 'worker-pause': 'pause',
+                  'worker-failback-route': 'failback-route', 'worker-rearm': 'rearm'}
 
 
 def bootstrap_operations(action, introspected):
@@ -60,7 +63,9 @@ def bootstrap_operations(action, introspected):
         return (['prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'] if introspected
                 else ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
     return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication'],
-            'resync': ['resync-schema'], 'schema-diff': ['monitor']}[action]
+            'resync': ['resync-schema'], 'schema-diff': ['monitor'], 'failback-sync': ['failback-sync'],
+            # Retour vers GCP : la copie AWS est vidée puis reconstruite depuis GCP par l'initialisation habituelle.
+            'failback-reset': ['failback-reset', *bootstrap_operations('bootstrap', True)]}[action]
 
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
@@ -176,6 +181,47 @@ def observe_objects(app, apis, custom, worker=False):
             if error.status != 404 or key in {'cloudsql', 'rds'}:
                 raise ValueError('Bases absentes ou inaccessibles' if key in {'cloudsql', 'rds'} else 'Lecture des sondes refusée') from None
     return objects
+
+
+def gcp_availability(app, document, request, control):
+    """Voyant « GCP disponible » d'une app servie par AWS : lectures seules, chacune par son API.
+
+    GCP est disponible pour un retour quand sa base tourne de nouveau (Cloud SQL démarrée, ressource Crossplane reprise et
+    prête), que son runtime Cloud Run est prêt, et que le worker l'a jointe à travers le tunnel et clôturée (GCP_FENCED) :
+    c'est la seule preuve que la base privée répond depuis AWS. Une lecture refusée rend le voyant éteint, jamais allumé.
+    """
+    checks = {'cloud_sql': False, 'crossplane': False, 'cloud_run': False, 'fenced': control.get('source_fence') == 'GCP_FENCED'}
+    try:
+        name = document['profile']['gcp'].get('database_instance') or f'{app}-prod-gcp-db'
+        instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{name}', request.get('_google'))
+        checks['cloud_sql'] = instance.get('state') == 'RUNNABLE' and (instance.get('settings') or {}).get('activationPolicy') == 'ALWAYS'
+    except Exception:
+        pass
+    try:
+        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
+        checks['cloud_run'] = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and not cloudrun.get('reconciling', False)
+    except Exception:
+        pass
+    try:
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        resource = observe_objects(app, apis, custom)['cloudsql']
+        checks['crossplane'] = not (resource['metadata'].get('annotations') or {}).get('crossplane.io/paused') and ready(resource)
+    except Exception:
+        pass
+    missing = [key for key, value in checks.items() if not value]
+    labels = {'cloud_sql': 'base Cloud SQL arrêtée', 'crossplane': 'ressource Crossplane de la base en pause ou non prête',
+              'cloud_run': 'Cloud Run non prêt', 'fenced': 'base GCP pas encore jointe et clôturée par le worker'}
+    return {**checks, 'available': not missing,
+            'message': 'GCP disponible : le retour peut être lancé.' if not missing else 'GCP indisponible : ' + ', '.join(labels[key] for key in missing) + '.'}
+
+
+def worker_control(app, document):
+    import boto3
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+    from prepare_failover_phase1 import regime
+    item = boto3.client('dynamodb', region_name='eu-west-3').get_item(TableName=NAMES[regime(document['profile'])]['state_table'],
+        Key={'app': {'S': app}, 'record': {'S': 'CONTROL'}}, ConsistentRead=True).get('Item', {})
+    return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
 
 
 def execute(request):
@@ -294,11 +340,25 @@ def execute(request):
                 targets = events.list_targets_by_rule(Rule=rule)['Targets']
                 triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == expected_task for value in targets)
             except Exception: triggers_ready = False
+        gcp = gcp_availability(app, document, request, control) if control.get('state') == 'AWS_ACTIVE' else None
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
         return {'verified': healthy and configured and triggers_ready and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
             'configured': configured, 'triggers_ready': triggers_ready,
             'dns_ready': dns_ready, 'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
-            'observed_at': int(time.time()), 'zero_loss_proven': False}
+            'observed_at': int(time.time()), 'zero_loss_proven': False, **({'gcp': gcp} if gcp else {})}
+    if action == 'failback-check':
+        # Lecture seule, avant de lancer le retour : AWS actif (le worker a basculé), GCP revenu et clôturé.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
+        from prepare_failover_phase1 import regime
+        if regime(document['profile']) != 'platform':
+            raise UserAction('Retour vers GCP réservé aux applications du régime plateforme.')
+        control = request['_control'] if '_control' in request else worker_control(app, document)
+        if control.get('state') != 'AWS_ACTIVE':
+            raise UserAction('Retour impossible : l\'application n\'est pas servie par AWS (état du worker : ' + str(control.get('state')) + ').')
+        gcp = gcp_availability(app, document, request, control)
+        if not gcp['available']:
+            raise UserAction(gcp['message'])
+        return {'verified': True, 'gcp': gcp, 'observed_at': int(time.time())}
     if action == 'allocate-listener':
         import boto3
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
@@ -400,7 +460,7 @@ def execute(request):
         for key in keys:
             table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
         return {**result, 'worker_records_removed': len(keys), 'verified': True}
-    if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume', 'worker-pause'}:
+    if action in BOOTSTRAP_ACTIONS | set(WORKER_ACTIONS):
         import boto3
         from botocore.config import Config
         session = boto3.Session(region_name='eu-west-3')
@@ -465,11 +525,12 @@ def execute(request):
 
         ledger = work / 'completed.json'
         completed = json.loads(ledger.read_text()) if ledger.exists() else {}
-        operations = (bootstrap_operations(action, introspected) if bootstrap else ['configure'] if action == 'worker-configure'
-                      else ['resume'] if action == 'worker-resume' else ['pause'] if action == 'worker-pause' else ['status'])
+        if action in {'failback-sync', 'failback-reset'} and not introspected:
+            raise ValueError('Retour vers GCP réservé aux profils introspectés')
+        operations = bootstrap_operations(action, introspected) if bootstrap else [WORKER_ACTIONS[action]]
         for operation in operations:
             # Une initialisation interrompue reprend où elle s'est arrêtée : un rôle déjà créé ne se recrée pas.
-            if action in {'bootstrap', 'bootstrap-roles'} and operation in completed: continue
+            if action in {'bootstrap', 'bootstrap-roles', 'failback-reset'} and operation in completed: continue
             completed[operation] = task(operation)
             ledger.write_text(json.dumps(completed))
         if action == 'schema-diff':
@@ -486,6 +547,17 @@ def execute(request):
                     completed[operation] = task(operation)
                     ledger.write_text(json.dumps(completed))
             return {'completed': True, 'tasks': completed, 'activated': False, 'verified': True, 'resynced': resynced}
+        if action == 'failback-sync':
+            # GCP rouvert avec les données d'AWS, vérifiées table par table ; AWS fermé.
+            done = [value for value in completed['failback-sync']['results'] if value.get('state') == 'GCP_OPEN']
+            if not done: raise ValueError('Retour vers GCP non confirmé')
+            return {'completed': True, 'tasks': completed, 'verified': True, **{key: done[-1].get(key) for key in ('tables', 'rows', 'checksums_equal', 'frozen_seconds', 'already_done')}}
+        if action == 'worker-failback-route':
+            if not any(value.get('state') == 'GCP_ROUTE_REOPENED' for value in completed['failback-route']['results']):
+                raise ValueError('Verrou DNS de GCP non rouvert')
+        if action == 'worker-rearm':
+            if not any(value.get('state') == 'DISABLED' and value.get('operation') == 'rearm' for value in completed['rearm']['results']):
+                raise ValueError('Worker non réarmé')
         if action == 'verify':
             proofs = completed['verify-replication']['results']
             # Un schéma introspecté doit être identique des deux côtés ; l'absence de la mesure n'est pas une preuve.

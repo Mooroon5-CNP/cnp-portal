@@ -23,6 +23,7 @@ router.get('/', (req, res) => {
     title: 'Failover des applications', user: req.user, selectedApp,
     profileMode: profile?.profile.mode || 'postgres', profileConfigured: !!profile,
     provisioning: selectedApp ? require('../services/failover-provisioning').get(selectedApp) : null,
+    gcp: selectedApp ? require('../services/failover-provisioning').gcpStatus(selectedApp) : null,
     rows: service.rows(selectedApp || undefined),
     profiles: [...new Set([...service.profiles(), ...deploymentChoices.map(row => row.app_name)])],
     operations: profile ? require('../services/failover-operations').list(selectedApp) : [], deploymentChoices,
@@ -48,7 +49,7 @@ router.get('/operations/status/:app', (req, res) => res.json(require('../service
 router.get('/provisioning/status/:app', (req, res) => res.json(require('../services/failover-provisioning').get(req.params.app)));
 router.post('/provisioning/:action', (req, res) => {
   try {
-    if (!['start', 'resume'].includes(req.params.action)) throw new Error('Action de préparation inconnue.');
+    if (!['start', 'resume', 'failback'].includes(req.params.action)) throw new Error('Action de préparation inconnue.');
     require('../services/failover-provisioning')[req.params.action](req.body.app, req.user);
     return res.redirect(`/failover?app=${encodeURIComponent(req.body.app)}`);
   } catch (error) { return res.status(409).json({ error: error.message }); }

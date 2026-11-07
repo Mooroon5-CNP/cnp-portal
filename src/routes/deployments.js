@@ -345,6 +345,18 @@ router.post('/:id/resume-deployment', requireAuth, requirePermission('deployment
 
 // Production avec failover : la confirmation du manager crée le profil de secours (PostgreSQL, rien à remplir : la base,
 // ses identifiants et son schéma sont pris en charge par la plateforme) et lance la mise en service, qui s'enchaîne seule.
+// Retour manuel vers GCP : seulement quand le voyant « GCP disponible » est allumé (contrôlé à nouveau par le parcours).
+router.post('/:id/failover/failback', requireAuth, requirePermission('k8s:manifest:approve'), (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé.');
+    try {
+        if (!dep.failoverRequested || dep.environment !== 'prod') throw new Error('Aucun failover demandé pour ce déploiement.');
+        require('../services/failover-provisioning').failback(dep.appName, req.user);
+        req.flash('success', 'Retour vers GCP lancé : courte coupure des écritures (environ une minute), puis reconstruction du secours AWS.');
+    } catch (error) { req.flash('error', error.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
 router.post('/:id/failover/confirm', requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
     const dep = deploymentModel.get(req.params.id);
     if (!dep) return res.status(404).send('Déploiement introuvable.');

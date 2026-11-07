@@ -159,6 +159,18 @@
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
+                      <% if (environmentStatus.failoverState === 'AWS_ACTIVE') { %>
+                        <p id="gcp-availability" data-available="<%= environmentStatus.gcpAvailable ? 'true' : 'false' %>">
+                          <span aria-hidden="true" style="display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:<%= environmentStatus.gcpAvailable ? '#1a7f37' : '#9aa5b1' %>;"></span>
+                          <%= environmentStatus.gcpAvailable ? 'GCP disponible' : 'GCP indisponible' %> — <%= environmentStatus.gcpMessage || 'état de GCP en cours de lecture.' %>
+                        </p>
+                        <% if (environmentStatus.gcpAvailable && can('k8s:manifest:approve')) { %>
+                          <form method="POST" action="/deployments/<%= deployment.id %>/failover/failback" class="inline-form">
+                            <button type="submit" class="btn btn-primary">Revenir sur GCP</button>
+                          </form>
+                          <p style="color:var(--text-muted);font-size:13px;">Les données d’AWS sont copiées sur GCP et vérifiées ; les écritures sont refusées environ une minute pendant la copie.</p>
+                        <% } %>
+                      <% } %>
                       <% if (environmentStatus.failoverConfirm && can('k8s:manifest:approve')) { %>
                         <form method="POST" action="/deployments/<%= deployment.id %>/failover/confirm" class="inline-form">
                           <button type="submit" class="btn btn-primary">Confirmer le déploiement</button>

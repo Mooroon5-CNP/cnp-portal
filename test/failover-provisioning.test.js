@@ -299,3 +299,68 @@ describe('mise à jour d’une app en service', () => {
     expect(profiles.prepare).not.toHaveBeenCalled();
   });
 });
+
+describe('retour manuel vers GCP', () => {
+  function onAws(gcp) {
+    workflow.start('weather-api', manager);
+    db.prepare("UPDATE failover_provisioning SET state='completed',step=? WHERE app='weather-api'").run(STEPS.length);
+    tasks.push({ id: 'health-aws', app: 'weather-api', action: 'health', state: 'completed', created_at: new Date().toISOString(),
+      result: { verified: true, state: 'AWS_ACTIVE', observed_at: Date.now() / 1000, gcp } });
+  }
+  const available = { available: true, message: 'GCP disponible : le retour peut être lancé.' };
+  test('le voyant reprend le dernier contrôle de santé, et rien n’est proposé tant que GCP sert l’application', () => {
+    onAws({ available: false, message: 'GCP indisponible : base Cloud SQL arrêtée.' });
+    expect(workflow.gcpStatus('weather-api')).toMatchObject({ available: false, fresh: true });
+    expect(() => workflow.failback('weather-api', manager)).toThrow('Cloud SQL arrêtée');
+    tasks[0].result.state = 'WAIT_SIGNALS';
+    expect(workflow.gcpStatus('weather-api')).toBeNull();
+    expect(() => workflow.failback('weather-api', manager)).toThrow('servie par AWS');
+  });
+  test('un voyant périmé ou un développeur ne lance pas le retour', () => {
+    onAws(available);
+    expect(() => workflow.failback('weather-api', { id: 'dev', role: 'developer' })).toThrow('manager');
+    jest.setSystemTime(Date.now() + 600000);
+    expect(() => workflow.failback('weather-api', manager)).toThrow();
+    expect(workflow.get('weather-api')).toMatchObject({ state: 'completed', phase: null });
+  });
+  test('le retour enchaîne pause, verrou DNS, copie, reconstruction et réarmement avant de revenir en surveillance', async () => {
+    onAws(available);
+    expect(workflow.failback('weather-api', manager)).toMatchObject({ phase: 'failback', step: 0, state: 'running' });
+    const actions = [];
+    for (let i = 0; i < 40 && workflow.get('weather-api').state !== 'completed'; i++) {
+      await tick();
+      const last = tasks.at(-1);
+      if (last.state === 'running') { actions.push(last.action); succeed(); }
+    }
+    expect(actions).toEqual(['failback-check', 'worker-pause', 'worker-failback-route', 'failback-sync', 'failback-reset', 'verify',
+      'worker-rearm', 'worker-verify', 'verify', 'worker-resume', 'health']);
+    const row = workflow.get('weather-api');
+    expect(row).toMatchObject({ state: 'completed', phase: null });
+    expect(row.message).toContain('revenue sur GCP');
+  });
+  test('une copie non vérifiée bloque le retour sans passer à la reconstruction de la copie AWS', async () => {
+    onAws(available);
+    workflow.failback('weather-api', manager);
+    for (let i = 0; i < 20 && tasks.at(-1).action !== 'failback-sync'; i++) {
+      await tick();
+      if (tasks.at(-1).state === 'running' && tasks.at(-1).action !== 'failback-sync') succeed();
+    }
+    const copy = tasks.at(-1);
+    copy.state = 'failed'; copy.result = { error: 'Opération interrompue.' };
+    const row = await tick();
+    expect(row.state).toBe('blocked');
+    expect(tasks.some(value => value.action === 'failback-reset')).toBe(false);
+  });
+  test('le worker encore en bail après la pause fait attendre l’ouverture du verrou, sans bloquer', async () => {
+    onAws(available);
+    workflow.failback('weather-api', manager);
+    for (let i = 0; i < 20 && tasks.at(-1).action !== 'worker-failback-route'; i++) {
+      await tick();
+      if (tasks.at(-1).state === 'running' && tasks.at(-1).action !== 'worker-failback-route') succeed();
+    }
+    const route = tasks.at(-1);
+    route.state = 'failed'; route.result = { error: 'Opération interrompue.' };
+    expect((await tick()).state).toBe('waiting');
+    expect(operations.retry).toHaveBeenCalledWith(route.id, expect.objectContaining({ id: manager.id }));
+  });
+});

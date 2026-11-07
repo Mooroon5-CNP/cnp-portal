@@ -214,6 +214,26 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         self.assertTrue(result['resynced'])
         self.assertEqual(order(), ['resync-schema', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'])
 
+    def test_failback_rebuilds_the_aws_copy_through_the_usual_initialisation(self):
+        names = ('failback-reset', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe')
+        result = self.run_action('failback-reset', [{'completed': True, 'reset': True}] + [{'completed': True}] * 5)
+        order = [next(name for name in names if f"'{name}'" in command or f'"{name}"' in command) for command in self.launched()]
+        self.assertEqual(order, list(names))
+        self.assertTrue(result['completed'])
+
+    def test_failback_sync_is_verified_only_when_gcp_is_reopened(self):
+        result = self.run_action('failback-sync', [{'state': 'GCP_OPEN', 'tables': 3, 'rows': 12, 'checksums_equal': True, 'frozen_seconds': 4.2}])
+        self.assertEqual((result['verified'], result['rows'], result['checksums_equal']), (True, 12, True))
+        for name in ('task-requests.json', 'completed.json'):
+            (Path(self.directory.name) / name).unlink(missing_ok=True)
+        with self.assertRaises(ValueError):
+            self.run_action('failback-sync', [{'operation': 'failback-sync'}])
+
+    def test_failback_is_refused_for_a_legacy_profile(self):
+        for action in ('failback-sync', 'failback-reset'):
+            with self.assertRaises(ValueError):
+                self.run_action(action, [{'state': 'GCP_OPEN'}], profile='pixelcalm')
+
     def test_phase_two_restores_the_schema_before_the_subscription_and_never_recreates_the_role(self):
         self.run_action('bootstrap', [{'completed': True}] * 5)
         commands = self.launched()
@@ -482,6 +502,52 @@ class ObserveTests(unittest.TestCase):
                 'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
         self.assertIn('BEGIN CERTIFICATE', result['source_ca'])
         self.assertEqual(set(result['observations']), {'cloudsql', 'rds'})
+
+
+class GcpAvailabilityTests(ObserveTests):
+    """Voyant « GCP disponible » : chaque condition se lit chez son fournisseur ; une lecture refusée l'éteint."""
+    APP = 'weather-api'
+    SQL = 'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/weather-api-prod-gcp-db'
+    RUN = 'https://run.googleapis.com/v2/projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod'
+
+    def gcp(self, sql=None, run=None, paused=False, fence='GCP_FENCED'):
+        ok = {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}
+        self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {'metadata': {'annotations': {'crossplane.io/paused': 'true'} if paused else {}}, 'status': ok},
+                        ('instances', 'weather-api-prod-db'): {'metadata': {}, 'status': ok}}
+        pages = {}
+        if sql is not False:
+            pages[self.SQL] = sql or {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}}
+        if run is not False:
+            pages[self.RUN] = run or {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}
+        document = {'profile': {'gcp': {'app_name': self.APP}, 'aws': {'app_name': self.APP}, 'automation': {}}}
+        return operator.gcp_availability(self.APP, document, {'_google': FakeSession(pages), '_kubernetes': (self.apis, self.custom)}, {'source_fence': fence})
+
+    def test_available_only_when_every_condition_holds(self):
+        self.assertTrue(self.gcp()['available'])
+        for case, key in [(dict(sql={'state': 'STOPPED', 'settings': {'activationPolicy': 'NEVER'}}), 'cloud_sql'),
+                          (dict(sql=False), 'cloud_sql'), (dict(run=False), 'cloud_run'), (dict(paused=True), 'crossplane'),
+                          (dict(fence='GCP_FENCE_PENDING'), 'fenced')]:
+            result = self.gcp(**case)
+            self.assertFalse(result['available'], case)
+            self.assertFalse(result[key], case)
+            self.assertIn('GCP indisponible', result['message'])
+
+    def test_failback_check_refuses_an_app_not_served_by_aws(self):
+        work = tempfile.TemporaryDirectory(dir=SOURCE.parents[2] / 'data' / 'failover-operations')
+        self.addCleanup(work.cleanup)
+        document = {'profile': {'gcp': {'app_name': self.APP}, 'aws': {'app_name': self.APP}, 'automation': {'regime': 'platform'}}}
+        request = {'app': self.APP, 'work': work.name, 'document': document, 'action': 'failback-check', '_kubernetes': (self.apis, self.custom)}
+        self.gcp()
+        with self.assertRaisesRegex(operator.UserAction, 'WAIT_SIGNALS'):
+            operator.execute({**request, '_control': {'state': 'WAIT_SIGNALS'}})
+        with self.assertRaisesRegex(operator.UserAction, 'GCP indisponible'):
+            operator.execute({**request, '_control': {'state': 'AWS_ACTIVE', 'source_fence': 'GCP_FENCE_PENDING'},
+                              '_google': FakeSession({self.SQL: {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}},
+                                                      self.RUN: {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}})})
+        result = operator.execute({**request, '_control': {'state': 'AWS_ACTIVE', 'source_fence': 'GCP_FENCED'},
+                                   '_google': FakeSession({self.SQL: {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}},
+                                                           self.RUN: {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}})})
+        self.assertTrue(result['verified'] and result['gcp']['available'])
 
 
 class HealthNamesTests(unittest.TestCase):

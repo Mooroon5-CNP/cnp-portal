@@ -11,7 +11,10 @@ const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // Plus aucun plan Terraform : l'infrastructure partagée est créée une fois par la pile plateforme, le propre à l'app passe par GitOps.
 const actions = ['initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'worker-configure', 'worker-verify', 'worker-resume', 'health',
-  'worker-pause', 'resync', 'runtime-rollout', 'schema-diff'];
+  'worker-pause', 'resync', 'runtime-rollout', 'schema-diff',
+  // Retour manuel vers GCP (failover-provisioning, phase « failback ») : contrôle, verrou DNS, copie, reconstruction, réarmement.
+  'failback-check', 'worker-failback-route', 'failback-sync', 'failback-reset', 'worker-rearm'];
+const FAILBACK_SQL = ['failback-sync', 'failback-reset'];
 // Suppression complète (failover-teardown) : libération, disparition des ressources, puis secrets et état du worker.
 const TEARDOWN = ['teardown-released', 'teardown-gone', 'teardown-cleanup'];
 const platformRegime = document => document.profile.automation?.regime === 'platform';
@@ -81,6 +84,8 @@ function start(app, action, user) {
     if (!previous(app, 'schema-check')?.result?.verified) throw new Error('Le schéma de l’application doit exister sur la source : l’appeler une fois pour qu’elle crée ses tables.');
   }
   if (['verify', 'resync', 'schema-diff'].includes(action) && !existingPilot && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
+  if ((action === 'failback-check' || FAILBACK_SQL.includes(action) || ['worker-failback-route', 'worker-rearm'].includes(action))
+    && (existingPilot || !platformRegime(document) || !isIntrospected(document))) throw new Error('Retour vers GCP réservé aux applications du régime plateforme.');
   if (['worker-configure', 'worker-verify'].includes(action) && !previous(app, 'verify')) throw new Error('Vérification de réplication requise.');
   if (action === 'worker-resume') {
     const verified = previous(app, 'verify');
@@ -106,7 +111,7 @@ function start(app, action, user) {
     // Pilote : sa tâche active vient de son dernier plan d'activation, conservé dans l'historique.
     request.task_definition = taskDefinition(document, 'worker', false) || previous(app, 'activation-plan')?.result?.worker_task_definition;
   }
-  if (['bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff'].includes(action)) {
+  if (['bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff', ...FAILBACK_SQL].includes(action)) {
     request.packages = service.operationalPackage(app, 'bootstrap', user);
     request.task_definition = taskDefinition(document, 'bootstrap', existingPilot);
     if (!request.task_definition) throw new Error('Tâche d’initialisation SQL absente : la pile plateforme doit être appliquée.');

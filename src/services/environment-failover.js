@@ -452,7 +452,7 @@ async function deploymentStatus(dep) {
     if (progress.state === 'blocked') return { phase: 'failed', message: `Mise en service du secours bloquée : ${progress.message}`, runUrl: run.html_url };
     if (progress.state !== 'completed') {
       const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
-      const label = progress.phase === 'update' ? 'Mise à jour sur GCP et AWS' : 'Mise en service du secours';
+      const label = { update: 'Mise à jour sur GCP et AWS', failback: 'Retour vers GCP' }[progress.phase] || 'Mise en service du secours';
       return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
     }
     return readiness(dep);
@@ -469,8 +469,11 @@ function readiness(dep) {
   const health = operations.list(dep.appName).find(row => row.action === 'health' && row.state === 'completed');
   const age = health ? Date.now() / 1000 - health.result?.observed_at : Infinity;
   if (!next && health?.result?.verified && health.input_hash === hash(profileFor(dep.appName)) && age >= 0 && age < 120) {
-    return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif.' : 'Application déployée ; secours vérifié et disponible.',
-      applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state };
+    // Servie par AWS : le voyant dit si GCP est revenu, et donc si le retour manuel peut être lancé.
+    const gcp = health.result.state === 'AWS_ACTIVE' ? require('./failover-provisioning').gcpStatus(dep.appName) : null;
+    return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif : l’application est servie par AWS.' : 'Application déployée ; secours vérifié et disponible.',
+      applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state,
+      ...(gcp ? { gcpAvailable: gcp.available && gcp.fresh, gcpMessage: gcp.message } : {}) };
   }
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };

@@ -40,10 +40,18 @@ const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout']
 // puis vérifiée avant la reprise du worker. Schéma inchangé (lecture seule « schema-diff ») : tout cela est sauté.
 const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'schema-diff'], ['operation', 'worker-pause'], ['operation', 'resync'],
   ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
+// Retour manuel vers GCP, lancé par un manager quand le voyant « GCP disponible » est allumé (jamais automatique). Le worker
+// est mis en pause et rouvre le verrou DNS de GCP (sans effet tant que GCP est fermé : sa sonde échoue) ; la copie AWS → GCP,
+// vérifiée table par table, rouvre GCP et ferme AWS, et Route 53 rend le trafic à GCP de lui-même. La copie AWS est ensuite
+// reconstruite depuis GCP (comme après une migration), puis le worker est réarmé et reprend la surveillance.
+const FAILBACK_STEPS = [['operation', 'failback-check'], ['operation', 'worker-pause'], ['operation', 'worker-failback-route'],
+  ['operation', 'failback-sync'], ['operation', 'failback-reset'], ['operation', 'verify'],
+  ['operation', 'worker-rearm'], ['operation', 'worker-verify'], ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
 
 const UPDATE_CHECK_MS = 30000;
 const lastUpdateCheck = new Map();
-const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check']);
+// worker-failback-route : un passage du worker commencé avant la pause garde son bail jusqu'à 2 min ; on réessaie.
+const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check', 'worker-failback-route']);
 // Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
 // TEMPORAIRE (G5, premier passage cloud) : CNP_FAILOVER_STEP_BY_STEP=true remet la revue manager de chaque publication.
 // À retirer après la recette de panne (G7).
@@ -58,8 +66,10 @@ function schema() {
     db.exec('ALTER TABLE failover_provisioning ADD COLUMN phase TEXT');
   }
 }
-const stepsOf = (row, document) => row.phase !== 'update' ? stepsFor(document)
+const stepsOf = (row, document) => row.phase === 'failback' ? FAILBACK_STEPS : row.phase !== 'update' ? stepsFor(document)
   : document.profile.mode === 'stateless' ? UPDATE_STEPS : SQL_UPDATE_STEPS;
+const PHASE_DONE = { update: 'Mise à jour déployée sur GCP et AWS ; secours vérifié.',
+  failback: 'Application revenue sur GCP ; secours AWS reconstruit et surveillance rétablie.' };
 // Révision de production à déployer, ou null : seulement sur une app saine que GCP sert (une mise à jour pendant que le
 // secours AWS est actif attendra le retour sur GCP), au plus une lecture GitHub toutes les 2 min.
 async function pendingRevision(app, health) {
@@ -105,6 +115,25 @@ function progress(app) {
   let total = null;
   try { total = stepsOf(row, profiles.profileFor(app)).length; } catch (_) { /* profil absent ou historique */ }
   return { state: row.state, step: row.step, total, message: row.message, phase: row.phase || 'provision' };
+}
+// Voyant d'une app servie par AWS : le dernier contrôle de santé dit si GCP est revenu (lecture seule, aucune action).
+function gcpStatus(app) {
+  const health = operations.list(app).find(value => value.action === 'health' && value.state === 'completed');
+  if (health?.result?.state !== 'AWS_ACTIVE') return null;
+  const age = Date.now() / 1000 - (health.result.observed_at || 0);
+  return { ...(health.result.gcp || { available: false, message: 'GCP indisponible.' }), fresh: age >= 0 && age < 180 };
+}
+function failback(app, user) {
+  manager(user);
+  const row = get(app);
+  if (!row || row.state !== 'completed' || row.lease_until > Date.now()) throw new Error('Application pas en service ou opération en cours.');
+  const status = gcpStatus(app);
+  if (!status) throw new Error('L’application n’est pas servie par AWS : aucun retour à faire.');
+  if (!status.available || !status.fresh) throw new Error(status.message || 'GCP indisponible.');
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE failover_provisioning SET phase='failback',requested_by=?,step=0,state='running',reference=NULL,message=?,step_started_at=?,updated_at=?
+    WHERE app=? AND state='completed' AND lease_until < ?`).run(user.id, 'Retour vers GCP demandé.', now, now, app, Date.now());
+  return get(app);
 }
 function resume(app, user) {
   manager(user);
@@ -166,8 +195,7 @@ async function advance(app) {
     const steps = stepsOf(row, document);
     const step = steps[row.step];
     if (!step) {
-      save('completed', row.phase === 'update' ? 'Mise à jour déployée sur GCP et AWS ; secours vérifié.'
-        : 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.');
+      save('completed', PHASE_DONE[row.phase] || 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.');
       db.prepare('UPDATE failover_provisioning SET phase=NULL WHERE app=? AND lease_owner=?').run(app, owner);
       return;
     }
@@ -213,7 +241,7 @@ async function advance(app) {
     }
     const reference = `operation:${operation.id}`;
     if (operation.state === 'running') { save('running', `En cours : ${action}.`, reference); return; }
-    const requiresProof = ['observe', 'verify', 'runtime-rollout', 'schema-diff', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
+    const requiresProof = ['failback-check', 'failback-sync', 'observe', 'verify', 'runtime-rollout', 'schema-diff', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
     // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
     if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
     if (operation.state === 'completed' && action === 'schema-diff' && operation.result?.verified === true && operation.result.changed === false) {
@@ -263,4 +291,4 @@ function startReconciler() {
   void tick().catch(error => console.warn(error.message));
   return timer;
 }
-module.exports = { get, start, resume, advance, startReconciler, progress };
+module.exports = { get, start, resume, advance, startReconciler, progress, gcpStatus, failback };
