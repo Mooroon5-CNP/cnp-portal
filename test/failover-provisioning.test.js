@@ -264,6 +264,16 @@ describe('mise à jour d’une app en service', () => {
       expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
     }
   });
+  test('une mise à jour bloquée reprend depuis sa publication, avec une nouvelle proposition', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+    await tick(); await tick();
+    db.prepare("UPDATE failover_provisioning SET state='blocked',step=1 WHERE app='weather-api'").run();
+    jest.setSystemTime(Date.now() + 60000);
+    expect(workflow.resume('weather-api', manager)).toMatchObject({ phase: 'update', step: 0, state: 'running' });
+    await tick();
+    expect(profiles.prepare).toHaveBeenCalledTimes(2);                   // republication, pas l'ancienne proposition
+  });
   test('aucune mise à jour quand la révision est déjà servie, ou quand le secours AWS est actif', async () => {
     inService();
     ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40) } });

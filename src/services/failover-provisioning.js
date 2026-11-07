@@ -111,6 +111,14 @@ function resume(app, user) {
   const row = get(app);
   if (!row || row.state !== 'blocked') throw new Error('Aucune préparation bloquée à reprendre.');
   if (row.lease_until > Date.now()) throw new Error('Préparation encore en cours.');
+  if (row.phase === 'update') {
+    // Une mise à jour reprend depuis sa publication : la cause corrigée (générateur, image) doit être republiée, pas
+    // seulement revérifiée. La nouvelle proposition naît après cet instant (voir le filtre des propositions en mise à jour).
+    const now = new Date().toISOString();
+    db.prepare("UPDATE failover_provisioning SET requested_by=?,state='running',step=0,reference=NULL,message=NULL,step_started_at=?,updated_at=? WHERE app=?")
+      .run(user.id, now, now, app);
+    return get(app);
+  }
   if (row.reference?.startsWith('operation:')) {
     const op = operations.list(app).find(value => value.id === row.reference.slice(10));
     if (op?.state === 'failed') {
