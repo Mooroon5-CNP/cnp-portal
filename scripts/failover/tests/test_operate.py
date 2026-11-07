@@ -723,3 +723,30 @@ class TeardownTests(unittest.TestCase):
         self.assertEqual([call.args[3] for call in self.custom.delete_cluster_custom_object.call_args_list], ['rds'])
         self.items = {}
         self.assertIs(self.run_action('teardown-gone')['verified'], True)
+
+
+class AwsLeftoversTests(unittest.TestCase):
+    """Ce que la suppression laissait chez AWS : révisions de tâche ECS de l'app et dépôt ECR de ses images."""
+
+    def clients(self, active, inactive, repository=True):
+        ecs, ecr = Mock(), Mock()
+        pages = {'ACTIVE': active, 'INACTIVE': inactive}
+        ecs.get_paginator.return_value.paginate.side_effect = lambda familyPrefix, status: [{'taskDefinitionArns': pages[status]}]
+        ecr.exceptions.RepositoryNotFoundException = type('RepositoryNotFoundException', (Exception,), {})
+        if not repository:
+            ecr.delete_repository.side_effect = ecr.exceptions.RepositoryNotFoundException()
+        return ecs, ecr, (lambda name: {'ecs': ecs, 'ecr': ecr}[name])
+
+    def test_only_the_app_revisions_and_its_own_repository_are_removed(self):
+        arn = lambda name: f'arn:aws:ecs:eu-west-3:804210702561:task-definition/{name}'
+        ecs, ecr, client = self.clients([arn('weather-api-prod:7'), arn('weather-api-prod-extra:1')], [arn('weather-api-prod:6')])
+        result = operator.remove_aws_leftovers('weather-api', client)
+        self.assertEqual(result, {'task_definitions_removed': 2, 'image_repository_removed': True})
+        ecs.deregister_task_definition.assert_called_once_with(taskDefinition=arn('weather-api-prod:7'))
+        ecs.delete_task_definitions.assert_called_once_with(taskDefinitions=[arn('weather-api-prod:6'), arn('weather-api-prod:7')])
+        ecr.delete_repository.assert_called_once_with(repositoryName='weather-api', force=True)
+
+    def test_nothing_left_is_not_an_error(self):
+        ecs, ecr, client = self.clients([], [], repository=False)
+        self.assertEqual(operator.remove_aws_leftovers('weather-api', client), {'task_definitions_removed': 0, 'image_repository_removed': False})
+        ecs.delete_task_definitions.assert_not_called()

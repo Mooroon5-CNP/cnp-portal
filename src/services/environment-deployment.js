@@ -497,6 +497,8 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
     }
     return result;
   }, `chore(${dep.appName}): remove ${dep.environment}`);
+  // Le dossier est sorti de Git : son chemin quitte aussi la liste explicite de l'ApplicationSet de cet environnement.
+  if (!onAzure) await kubernetes.removeApplicationSetPath(`crossplane-autodiscovery-${dep.environment}`, `apps/${dep.appName}/crossplane/${dep.environment}`);
   // Azure : la cascade vient APRÈS le retrait des fichiers (ordre inverse de GCP, voir environment-azure.confirmTeardown).
   // Tant que le dossier est dans Git, l'ApplicationSet dev (preserveResourcesOnDeletion) retire le finalizer posé et
   // recrée l'Application : les ressources Azure restaient orphelines (constaté le 29/10/2026). L'API Kubernetes, car

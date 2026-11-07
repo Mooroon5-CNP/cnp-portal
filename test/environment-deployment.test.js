@@ -6,7 +6,7 @@ jest.mock('../src/config/env', () => ({ config: {
 } }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), getRef: jest.fn(), createBranch: jest.fn(),
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), removeApplicationSetPath: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -230,6 +230,14 @@ test('an orphaned prod folder is removed by the bot only when the app exists now
   expect(await service.removeOrphanProduction('gone-app', manager)).toEqual({ removed: 2 });
   expect(trees.at(-1).tree.map(file => [file.path, file.sha])).toEqual([
     ['apps/gone-app/crossplane/prod/kustomization.yaml', null], ['apps/gone-app/crossplane/prod/rds-instance.yaml', null]]);
+});
+
+test('deleting an environment takes its path out of the ApplicationSet list, and only its own', async () => {
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, environments: ['dev', 'prod'] }] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-dev', 'apps/pixelcam/crossplane/dev');
+  expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledTimes(1);
 });
 
 test('an expired lease cannot overwrite the state owned by another worker', () => {

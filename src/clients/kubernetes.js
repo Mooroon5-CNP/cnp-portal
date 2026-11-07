@@ -260,6 +260,28 @@ async function applyApplicationSet(manifest) {
   }
 }
 
+// Retire de la liste d'un ApplicationSet partagé le seul chemin d'une app supprimée. La liste est volontairement explicite
+// (seules les apps enregistrées par le portail se déploient) et ne fait que croître à l'enregistrement : sans ce retrait, le
+// chemin d'une app supprimée y restait (constaté le 07/11/2026). Les autres chemins ne sont jamais touchés ; UPDATE avec le
+// resourceVersion lu, comme applyApplicationSet (le rôle borné du portail n'a pas PATCH).
+async function removeApplicationSetPath(name, path) {
+  if (!/^crossplane-autodiscovery-(dev|prod)$/.test(name)) throw new Error(`ApplicationSet ${name} : retrait de chemin refusé.`);
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body: existing } = await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name);
+    const directories = existing.spec?.generators?.[0]?.git?.directories;
+    if (!Array.isArray(directories) || !directories.some(entry => entry.path === path && !entry.exclude)) return false;
+    const updated = JSON.parse(JSON.stringify(existing));
+    updated.spec.generators[0].git.directories = directories.filter(entry => entry.path !== path || entry.exclude);
+    await customApi.replaceNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name, updated);
+    return true;
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return false;
+    handleError(err, `removeApplicationSetPath(${name})`);
+  }
+}
+
 // ApplicationSets shared by every app: an offboarding must never delete them,
 // whatever app name it was given.
 const SHARED_APPLICATIONSETS = new Set(['cloudrun-autodiscovery', 'crossplane-autodiscovery-dev', 'crossplane-autodiscovery-prod']);
@@ -634,7 +656,7 @@ module.exports = {
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
-  applyApplicationSet, deleteApplicationSet,
+  applyApplicationSet, deleteApplicationSet, removeApplicationSetPath,
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,

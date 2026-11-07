@@ -222,6 +222,30 @@ def worker_control(app, document):
     return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
 
 
+def remove_aws_leftovers(app, client):
+    """Ce que la suppression des ressources Crossplane laisse chez AWS (constaté le 07/11/2026) : les révisions de la définition de
+    tâche ECS de l'app (`<app>-prod`, enregistrées par Crossplane, jamais supprimées par lui) et le dépôt ECR de ses images,
+    créé par la CI sous le nom exact de l'app. Rien d'autre n'est touché ; un dépôt absent n'est pas une erreur."""
+    ecs, ecr = client('ecs'), client('ecr')
+    family = lambda arn: arn.rsplit('/', 1)[1].rsplit(':', 1)[0]
+    revisions = {}
+    for status in ('ACTIVE', 'INACTIVE'):
+        for page in ecs.get_paginator('list_task_definitions').paginate(familyPrefix=f'{app}-prod', status=status):
+            revisions.update({arn: status for arn in page['taskDefinitionArns'] if family(arn) == f'{app}-prod'})
+    for arn, status in revisions.items():
+        if status == 'ACTIVE':
+            ecs.deregister_task_definition(taskDefinition=arn)          # une révision doit être inactive pour être supprimée
+    arns = sorted(revisions)
+    for start in range(0, len(arns), 10):                               # au plus 10 révisions par appel
+        ecs.delete_task_definitions(taskDefinitions=arns[start:start + 10])
+    try:
+        ecr.delete_repository(repositoryName=app, force=True)
+        repository = True
+    except ecr.exceptions.RepositoryNotFoundException:
+        repository = False
+    return {'task_definitions_removed': len(arns), 'image_repository_removed': repository}
+
+
 def execute(request):
     action, app = request['action'], request['app']
     import re
@@ -448,7 +472,8 @@ def execute(request):
                 ExpressionAttributeNames={'#r': 'record'}) for item in page['Items']]
         for key in keys:
             table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
-        return {**result, 'worker_records_removed': len(keys), 'verified': True}
+        leftovers = remove_aws_leftovers(app, request.get('_aws') or (lambda name: boto3.client(name, region_name='eu-west-3')))
+        return {**result, 'worker_records_removed': len(keys), **leftovers, 'verified': True}
     if action in BOOTSTRAP_ACTIONS | set(WORKER_ACTIONS):
         import boto3
         from botocore.config import Config
