@@ -201,6 +201,19 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         self.assertEqual(operator.bootstrap_operations('bootstrap-roles', True), ['create-target-runtime'])
         self.assertEqual(operator.bootstrap_operations('schema-check', True), ['inspect-source'])
 
+    def test_after_an_update_the_aws_copy_is_rebuilt_only_when_the_schemas_differ(self):
+        names = ('resync-schema', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe')
+        order = lambda: [next(name for name in names if f"'{name}'" in command or f'"{name}"' in command or f' {name} ' in command)
+                         for command in self.launched()]
+        result = self.run_action('resync', [{'completed': True, 'resynced': False}])
+        self.assertEqual((result['verified'], result['resynced'], order()), (True, False, ['resync-schema']))
+        self.ecs.run_task.reset_mock()
+        for name in ('task-requests.json', 'completed.json'):              # une nouvelle opération a son propre dossier
+            (Path(self.directory.name) / name).unlink(missing_ok=True)
+        result = self.run_action('resync', [{'completed': True, 'resynced': True}] + [{'completed': True}] * 5)
+        self.assertTrue(result['resynced'])
+        self.assertEqual(order(), ['resync-schema', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'])
+
     def test_phase_two_restores_the_schema_before_the_subscription_and_never_recreates_the_role(self):
         self.run_action('bootstrap', [{'completed': True}] * 5)
         commands = self.launched()

@@ -35,6 +35,14 @@ const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify
 // Mise à jour d'une app en service : une nouvelle CI de production réussie republie les runtimes GCP et AWS avec ses images
 // (même publication contrôlée que la mise en service), puis vérifie que les deux côtés servent la nouvelle version.
 const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'health']];
+// Avec une base : la migration de l'application a pu changer le schéma de GCP, que la réplication ne transporte pas. Le worker
+// est mis en pause (aucune bascule vers une copie en reconstruction), la copie AWS est reconstruite si les schémas diffèrent,
+// puis vérifiée avant la reprise du worker.
+const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'worker-pause'], ['operation', 'resync'],
+  ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
+// TEMPORAIRE : la reconstruction exige l'image du bootstrap qui connaît « resync-schema ». Retirer ce réglage (et toujours
+// prendre SQL_UPDATE_STEPS pour une app avec base) une fois cette image appliquée par la pile plateforme.
+const schemaSync = () => ['1', 'true'].includes(String(process.env.CNP_FAILOVER_SCHEMA_SYNC || '').toLowerCase());
 const UPDATE_CHECK_MS = 120000;
 const lastUpdateCheck = new Map();
 const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
@@ -52,7 +60,8 @@ function schema() {
     db.exec('ALTER TABLE failover_provisioning ADD COLUMN phase TEXT');
   }
 }
-const stepsOf = (row, document) => row.phase === 'update' ? UPDATE_STEPS : stepsFor(document);
+const stepsOf = (row, document) => row.phase !== 'update' ? stepsFor(document)
+  : document.profile.mode !== 'stateless' && schemaSync() ? SQL_UPDATE_STEPS : UPDATE_STEPS;
 // Révision de production à déployer, ou null : seulement sur une app saine que GCP sert (une mise à jour pendant que le
 // secours AWS est actif attendra le retour sur GCP), au plus une lecture GitHub toutes les 2 min.
 async function pendingRevision(app, health) {

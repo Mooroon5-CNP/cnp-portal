@@ -220,8 +220,9 @@ test('un schéma non pris en charge bloque avec la cause, sans être rejoué', a
 describe('mise à jour d’une app en service', () => {
   const ciImages = require('../src/services/failover-ci-images');
   const deployments = require('../src/models/deployment');
+  let hours = 0;
   function inService(state = 'WAIT_SIGNALS') {
-    jest.setSystemTime(Date.now() + 3600000);                              // au-delà de la lecture GitHub d'un test précédent
+    jest.setSystemTime(Date.now() + 3600000 * ++hours);                    // au-delà de la lecture GitHub d'un test précédent
     workflow.start('weather-api', manager);
     db.prepare("UPDATE failover_provisioning SET state='completed',step=? WHERE app='weather-api'").run(STEPS.length);
     tasks.push({ id: 'health-1', app: 'weather-api', action: 'health', state: 'completed', created_at: new Date().toISOString(),
@@ -246,6 +247,22 @@ describe('mise à jour d’une app en service', () => {
     expect(row).toMatchObject({ state: 'completed', phase: null });
     expect(row.message).toContain('Mise à jour déployée');
     expect(workflow.progress('weather-api').phase).toBe('provision');
+  });
+  test('avec la reconstruction du schéma activée, une app avec base met le worker en pause et reconstruit la copie', async () => {
+    process.env.CNP_FAILOVER_SCHEMA_SYNC = 'true';
+    try {
+      inService();
+      ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+      await tick(); await tick();                                          // passage en mise à jour, puis runtime publié
+      const actions = [];
+      for (let i = 0; i < 20 && workflow.get('weather-api').state !== 'completed'; i++) {
+        await tick();
+        const last = tasks.at(-1);
+        if (last.state === 'running') { actions.push(last.action); succeed(); }
+      }
+      expect(actions).toEqual(['runtime-verify', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
+      expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
+    } finally { delete process.env.CNP_FAILOVER_SCHEMA_SYNC; }
   });
   test('aucune mise à jour quand la révision est déjà servie, ou quand le secours AWS est actif', async () => {
     inService();

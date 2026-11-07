@@ -47,7 +47,7 @@ class UserAction(ValueError):
 # Lectures sans effet : jamais de reprise d'une ancienne tâche (son résultat serait périmé), un nouveau jeton à chaque fois.
 READ_ONLY_OPERATIONS = {'inspect-source'}
 # Actions exécutées par la tâche d'initialisation SQL (image bootstrap) ; les autres passent par celle du worker.
-BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify'}
+BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync'}
 
 
 def bootstrap_operations(action, introspected):
@@ -59,7 +59,8 @@ def bootstrap_operations(action, introspected):
     if action == 'bootstrap':
         return (['prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'] if introspected
                 else ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
-    return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication']}[action]
+    return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication'],
+            'resync': ['resync-schema']}[action]
 
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
@@ -372,7 +373,7 @@ def execute(request):
         for key in keys:
             table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
         return {**result, 'worker_records_removed': len(keys), 'verified': True}
-    if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
+    if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume', 'worker-pause'}:
         import boto3
         from botocore.config import Config
         session = boto3.Session(region_name='eu-west-3')
@@ -437,12 +438,23 @@ def execute(request):
 
         ledger = work / 'completed.json'
         completed = json.loads(ledger.read_text()) if ledger.exists() else {}
-        operations = bootstrap_operations(action, introspected) if bootstrap else ['configure'] if action == 'worker-configure' else ['resume'] if action == 'worker-resume' else ['status']
+        operations = (bootstrap_operations(action, introspected) if bootstrap else ['configure'] if action == 'worker-configure'
+                      else ['resume'] if action == 'worker-resume' else ['pause'] if action == 'worker-pause' else ['status'])
         for operation in operations:
             # Une initialisation interrompue reprend où elle s'est arrêtée : un rôle déjà créé ne se recrée pas.
             if action in {'bootstrap', 'bootstrap-roles'} and operation in completed: continue
             completed[operation] = task(operation)
             ledger.write_text(json.dumps(completed))
+        if action == 'resync':
+            # Après une mise à jour : schémas identiques, rien à faire ; sinon la copie AWS vient d'être vidée et l'initialisation
+            # habituelle la reconstruit depuis GCP (publication, schéma, abonnement avec recopie).
+            resynced = any(value.get('resynced') for value in completed['resync-schema']['results'])
+            if resynced:
+                if not introspected: raise ValueError('Reconstruction réservée aux profils introspectés')
+                for operation in bootstrap_operations('bootstrap', True):
+                    completed[operation] = task(operation)
+                    ledger.write_text(json.dumps(completed))
+            return {'completed': True, 'tasks': completed, 'activated': False, 'verified': True, 'resynced': resynced}
         if action == 'verify':
             proofs = completed['verify-replication']['results']
             # Un schéma introspecté doit être identique des deux côtés ; l'absence de la mesure n'est pas une preuve.
