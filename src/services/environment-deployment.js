@@ -562,4 +562,25 @@ function startReconciler() {
   return timer;
 }
 
-module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };
+// Dossier de production orphelin : l'app n'existe plus (ni déploiement dans le portail, ni registre, ni Application Argo CD),
+// mais ses manifestes restent sous apps/<app>/crossplane/prod. Seul le bot du portail peut écrire sous ce chemin (garde
+// protect-prod-paths de config-repo) : ce retrait passe donc par lui, comme toute écriture de production. Il ne détruit rien
+// dans le cloud (les ressources doivent déjà avoir disparu) ; il empêche seulement une ancienne app de renaître.
+async function removeOrphanProduction(appName, user) {
+  if (!user?.id || user.role !== 'manager') throw new Error('Validation manager requise.');
+  if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(appName || '')) throw new Error('Nom d’application invalide.');
+  if (deployments.listForUser(null).some(row => row.app_name === appName)) throw new Error('Application connue du portail : utiliser sa suppression.');
+  if (await kubernetes.getArgocdApplicationIfExists(`${appName}-prod`)) throw new Error('Application Argo CD de production encore présente : retirer ses ressources d’abord.');
+  const api = await github.getInstallationOctokit();
+  const registry = yaml.load(await readFile(api, target(), 'apps/registry.yaml') || 'apps: []');
+  if (registry.apps?.some(item => item.app_name === appName)) throw new Error('Application encore inscrite au registre.');
+  const prefix = `apps/${appName}/crossplane/prod/`;
+  const { data: ref } = await api.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...target(), ref: 'heads/main' });
+  const { data: tree } = await api.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', { ...target(), tree_sha: ref.object.sha, recursive: 'true' });
+  const paths = tree.tree.filter(entry => entry.type === 'blob' && entry.path.startsWith(prefix)).map(entry => entry.path);
+  if (!paths.length) return { removed: 0 };
+  await commitFiles(api, target(), Object.fromEntries(paths.map(path => [path, null])), `chore(${appName}): remove orphaned prod folder`);
+  return { removed: paths.length };
+}
+
+module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles, removeOrphanProduction };

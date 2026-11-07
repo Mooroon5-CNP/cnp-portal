@@ -43,6 +43,8 @@ beforeEach(() => {
       return { data: Array.isArray(content) ? content : { content: Buffer.from(content).toString('base64') } };
     }
     if (route.includes('/git/ref/')) return { data: { object: { sha: 'config-head' } } };
+    if (route === 'GET /repos/{owner}/{repo}/git/trees/{tree_sha}') return { data: { tree: [...existing.keys()]
+      .filter(key => key.startsWith(`${args.repo}/`)).map(key => ({ type: 'blob', path: key.slice(args.repo.length + 1) })) } };
     if (route.startsWith('GET ') && route.includes('/git/commits/')) return { data: { tree: { sha: 'base-tree' } } };
     if (route === 'POST /repos/{owner}/{repo}/git/trees') { trees.push(args); return { data: { sha: `tree-${trees.length}` } }; }
     if (route === 'POST /repos/{owner}/{repo}/git/commits') return { data: { sha: `commit-${trees.length}` } };
@@ -210,6 +212,24 @@ test('deleting dev removes only dev from the registry and preserves prod', async
   const registry = trees.at(-1).tree.find(file => file.path === 'apps/registry.yaml');
   expect(yaml.load(registry.content).apps[0].environments).toEqual(['prod']);
   expect(trees.at(-1).tree.some(file => file.path.includes('/crossplane/prod/'))).toBe(false);
+});
+
+test('an orphaned prod folder is removed by the bot only when the app exists nowhere else', async () => {
+  const manager = { id: 'manager', role: 'manager' };
+  for (const file of ['kustomization.yaml', 'rds-instance.yaml']) existing.set(`config/apps/gone-app/crossplane/prod/${file}`, 'x');
+  existing.set('config/apps/gone-app/crossplane/dev/kustomization.yaml', 'x');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'other' }] }));
+  await expect(service.removeOrphanProduction('gone-app', { id: 'dev', role: 'dev' })).rejects.toThrow('manager');
+  await expect(service.removeOrphanProduction(dep.appName, manager)).rejects.toThrow('connue du portail');
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValueOnce({ metadata: { name: 'gone-app-prod' } });
+  await expect(service.removeOrphanProduction('gone-app', manager)).rejects.toThrow('Argo CD');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'gone-app' }] }));
+  await expect(service.removeOrphanProduction('gone-app', manager)).rejects.toThrow('registre');
+  expect(trees).toHaveLength(0);
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [] }));
+  expect(await service.removeOrphanProduction('gone-app', manager)).toEqual({ removed: 2 });
+  expect(trees.at(-1).tree.map(file => [file.path, file.sha])).toEqual([
+    ['apps/gone-app/crossplane/prod/kustomization.yaml', null], ['apps/gone-app/crossplane/prod/rds-instance.yaml', null]]);
 });
 
 test('an expired lease cannot overwrite the state owned by another worker', () => {
