@@ -241,7 +241,8 @@ describe('mise à jour d’une app en service', () => {
     row = await tick();                                                    // nouvelle publication runtime, pas l'ancienne
     expect(profiles.prepare).toHaveBeenCalledWith('runtime', expect.objectContaining({ id: manager.id }), 'weather-api');
     expect(row.step).toBe(1);
-    await tick(); expect(tasks.at(-1).action).toBe('runtime-verify'); succeed();
+    await tick(); expect(tasks.at(-1).action).toBe('runtime-rollout'); succeed();
+    await tick(); await tick(); expect(tasks.at(-1).action).toBe('runtime-verify'); succeed();
     await tick(); await tick(); expect(tasks.at(-1).action).toBe('health'); succeed();
     await tick();
     row = await tick();
@@ -260,7 +261,7 @@ describe('mise à jour d’une app en service', () => {
         const last = tasks.at(-1);
         if (last.state === 'running') { actions.push(last.action); succeed(); }
       }
-      expect(actions).toEqual(['runtime-verify', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
+      expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
       expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
     }
   });

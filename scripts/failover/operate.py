@@ -191,6 +191,33 @@ def execute(request):
     if expected.resolve() not in work.parents:
         raise ValueError('Dossier opérateur hors périmètre')
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if action == 'runtime-rollout':
+        # Mise à jour : la définition de tâche publiée enregistre une nouvelle révision chez AWS, mais le service ECS garde la
+        # référence déjà résolue. On y écrit l'ARN complet de la nouvelle révision : le fournisseur conserve ce format, donc
+        # une seule mise à jour (un seul déploiement), puis plus de différence. Avec la famille seule, il relit
+        # « famille:N » et redéploie sans fin (constaté le 07/11/2026).
+        images = request.get('images')
+        if not images:
+            raise ValueError('Images de la publication requises')
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        items = app_resources(app, apis, custom)
+        ecs = lambda item, kind: item['kind'] == kind and item.get('apiVersion', '').startswith('ecs.aws.upbound.io/')
+        services = [entry for entry in items if ecs(entry[3], 'Service')]
+        if len(services) != 1:
+            raise ValueError('Service ECS de l\'application introuvable ou ambigu')
+        group, version, plural, service = services[0]
+        wanted = service['spec']['forProvider'].get('taskDefinitionRef', {}).get('name')
+        tasks = [entry[3] for entry in items if ecs(entry[3], 'TaskDefinition') and entry[3]['metadata']['name'] == wanted]
+        task = tasks[0] if tasks else None
+        observed = (task or {}).get('status', {}).get('atProvider', {})
+        registered = bool(task) and ready(task) and images['aws'] in (observed.get('containerDefinitions') or '')
+        arn = observed.get('arn') or ''
+        if not registered or not re.fullmatch(r'arn:aws:ecs:eu-west-3:804210702561:task-definition/[A-Za-z0-9_-]+:\d+', arn):
+            return {'verified': False, 'message': 'En attente de la nouvelle définition de tâche chez AWS.'}
+        if service['spec']['forProvider'].get('taskDefinition') != arn:
+            custom.patch_cluster_custom_object(group, version, plural, service['metadata']['name'],
+                                               {'spec': {'forProvider': {'taskDefinition': arn}}})
+        return {'verified': True, 'task_definition': arn}
     if action == 'runtime-verify':
         import boto3
         cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))

@@ -623,6 +623,32 @@ class TeardownTests(unittest.TestCase):
         self.assertIs(run(404)['verified'], True)                          # instance disparue : la base ne peut plus exister
         self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:], ('app-db', {'metadata': {'finalizers': None}}))
 
+    def test_an_update_points_the_ecs_service_to_the_new_task_revision_by_full_arn(self):
+        image = '804210702561.dkr.ecr.eu-west-3.amazonaws.com/weather-api@sha256:' + 'b' * 64
+        ok = [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]
+        arn = 'arn:aws:ecs:eu-west-3:804210702561:task-definition/weather-api-prod:7'
+        service = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'Service', 'metadata': {'name': 'weather-api-prod'},
+                   'spec': {'forProvider': {'taskDefinition': 'weather-api-prod:6', 'taskDefinitionRef': {'name': 'weather-api-prod-td'}}}}
+        task = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'TaskDefinition', 'metadata': {'name': 'weather-api-prod-td'},
+                'spec': {}, 'status': {'conditions': ok, 'atProvider': {'arn': arn, 'containerDefinitions': '[{"image": "old"}]'}}}
+        def run():
+            sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+            import test_worker_phase1 as fixtures
+            profile = fixtures.platform_profile()
+            parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+            parent.mkdir(exist_ok=True, parents=True)
+            with tempfile.TemporaryDirectory(dir=parent) as work:
+                return operator.execute({'app': profile['gcp']['app_name'], 'work': work, 'action': 'runtime-rollout',
+                    '_kubernetes': (self.apis, self.custom), 'images': {'aws': image},
+                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
+        self.items = {'instances': [service, task]}                        # le faux cluster sert ce pluriel
+        self.assertIs(run()['verified'], False)                            # ancienne image encore enregistrée
+        self.custom.patch_cluster_custom_object.assert_not_called()
+        task['status']['atProvider']['containerDefinitions'] = json.dumps([{'image': image}])
+        self.assertEqual(run()['task_definition'], arn)
+        self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:],
+                         ('weather-api-prod', {'spec': {'forProvider': {'taskDefinition': arn}}}))
+
     def test_gone_only_when_nothing_is_left(self):
         self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}},
                                     {'kind': 'Instance', 'metadata': {'name': 'going', 'deletionTimestamp': 'x'}, 'spec': {}}]}

@@ -34,16 +34,16 @@ const PLATFORM_STEPS = [
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
 // Mise à jour d'une app en service : une nouvelle CI de production réussie republie les runtimes GCP et AWS avec ses images
 // (même publication contrôlée que la mise en service), puis vérifie que les deux côtés servent la nouvelle version.
-const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'health']];
+const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'health']];
 // Avec une base : la migration de l'application a pu changer le schéma de GCP, que la réplication ne transporte pas. Le worker
 // est mis en pause (aucune bascule vers une copie en reconstruction), la copie AWS est reconstruite si les schémas diffèrent,
 // puis vérifiée avant la reprise du worker.
-const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'worker-pause'], ['operation', 'resync'],
+const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'worker-pause'], ['operation', 'resync'],
   ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
 
 const UPDATE_CHECK_MS = 120000;
 const lastUpdateCheck = new Map();
-const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
+const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check']);
 // Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
 // TEMPORAIRE (G5, premier passage cloud) : CNP_FAILOVER_STEP_BY_STEP=true remet la revue manager de chaque publication.
 // À retirer après la recette de panne (G7).
@@ -211,7 +211,7 @@ async function advance(app) {
     }
     const reference = `operation:${operation.id}`;
     if (operation.state === 'running') { save('running', `En cours : ${action}.`, reference); return; }
-    const requiresProof = ['observe', 'verify', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
+    const requiresProof = ['observe', 'verify', 'runtime-rollout', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
     // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
     if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {

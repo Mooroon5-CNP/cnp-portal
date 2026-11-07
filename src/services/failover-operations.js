@@ -11,7 +11,7 @@ const workRoot = path.join(root, 'data/failover-operations');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // Plus aucun plan Terraform : l'infrastructure partagée est créée une fois par la pile plateforme, le propre à l'app passe par GitOps.
 const actions = ['initialize-secrets', 'observe', 'bootstrap-roles', 'schema-check', 'bootstrap', 'verify', 'runtime-verify', 'worker-configure', 'worker-verify', 'worker-resume', 'health',
-  'worker-pause', 'resync'];
+  'worker-pause', 'resync', 'runtime-rollout'];
 // Suppression complète (failover-teardown) : libération, disparition des ressources, puis secrets et état du worker.
 const TEARDOWN = ['teardown-released', 'teardown-gone', 'teardown-cleanup'];
 const platformRegime = document => document.profile.automation?.regime === 'platform';
@@ -67,7 +67,7 @@ function start(app, action, user) {
     void finish(id, request);
     return { id, state: 'running' };
   }
-  if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify'].includes(action))) throw new Error('Profil SQL requis.');
+  if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify', 'runtime-rollout'].includes(action))) throw new Error('Profil SQL requis.');
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
   const legacySettings = service.settings();
   const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
@@ -95,7 +95,7 @@ function start(app, action, user) {
     request.expect_probes = rows.some(row => row.stage === 'dns' && row.state === 'published');
     request.expect_worker = rows.some(row => row.stage === 'worker' && row.state === 'published');
   }
-  if (action === 'runtime-verify') {
+  if (['runtime-verify', 'runtime-rollout'].includes(action)) {
     service.rows(app);
     const runtime = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
     if (!runtime) throw new Error('Publication des runtimes requise avant vérification.');
