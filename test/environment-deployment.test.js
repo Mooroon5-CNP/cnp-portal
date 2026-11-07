@@ -200,6 +200,29 @@ test('deleting dev removes only dev from the registry and preserves prod', async
   expect(trees.at(-1).tree.some(file => file.path.includes('/crossplane/prod/'))).toBe(false);
 });
 
+test('deleting the last environment also removes the empty root folder file, never a populated one', async () => {
+  const root = 'config/apps/pixelcam/crossplane/kustomization.yaml';
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, environments: ['dev'] }] }));
+  existing.set(root, yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: [] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(trees.at(-1).tree).toContainEqual(expect.objectContaining({ path: 'apps/pixelcam/crossplane/kustomization.yaml', sha: null }));
+  expect(yaml.load(trees.at(-1).tree.find(file => file.path === 'apps/registry.yaml').content).apps).toEqual([]);
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, environments: ['dev'] }] }));
+  existing.set(root, yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: ['claims.yaml'] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(trees.at(-1).tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml')).toBe(false);
+});
+
+test('deleting one of two environments keeps the root folder file', async () => {
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, environments: ['dev', 'prod'] }] }));
+  existing.set('config/apps/pixelcam/crossplane/kustomization.yaml', yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: [] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(trees.at(-1).tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml')).toBe(false);
+});
+
 test('an expired lease cannot overwrite the state owned by another worker', () => {
   const token = releases.acquire(dep.id, revision, run.id);
   db.prepare('UPDATE deployment_releases SET lease_until = 0 WHERE deployment_id = ?').run(dep.id);
