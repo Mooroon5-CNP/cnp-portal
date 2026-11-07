@@ -36,8 +36,7 @@ class OperatorTests(unittest.TestCase):
         expected = {'secrets': {'app': app, 'initialized': True}, 'credentials': {'aws_secret_arns': {'value': {}}}}
         request = {'app': app, 'work': self.directory.name, 'action': 'initialize-secrets',
                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}}
-        with patch('initialize_secrets.initialize', side_effect=AssertionError('chemin du pilote')), \
-                patch('platform_secrets.execute', return_value=expected) as run:
+        with patch('platform_secrets.execute', return_value=expected) as run:
             self.assertEqual(operator.execute(request), expected)
         self.assertEqual(run.call_args.args[0], {'app': app, 'kubernetes_secret': profile['gcp']['credentials_secret_name'],
                                                  'gcp_runtime_service_account': profile['gcp']['gcp_runtime']['service_account']})
@@ -357,7 +356,7 @@ class EngineRootTests(unittest.TestCase):
                 operator.engine_root({}, here)
 
     def test_real_layout_resolves_without_pythonpath(self):
-        self.assertTrue((operator.ROOT / 'safe_apply.py').is_file())
+        self.assertTrue((operator.ROOT / 'bootstrap.py').is_file() and (operator.ROOT / 'platform_secrets.py').is_file())
 
 
 if __name__ == '__main__':
