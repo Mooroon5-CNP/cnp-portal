@@ -1,8 +1,6 @@
 <!DOCTYPE html>
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
-<script src="/js/application-variables.js" defer></script>
-<script src="/js/deployment-wizard.js" defer></script>
 
   <body>
     <div class="layout">
@@ -131,44 +129,13 @@
                     <button id="closeNewDeployment" class="btn btn-ghost">Fermer</button>
                   </div>
 
-                  <!-- Étape 0 : dépôt existant ou nouveau dépôt -->
-                  <div id="repoSourceStep">
-                    <p style="margin:0 0 12px;font-size:14px;">Votre application a-t-elle déjà un dépôt GitHub ?</p>
-                    <div style="display:flex;gap:12px;">
-                      <button type="button" id="chooseExistingRepo" class="btn btn-secondary" style="flex:1;display:block;text-align:left;padding:16px;white-space:normal;height:auto;line-height:1.4;">
-                        <strong>Dépôt GitHub prêt et existant</strong><br>
-                        <span style="font-size:12px;color:var(--text-muted);">J'ai déjà mon code et mon Dockerfile : je renseigne l'URL du dépôt.</span>
-                      </button>
-                      <button type="button" id="chooseNewRepo" class="btn btn-secondary" style="flex:1;display:block;text-align:left;padding:16px;white-space:normal;height:auto;line-height:1.4;">
-                        <strong>Créer un nouveau dépôt</strong><br>
-                        <span style="font-size:12px;color:var(--text-muted);">La plateforme crée le dépôt dans l'organisation avec un squelette, les branches main et prod, puis déploie.</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div id="deploymentFormStep" style="display:none;">
                   <div style="background:var(--surface-alt,#f8f9fa);border-radius:6px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--text-muted);">
-                    La plateforme configure automatiquement le pipeline CI/CD, les secrets GitHub et la configuration
-                    GitOps. Vous n'avez rien d'autre à faire.
+                    La plateforme configure automatiquement le pipeline CI/CD, les secrets GitHub et les manifests
+                    Kubernetes. Vous n'avez rien d'autre à faire.
                   </div>
 
-                  <form action="/deployments" method="POST" id="newDeploymentForm" novalidate>
-                    <p data-wizard-progress aria-live="polite">1/3 — Application</p>
-                    <div data-wizard-error class="flash flash-error" role="alert" hidden></div>
-                    <div data-deployment-step="1">
-                    <input type="hidden" name="source" id="repoSource" value="existing">
-
-                    <div class="form-group" id="repoLanguageGroup" style="display:none;">
-                      <label for="repoLanguage">Langage du squelette</label>
-                      <select name="repoLanguage" id="repoLanguage">
-                        <% Object.entries(repoLanguages).forEach(([key, label]) => { %>
-                        <option value="<%= key %>"><%= label %></option>
-                        <% }) %>
-                      </select>
-                      <div class="form-hint">Le dépôt public <code>Mooroon5-CNP/&lt;nom de l'application&gt;</code> est créé avec ce squelette (lint, tests, Dockerfile, README) et les branches <code>main</code> et <code>prod</code>. Fullstack = un dossier <code>web/</code> et un dossier <code>api/</code>.</div>
-                    </div>
-
-                    <div class="form-group" id="repoUrlGroup">
+                  <form action="/deployments" method="POST">
+                    <div class="form-group">
                       <label for="githubRepoUrl">URL du dépôt GitHub</label>
                       <input type="url" name="githubRepoUrl" id="githubRepoUrl"
                         placeholder="https://github.com/org/mon-app" required
@@ -180,7 +147,7 @@
                       <label for="appName">Nom de l'application</label>
                       <input type="text" name="appName" id="appName"
                         placeholder="mon-app" required
-                        pattern="[a-z][a-z0-9\-]{0,38}[a-z0-9]" maxlength="40"
+                        pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
                         title="Minuscules, chiffres et tirets uniquement">
                       <div class="form-hint">Minuscules et tirets uniquement (ex: mon-app). Réutilisez ce nom pour les environnements dev et prod du même dépôt.</div>
                     </div>
@@ -237,26 +204,11 @@
                     </div>
 
                       <div class="form-group"><label><input type="checkbox" name="failoverRequested"> Activer le failover GCP → AWS</label><div class="form-hint">Production uniquement. L’image est publiée sur les deux clouds. Un manager prépare et valide le runtime secondaire et, si nécessaire, la réplication PostgreSQL. Le statut reste en préparation jusqu’aux vérifications.</div></div>
-                    </div>
-                    <div data-deployment-step="2" hidden>
-                      <h4>Variables de l’application</h4>
-                      <%- include('../partials/variable-editor', { names: [] }) %>
-                    </div>
-                    <div data-deployment-step="3" hidden>
-                      <h4>Vérifier avant de déployer</h4>
-                      <div data-deployment-summary></div>
-                      <p class="form-hint">Les valeurs secrètes ne sont pas affichées. La production reste soumise à l’approbation d’un manager.</p>
-                    </div>
-                    <p data-wizard-storage-status role="status" class="flash flash-warning" hidden></p>
                     <div style="display:flex;gap:10px;margin-top:16px;">
-                      <button type="button" data-wizard-back class="btn btn-secondary" hidden>Précédent</button>
-                      <button type="button" data-wizard-next class="btn btn-primary">Suivant</button>
-                      <button type="submit" id="deploySubmitBtn" class="btn btn-primary" hidden>Déployer</button>
-                      <button type="button" id="backToRepoSource" class="btn btn-ghost">Retour</button>
+                      <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
                     </div>
                   </form>
-                  </div>
                 </div>
               </div>
 
@@ -353,28 +305,8 @@
                 const modal = document.getElementById('newDeploymentModal');
                 const closeBtn = document.getElementById('closeNewDeployment');
                 const cancelBtn = document.getElementById('cancelNewDeployment');
-                function showModal() { showRepoSourceStep(); modal.style.display = 'flex'; }
-                function hideModal() { modal.style.display = 'none'; modal.dispatchEvent(new Event('cnp:closed')); }
-
-                // Étape 0 : dépôt existant (formulaire historique, inchangé) ou nouveau dépôt.
-                function showRepoSourceStep() {
-                  document.getElementById('repoSourceStep').style.display = '';
-                  document.getElementById('deploymentFormStep').style.display = 'none';
-                }
-                function chooseRepoSource(source) {
-                  const isNew = source === 'new';
-                  document.getElementById('repoSource').value = source;
-                  document.getElementById('repoUrlGroup').style.display = isNew ? 'none' : '';
-                  document.getElementById('githubRepoUrl').required = !isNew;
-                  document.getElementById('githubRepoUrl').disabled = isNew;
-                  document.getElementById('repoLanguageGroup').style.display = isNew ? '' : 'none';
-                  document.getElementById('deploySubmitBtn').textContent = isNew ? 'Créer le dépôt et déployer' : 'Déployer';
-                  document.getElementById('repoSourceStep').style.display = 'none';
-                  document.getElementById('deploymentFormStep').style.display = '';
-                }
-                document.getElementById('chooseExistingRepo').addEventListener('click', () => chooseRepoSource('existing'));
-                document.getElementById('chooseNewRepo').addEventListener('click', () => chooseRepoSource('new'));
-                document.getElementById('backToRepoSource').addEventListener('click', showRepoSourceStep);
+                function showModal() { modal.style.display = 'flex'; }
+                function hideModal() { modal.style.display = 'none'; }
                 if (openBtn) openBtn.addEventListener('click', showModal);
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);

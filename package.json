@@ -11,17 +11,15 @@
     "cloud:check": "node scripts/cloud/check-connection.js",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "lint": "eslint src test apps packages public/js scripts/runtime scripts/platform --ext .js,.cjs",
+    "lint": "eslint src test apps packages public/js --ext .js",
     "test": "jest --forceExit",
-    "test:coverage": "jest --forceExit --coverage",
     "test:integration": "node scripts/test-mcp-integration.mjs",
     "dev:integration": "node scripts/start-local-mcp.cjs",
     "dev:integration:mock": "node scripts/start-local-mcp.cjs --mock",
     "test:live-sources": "node scripts/check-live-sources.cjs",
     "test:generation": "node scripts/test-generation.mjs",
     "test:context": "node scripts/test-context-resolution.mjs",
-    "test:live-environments": "node scripts/test-mcp-live-environments.mjs",
-    "platform:variables:check": "node scripts/platform/check-variables.cjs"
+    "test:live-environments": "node scripts/test-mcp-live-environments.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.86",
@@ -59,10 +57,6 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "collectCoverageFrom": ["src/**/*.js"],
-    "coverageThreshold": {
-      "./src/services/repo-scaffolder.js": { "statements": 95, "branches": 85, "functions": 80, "lines": 95 }
-    },
     "testMatch": [
       "**/test/**/*.test.js",
       "**/apps/**/*.test.js"

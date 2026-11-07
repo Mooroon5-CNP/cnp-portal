@@ -104,7 +104,6 @@ function _rowToObj(row) {
         persistentStorage: !!row.persistent_storage,
         targetCluster: row.target_cluster || 'gcp',
         environment: row.deployment_environment || 'legacy',
-        unsupportedRuntime: row.runtime === 'kubernetes',
         failoverRequested: !!row.failover_requested,
         sourceBranch: row.deployment_environment === 'prod' ? 'prod' : 'main',
         resourceName: row.deployment_environment && row.deployment_environment !== 'legacy' ? `${row.app_name}-${row.deployment_environment}` : row.app_name,
@@ -115,8 +114,9 @@ function _rowToObj(row) {
 }
 
 module.exports = {
-    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy', id = uuidv4(), failoverRequested = false }) => {
+    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy', failoverRequested = false }) => {
         if (!['legacy', 'dev', 'prod'].includes(environment)) throw new Error('Invalid deployment environment');
+        const id = uuidv4();
         const now = new Date().toISOString();
         const enc = configRepoToken ? encryptToken(configRepoToken) : null;
         const cluster = ['aws', 'azure'].includes(targetCluster) ? targetCluster : 'gcp';
@@ -190,7 +190,6 @@ module.exports = {
     },
 
     delete: (id) => {
-        require('./deployment-environment').remove(id);
         db.prepare('DELETE FROM deployment_team_access WHERE deployment_id = ?').run(id);
         deleteStmt.run(id);
     },

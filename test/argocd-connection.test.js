@@ -69,14 +69,3 @@ test('legacy Argo REST deletion explicitly sends JSON content type', async () =>
   expect(call.headers['Content-Type']).toBe('application/json');
   expect(call.params).toMatchObject({ cascade: true, propagationPolicy: 'foreground' });
 });
-
-test('a cluster-pinned public CA and explicit certificate name preserve TLS verification', async () => {
-  config.argocd.caCert = Buffer.from('test public certificate').toString('base64');
-  config.argocd.tlsServerName = 'argocd-server.argocd.svc';
-  config.argocd.insecure = false;
-  await client.listApplications();
-  const agent = adapter.mock.calls[0][0].httpsAgent;
-  expect(agent.options.ca.toString()).toBe('test public certificate');
-  expect(agent.options.servername).toBe('argocd-server.argocd.svc');
-  expect(agent.options.rejectUnauthorized).not.toBe(false);
-});

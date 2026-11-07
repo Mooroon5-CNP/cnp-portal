@@ -1,4 +1,4 @@
-FROM node:24-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 # hadolint ignore=DL3018
@@ -8,7 +8,7 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ build-base linux-h
   && apk del .build-deps \
   && npm cache clean --force
 
-FROM node:24-alpine AS final
+FROM node:22-alpine AS final
 WORKDIR /app
 
 # npm/yarn/corepack come with the base image but are never used at runtime
@@ -27,12 +27,8 @@ COPY --chown=node:node packages/ ./packages/
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
 COPY --chown=node:node documentation/ ./documentation/
-COPY --chown=node:node scripts/runtime/ ./scripts/runtime/
-COPY --chown=node:node scripts/platform/ ./scripts/platform/
 
 RUN mkdir -p /app/data && chown node:node /app/data
-
-LABEL io.cnp.variables-contract="1"
 
 USER node
 
@@ -48,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3000/healthz || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "scripts/runtime/start.cjs", "/usr/local/bin/node", "src/index.js"]
+CMD ["node", "src/index.js"]

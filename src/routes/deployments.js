@@ -7,11 +7,7 @@ const { requirePermission, can } = require('../middleware/rbac');
 const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
-const repoScaffolder = require('../services/repo-scaffolder');
 const environmentService = require('../services/environment-deployment');
-const applicationVariables = require('../services/application-variables');
-const environmentStorage = require('../models/deployment-environment');
-const { randomUUID } = require('crypto');
 const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
@@ -79,7 +75,7 @@ function startEnvironmentOnboarding(dep) {
 }
 
 function canRetryConfiguration(user, dep) {
-    return !dep.unsupportedRuntime && usesEnvironment(dep) && dep.onboardingStatus === 'failed'
+    return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
         && !dep.onboardingError?.startsWith('Nettoyage partiel')
         && (user.role === 'manager' || user.id === dep.ownerUserId);
 }
@@ -247,7 +243,6 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         allTeams,
         userTeams,
         applicationsBaseDomain: applicationAddress.baseDomain(),
-        repoLanguages: repoScaffolder.LANGUAGES,
         filterTeam,
         user: req.user,
         can: (p) => can(req.user, p),
@@ -258,104 +253,62 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // POST /deployments — create and trigger onboarding
 // ---------------------------------------------------------------------------
 
-function wantsJson(req) { return req.get('accept')?.includes('application/json'); }
-function creationError(req, res, message, status) {
-    if (wantsJson(req)) return res.status(status).json({ error: message });
-    if (status === 403) return res.status(403).type('text').send(message);
-    req.flash('error', message); return res.redirect('/deployments');
-}
-
-router.get('/variables/capability', requireAuth, requirePermission('deployments:deploy'), async (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    const status = await applicationVariables.check();
-    return res.json({ available: status.available, code: status.code, message: status.message });
-});
-
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const { appName, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev', source, repoLanguage } = req.body;
-    // « new » : le portail crée le dépôt (squelette) ; tout autre valeur = dépôt existant (comportement historique).
-    const createsRepository = source === 'new';
-    let githubRepoUrl = req.body.githubRepoUrl;
-    let changes;
-    try { changes = applicationVariables.parse(req.body); }
-    catch (error) { return creationError(req, res, error.message, 400); }
-    if (changes.some(change => change.action !== 'set')) return creationError(req, res, 'Action de variable invalide à la création.', 400);
-    if (changes.length && targetCluster === 'azure') return creationError(req, res, 'Variables additionnelles disponibles pour Cloud Run GCP.', 400);
-    if (changes.length && !applicationVariables.transportAllowed(req)) return creationError(req, res, 'Utilisez HTTPS pour transmettre des secrets.', 400);
+    const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
     const hasPersistentStorage = targetCluster !== 'azure'
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
-    if (!appName || (!createsRepository && !githubRepoUrl)) {
-        return creationError(req, res, createsRepository
-            ? "Veuillez renseigner le nom de l'application."
-            : "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.", 400);
+    if (!appName || !githubRepoUrl) {
+        req.flash('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
+        return res.redirect('/deployments');
     }
 
     try { environmentService.validate(environment, appName, targetCluster); }
     catch (err) {
-        return creationError(req, res, err.message, 400);
+        req.flash('error', err.message);
+        return res.redirect('/deployments');
     }
     const failoverRequested = ['on', 'true', true].includes(req.body.failoverRequested);
     if (failoverRequested && (environment !== 'prod' || (targetCluster && targetCluster !== 'gcp') || hasPersistentStorage)) {
-        return creationError(req, res, 'Le failover GCP → AWS nécessite une production GCP sans stockage SQLite local.', 400);
+        req.flash('error', 'Le failover GCP → AWS nécessite une production GCP sans stockage SQLite local.');
+        return res.redirect('/deployments');
     }
     const port = Number(appPort || 8080);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        return creationError(req, res, 'Le port applicatif doit être compris entre 1 et 65535.', 400);
+        req.flash('error', 'Le port applicatif doit être compris entre 1 et 65535.');
+        return res.redirect('/deployments');
     }
 
     if (!config.github.configRepoToken) {
-        return creationError(req, res, 'La plateforme n’est pas configurée. Contactez l’administrateur.', 503);
+        req.flash('error', 'La plateforme n\'est pas configurée (GITHUB_CONFIG_REPO_TOKEN manquant). Contactez l\'administrateur.');
+        return res.redirect('/deployments');
     }
 
-    let parsed = createsRepository ? null : githubService.parseRepoUrl(githubRepoUrl);
-    if (!createsRepository && !parsed) {
-        return creationError(req, res, 'URL de dépôt GitHub invalide (exemple : https://github.com/org/repo).', 400);
+    const parsed = githubService.parseRepoUrl(githubRepoUrl);
+    if (!parsed) {
+        req.flash('error', 'URL de dépôt GitHub invalide (exemple : https://github.com/org/repo).');
+        return res.redirect('/deployments');
     }
 
     if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
-        return creationError(req, res, 'Ce cloud n’est pas disponible. Seuls GCP et Azure sont supportés.', 400);
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
+        return res.redirect('/deployments');
     }
 
     // Un nom d'application partagé entre environnements garde les mêmes droits d'accès.
     const visibleIds = new Set(deploymentModel.listForUser(req.user).map(row => row.id));
     if (deploymentModel.listForUser(null).some(row => row.app_name === appName && !visibleIds.has(row.id))) {
-        return creationError(req, res, 'Application non accessible.', 403);
+        return res.status(403).send('Application non accessible.');
     }
 
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
 
-    if (deploymentModel.listForUser(null).some(row => row.app_name === appName && row.deployment_environment === environment)) return creationError(req, res, 'Cet environnement est déjà enregistré. Ouvrez son détail.', 409);
-    // Nouveau dépôt : créé (squelette + branches main/prod) avant l'enregistrement du déploiement.
-    // Il n'existe donc aucune ligne en base si la création échoue ; l'onboarding qui suit est celui des dépôts existants.
-    if (createsRepository) {
-        try {
-            const created = await repoScaffolder.scaffoldRepository({ name: appName, language: repoLanguage, port });
-            githubRepoUrl = created.url;
-            console.log(`[deployments] repository ${created.owner}/${created.repo} created from skeleton ${repoLanguage} by user ${req.user.id}`);
-        } catch (err) {
-            if (!(err instanceof repoScaffolder.ScaffoldError)) console.error(`[deployments] repository creation failed for ${appName}: ${err.message}`);
-            return creationError(req, res, err instanceof repoScaffolder.ScaffoldError ? err.message : 'Impossible de créer le dépôt GitHub. Réessayez ou contactez l’administrateur.', 400);
-        }
-    }
-
-    parsed = githubService.parseRepoUrl(githubRepoUrl);
-    const candidate = { id: randomUUID(), appName, githubRepoUrl, targetCluster: targetCluster || 'gcp', environment };
-    let variableConfiguration;
-    if (changes.length) {
-        try { await githubClient.checkActionsEnabled(parsed.owner, parsed.repo); }
-        catch (_) { return creationError(req, res, 'Dépôt inaccessible à la GitHub App ou GitHub Actions désactivé.', 403); }
-        try { variableConfiguration = await applicationVariables.prepare(candidate, changes); }
-        catch (_) { return creationError(req, res, 'Stockage des variables indisponible. La demande n’a pas été créée ; vérifiez la configuration plateforme et réessayez.', 503); }
-    }
     // Create the deployment record immediately with status 'configuring'.
     let dep;
     try {
-        dep = require('../models/db').transaction(() => {
-            const created = deploymentModel.create({
-            id: candidate.id,
+        dep = deploymentModel.create({
             appName,
             githubRepoUrl,
             appPort: port,
@@ -366,35 +319,16 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             targetCluster: targetCluster || 'gcp',
             environment,
             failoverRequested,
-            });
-            if (variableConfiguration) environmentStorage.save(created.id, variableConfiguration.refs, variableConfiguration);
-            return created;
-        })();
+        });
     } catch (e) {
-        return creationError(req, res, "Impossible d'enregistrer le déploiement.", 409);
+        req.flash('error', "Impossible d'enregistrer le déploiement.");
+        return res.redirect('/deployments');
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
     startEnvironmentOnboarding(dep);
 
-    if (wantsJson(req)) return res.status(202).json({ redirect: `/deployments/${dep.id}` });
     return res.redirect(`/deployments/${dep.id}`);
-});
-
-router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
-    const dep = deploymentModel.get(req.params.id);
-    if (!dep) return res.status(404).json({ error: 'Déploiement introuvable.' });
-    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && dep.ownerUserId !== req.user.id)) return res.status(403).json({ error: 'Accès refusé.' });
-    if (dep.targetCluster !== 'gcp' || dep.unsupportedRuntime || !usesEnvironment(dep) || dep.onboardingStatus !== 'ready') return res.status(409).json({ error: 'Variables non modifiables dans cet état.' });
-    let changes;
-    try { changes = applicationVariables.parse(req.body); }
-    catch (error) { return res.status(400).json({ error: error.message }); }
-    if (!applicationVariables.transportAllowed(req)) return res.status(400).json({ error: 'Utilisez HTTPS pour transmettre des secrets.' });
-    if (!changes.some(change => change.action !== 'keep')) return res.status(400).json({ error: 'Aucune modification à enregistrer.' });
-    try { await applicationVariables.update(dep, changes, guard => environmentService.triggerConfigurationBuild(dep, guard)); }
-    catch (_) { return res.status(503).json({ error: 'Enregistrement ou relance CI impossible. La configuration précédente est conservée.' }); }
-    req.flash('success', 'Variables enregistrées ; nouvelle CI lancée. La production reste soumise à approbation.');
-    return res.json({ redirect: `/deployments/${dep.id}` });
 });
 
 // A partial deletion must never silently resume publishing on a new CI result.
@@ -666,9 +600,6 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
-        variableNames: applicationVariables.names(dep.id),
-        canManageVariables: dep.targetCluster === 'gcp' && usesEnvironment(dep) && !dep.unsupportedRuntime
-            && dep.onboardingStatus === 'ready' && (req.user.role === 'manager' || dep.ownerUserId === req.user.id),
         environmentStatus: selectedStatus,
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.

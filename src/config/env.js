@@ -66,8 +66,6 @@ const config = {
     username: process.env.ARGOCD_USERNAME,
     password: process.env.ARGOCD_PASSWORD,
     insecure: process.env.ARGOCD_INSECURE === 'true',
-    caCert: process.env.ARGOCD_CA_CERT || null,
-    tlsServerName: process.env.ARGOCD_TLS_SERVER_NAME || null,
     // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
     // Falls back to serverUrl if not set.
     uiUrl: process.env.ARGOCD_UI_URL || process.env.ARGOCD_SERVER_URL || null,
