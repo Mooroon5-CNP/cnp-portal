@@ -32,6 +32,11 @@ const PLATFORM_STEPS = [
   ['operation', 'worker-resume'], ['operation', 'health'],
 ];
 const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
+// Mise à jour d'une app en service : une nouvelle CI de production réussie republie les runtimes GCP et AWS avec ses images
+// (même publication contrôlée que la mise en service), puis vérifie que les deux côtés servent la nouvelle version.
+const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['operation', 'health']];
+const UPDATE_CHECK_MS = 120000;
+const lastUpdateCheck = new Map();
 const WAITABLE = new Set(['observe', 'runtime-verify', 'health', 'schema-check']);
 // Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
 // TEMPORAIRE (G5, premier passage cloud) : CNP_FAILOVER_STEP_BY_STEP=true remet la revue manager de chaque publication.
@@ -43,6 +48,27 @@ function schema() {
     state TEXT NOT NULL, reference TEXT, message TEXT, started_at TEXT NOT NULL,
     step_started_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lease_owner TEXT, lease_until INTEGER NOT NULL DEFAULT 0)`);
+  if (!db.pragma('table_info(failover_provisioning)').some(column => column.name === 'phase')) {
+    db.exec('ALTER TABLE failover_provisioning ADD COLUMN phase TEXT');
+  }
+}
+const stepsOf = (row, document) => row.phase === 'update' ? UPDATE_STEPS : stepsFor(document);
+// Révision de production à déployer, ou null : seulement sur une app saine que GCP sert (une mise à jour pendant que le
+// secours AWS est actif attendra le retour sur GCP), au plus une lecture GitHub toutes les 2 min.
+async function pendingRevision(app, health) {
+  // Une app sans base n'a pas de worker (pas d'état) ; une app avec base doit être en surveillance, pas basculée.
+  const watched = health?.result?.state;
+  if (health?.state !== 'completed' || health.result?.verified !== true || (watched && watched !== 'WAIT_SIGNALS')) return null;
+  if (Date.now() - (lastUpdateCheck.get(app) || 0) < UPDATE_CHECK_MS) return null;
+  lastUpdateCheck.set(app, Date.now());
+  try {
+    const deployments = require('../models/deployment');
+    const row = deployments.listForUser(null).find(value => value.app_name === app && value.deployment_environment === 'prod' && value.failover_requested);
+    if (!row) return null;
+    const { run } = await require('./failover-ci-images').latest(deployments.get(row.id));
+    if (run.status !== 'completed' || run.conclusion !== 'success') return null;
+    return run.head_sha !== profiles.runtimeRevision(app) ? run.head_sha : null;
+  } catch (_) { return null; }                         // GitHub indisponible : on regarde au tour suivant
 }
 function get(app) {
   schema();
@@ -70,8 +96,8 @@ function progress(app) {
   const row = get(app);
   if (!row) return null;
   let total = null;
-  try { total = stepsFor(profiles.profileFor(app)).length; } catch (_) { /* profil absent ou historique */ }
-  return { state: row.state, step: row.step, total, message: row.message };
+  try { total = stepsOf(row, profiles.profileFor(app)).length; } catch (_) { /* profil absent ou historique */ }
+  return { state: row.state, step: row.step, total, message: row.message, phase: row.phase || 'provision' };
 }
 function resume(app, user) {
   manager(user);
@@ -112,15 +138,29 @@ async function advance(app) {
     if (row.state === 'completed') {
       const health = operations.list(app).find(value => value.action === 'health');
       if (health && ['running', 'applying'].includes(health.state)) return;
+      const revision = await pendingRevision(app, health);
+      if (revision) {
+        const now = new Date().toISOString();
+        db.prepare(`UPDATE failover_provisioning SET phase='update',step=0,state='running',reference=NULL,message=?,step_started_at=?,updated_at=?
+          WHERE app=? AND lease_owner=?`).run(`Mise à jour vers ${revision.slice(0, 7)}.`, now, now, app, owner);
+        return;
+      }
       if (!health || Date.now() - Date.parse(health.created_at) >= 60000) operations.start(app, 'health', actor);
       return;
     }
-    const steps = stepsFor(document);
+    const steps = stepsOf(row, document);
     const step = steps[row.step];
-    if (!step) { save('completed', 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.'); return; }
+    if (!step) {
+      save('completed', row.phase === 'update' ? 'Mise à jour déployée sur GCP et AWS ; secours vérifié.'
+        : 'Mise en service vérifiée. La surveillance assure désormais la bascule automatique.');
+      db.prepare('UPDATE failover_provisioning SET phase=NULL WHERE app=? AND lease_owner=?').run(app, owner);
+      return;
+    }
     const [kind, action] = step;
     if (kind === 'candidate') {
-      const candidates = profiles.rows(app).filter(value => value.stage === action);
+      // En mise à jour, seule une proposition née pendant cette étape compte : l'ancienne publication « runtime » est déjà là.
+      const candidates = profiles.rows(app).filter(value => value.stage === action
+        && (row.phase !== 'update' || value.created_at >= row.step_started_at));
       let candidate = row.reference ? candidates.find(value => value.id === row.reference.slice(10))
         : candidates.find(value => ['pending', 'approving', 'published'].includes(value.state));
       if (!candidate) {

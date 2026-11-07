@@ -1,6 +1,8 @@
 'use strict';
-jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn() }));
+jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn(), runtimeRevision: jest.fn() }));
 jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start: jest.fn(), retry: jest.fn(), recoverInterrupted: jest.fn() }));
+jest.mock('../src/services/failover-ci-images', () => ({ latest: jest.fn() }));
+jest.mock('../src/models/deployment', () => ({ listForUser: jest.fn(() => []), get: jest.fn() }));
 const db = require('../src/models/db');
 const profiles = require('../src/services/environment-failover');
 const operations = require('../src/services/failover-operations');
@@ -213,4 +215,47 @@ test('un schéma non pris en charge bloque avec la cause, sans être rejoué', a
   expect(blocked.message).toContain('billing.invoices');
   expect(operations.retry).not.toHaveBeenCalled();
   expect(tasks).toHaveLength(1);
+});
+
+describe('mise à jour d’une app en service', () => {
+  const ciImages = require('../src/services/failover-ci-images');
+  const deployments = require('../src/models/deployment');
+  function inService(state = 'WAIT_SIGNALS') {
+    jest.setSystemTime(Date.now() + 3600000);                              // au-delà de la lecture GitHub d'un test précédent
+    workflow.start('weather-api', manager);
+    db.prepare("UPDATE failover_provisioning SET state='completed',step=? WHERE app='weather-api'").run(STEPS.length);
+    tasks.push({ id: 'health-1', app: 'weather-api', action: 'health', state: 'completed', created_at: new Date().toISOString(),
+      result: { verified: true, state } });
+    candidates.push({ id: 'old-runtime', app: 'weather-api', stage: 'runtime', state: 'published', created_at: '2026-11-01T00:00:00Z' });
+    deployments.listForUser.mockReturnValue([{ id: 'dep', app_name: 'weather-api', deployment_environment: 'prod', failover_requested: 1 }]);
+    deployments.get.mockReturnValue({ id: 'dep', appName: 'weather-api', environment: 'prod' });
+    profiles.runtimeRevision.mockReturnValue('a'.repeat(40));
+  }
+  test('une nouvelle CI de production republie les runtimes, vérifie les deux côtés puis revient en surveillance', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+    let row = await tick();
+    expect(row).toMatchObject({ phase: 'update', step: 0, state: 'running' });
+    row = await tick();                                                    // nouvelle publication runtime, pas l'ancienne
+    expect(profiles.prepare).toHaveBeenCalledWith('runtime', expect.objectContaining({ id: manager.id }), 'weather-api');
+    expect(row.step).toBe(1);
+    await tick(); expect(tasks.at(-1).action).toBe('runtime-verify'); succeed();
+    await tick(); await tick(); expect(tasks.at(-1).action).toBe('health'); succeed();
+    await tick();
+    row = await tick();
+    expect(row).toMatchObject({ state: 'completed', phase: null });
+    expect(row.message).toContain('Mise à jour déployée');
+    expect(workflow.progress('weather-api').phase).toBe('provision');
+  });
+  test('aucune mise à jour quand la révision est déjà servie, ou quand le secours AWS est actif', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40) } });
+    expect((await tick()).phase).toBeNull();
+    db.exec('DROP TABLE failover_provisioning'); tasks = []; candidates = [];
+    inService('AWS_ACTIVE');
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'c'.repeat(40) } });
+    jest.setSystemTime(Date.now() + 600000);
+    expect((await tick()).phase).toBeNull();
+    expect(profiles.prepare).not.toHaveBeenCalled();
+  });
 });

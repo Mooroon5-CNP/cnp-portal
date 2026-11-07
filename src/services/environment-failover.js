@@ -191,6 +191,12 @@ function render(request) {
     throw new Error(reason || 'Rendu refusé.');
   }
 }
+// Révision applicative que servent les runtimes publiés (la dernière publication « runtime »), ou null.
+function runtimeRevision(app) {
+  schema();
+  const row = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
+  return row?.image_record ? JSON.parse(row.image_record).revision : null;
+}
 function rows(app) {
   schema();
   return db.prepare(`SELECT id,app_name,stage,base_sha,head_sha,pr_number,pr_url,state,requested_by,reviewed_by,created_at FROM failover_candidates ${app ? 'WHERE app_name=?' : ''} ORDER BY created_at`).all(...(app ? [app] : []));
@@ -446,7 +452,8 @@ async function deploymentStatus(dep) {
     if (progress.state === 'blocked') return { phase: 'failed', message: `Mise en service du secours bloquée : ${progress.message}`, runUrl: run.html_url };
     if (progress.state !== 'completed') {
       const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
-      return { phase: 'deploying', message: `Mise en service du secours${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
+      const label = progress.phase === 'update' ? 'Mise à jour sur GCP et AWS' : 'Mise en service du secours';
+      return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
     }
     return readiness(dep);
   } catch (error) {
@@ -468,5 +475,5 @@ function readiness(dep) {
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
-module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
+module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, runtimeRevision, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
   adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus, stagesFor };
