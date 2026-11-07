@@ -341,7 +341,7 @@ async function interruptedApproval(api, dep, release) {
 async function reconcile(dep) {
   // Seule décision humaine, comme pour toute prod : un manager confirme ; le secours se met ensuite en service seul.
   if (dep.failoverRequested && !failover.enabled(dep)) return { phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true };
-  if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && (failover.adopted(dep) || current(dep))) return failover.deploymentStatus(dep);
+  if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && current(dep)) return failover.deploymentStatus(dep);
   if (locks.has(dep.id)) return locks.get(dep.id);
   const work = (async () => {
     if (!current(dep)) return { phase: 'configuring', message: 'Déploiement non disponible pour publication.' };

@@ -79,10 +79,10 @@ OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-
             ('primary_healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-primary-health'),
             ('worker_alarm', 'cloudwatch.aws.upbound.io', 'metricalarms', 'cnp-failover-platform-{app}'),
             ('worker_config', 'dynamodb.aws.upbound.io', 'tableitems', '{app}-failover-config')]
-# Noms des déclencheurs et de la table d'état, par régime (le pilote garde les siens).
-NAMES = {'pilot': {'state_table': 'cnp-failover-automation', 'rules': ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']},
+# Noms des déclencheurs et de la table d'état de la pile plateforme (le pilote et son worker historique ont été retirés le 07/11/2026).
+NAMES = {
          'platform': {'state_table': 'cnp-failover-platform-state', 'rules': ['cnp-failover-platform-alarm', 'cnp-failover-platform-retry']}}
-TASK_FAMILY = r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?|cnp-failover-platform-(bootstrap|worker)'
+TASK_FAMILY = r'cnp-failover-platform-(bootstrap|worker)'
 
 
 def google_session(session=None):
@@ -217,9 +217,7 @@ def gcp_availability(app, document, request, control):
 
 def worker_control(app, document):
     import boto3
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-    from prepare_failover_phase1 import regime
-    item = boto3.client('dynamodb', region_name='eu-west-3').get_item(TableName=NAMES[regime(document['profile'])]['state_table'],
+    item = boto3.client('dynamodb', region_name='eu-west-3').get_item(TableName=NAMES['platform']['state_table'],
         Key={'app': {'S': app}, 'record': {'S': 'CONTROL'}}, ConsistentRead=True).get('Item', {})
     return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
 
@@ -313,9 +311,7 @@ def execute(request):
         dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == 'cnp-alb-1733646164.eu-west-3.elb.amazonaws.com'
         if document['profile'].get('mode') == 'stateless':
             return {'verified': public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready, 'dns_ready': dns_ready, 'observed_at': int(time.time()), 'state': 'STATELESS'}
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-        from prepare_failover_phase1 import regime
-        names = NAMES[regime(document['profile'])]
+        names = NAMES['platform']
         def decode(item):
             return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
         records = {}
@@ -327,7 +323,7 @@ def execute(request):
         expected = next(value for value in request['packages']['worker-config.json']['applications'] if value['app'] == app)
         configured = control.get('config_hash') == automation.config_hash(expected) and control.get('config_hash') == replication.get('config_hash')
         triggers_ready = bool(request.get('task_definition'))
-        # Le portail connaît la tâche par son nom (régime plateforme) ou par un ARN de révision (pilote) : comparer des ARN de
+        # Le portail connaît la tâche par son nom : comparer des ARN de
         # révision, celui que les règles lancent réellement.
         try:
             expected_task = client('ecs').describe_task_definition(taskDefinition=request['task_definition'])['taskDefinition']['taskDefinitionArn'] if triggers_ready else None
@@ -370,17 +366,10 @@ def execute(request):
         return {'priority': next(value for value in range(20000, 50001) if value not in used)}
     if action == 'initialize-secrets':
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-        from prepare_failover_phase1 import credentials_profile, platform_secrets_profile, regime
-        if regime(document['profile']) == 'platform':
-            # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
-            import platform_secrets
-            return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
-        import initialize_secrets
-        import boto3
-        client = boto3.client('sts', region_name='eu-west-3')
-        if client.get_caller_identity()['Account'] != '804210702561': raise ValueError('Compte AWS inattendu')
-        config = credentials_profile(document['profile'], document['credentials'])
-        return {'secrets': initialize_secrets.initialize(config, boto3.client('secretsmanager', region_name='eu-west-3'))}
+        from prepare_failover_phase1 import platform_secrets_profile
+        # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
+        import platform_secrets
+        return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
     if action == 'observe':
         # Le validateur partagé vérifie les références de secrets (et le contexte GKE quand il est fourni).
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))

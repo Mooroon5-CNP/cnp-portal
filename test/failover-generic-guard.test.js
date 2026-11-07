@@ -1,14 +1,14 @@
 'use strict';
 
-// Garde-fou : le failover générique ne doit coder en dur le nom d'aucune application. Les profils historiques
-// (recipe, pixelcalm) restent dans le moteur CNP, mais pas dans le portail ni dans l'opérateur.
+// Garde-fou : le failover générique ne doit coder en dur le nom d'aucune application, ni réintroduire le pilote retiré le
+// 07/11/2026 (page /failover, réglages du pilote, rattachement, mode pas à pas).
 const fs = require('fs');
 const path = require('path');
 const root = path.resolve(__dirname, '..');
 const generic = [
   ...fs.readdirSync(path.join(root, 'src/services')).filter(name => /^failover-.*\.js$/.test(name) || name === 'environment-failover.js')
     .map(name => `src/services/${name}`),
-  'src/routes/failover.js', 'src/views/failover.ejs',
+  'src/routes/deployments.js', 'src/views/deployments/detail.ejs',
   ...fs.readdirSync(path.join(root, 'scripts/failover')).filter(name => name.endsWith('.py')).map(name => `scripts/failover/${name}`),
 ];
 const pilot = /app4-pixelcam|app4-pixelcalm|pixelcalm|pixelcam/i;
@@ -19,12 +19,13 @@ test.each(generic)('%s ne code aucun nom d’application du pilote', file => {
   expect(hits).toEqual([]);
 });
 
-test('les réparations ponctuelles du pilote ne sont plus exposées', () => {
-  const routes = fs.readFileSync(path.join(root, 'src/routes/failover.js'), 'utf8');
-  expect(routes).not.toMatch(/owner\/reconcile|repair\/dev-backend/);
-  for (const file of ['src/services/failover-owner.js', 'src/services/failover-dev-routing.js']) {
+test('la page /failover, les réglages du pilote, le rattachement et le pas à pas ont disparu', () => {
+  for (const file of ['src/routes/failover.js', 'src/views/failover.ejs', 'src/services/failover-owner.js', 'src/services/failover-dev-routing.js']) {
     expect(fs.existsSync(path.join(root, file))).toBe(false);
   }
+  const code = generic.map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+  expect(code).not.toMatch(/CNP_FAILOVER_SETTINGS|exposeLegacyApplication|CNP_FAILOVER_STEP_BY_STEP|adoptionPreview|failover_adoptions/);
+  expect(fs.readFileSync(path.join(root, 'src/index.js'), 'utf8')).not.toMatch(/routes\/failover/);
 });
 
 test('la liste vérifiée contient bien les modules failover (le garde-fou n’est pas vide)', () => {

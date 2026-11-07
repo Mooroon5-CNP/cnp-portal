@@ -47,7 +47,7 @@ class OperatorTests(unittest.TestCase):
         control = {'state': 'DISABLED', 'paused': paused, 'config_hash': config_hash}
         sts, ecs, logs = Mock(), Mock(), Mock()
         sts.get_caller_identity.return_value = {'Account': '804210702561'}
-        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-automation-v-1234567890',
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-worker',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'worker', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
         ecs.run_task.return_value = {'tasks': [{'taskArn': 'task/test'}]}
@@ -130,7 +130,7 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         """Exécute l'action avec de faux ECS et journaux ; chaque tâche lit la sortie suivante de `outputs`."""
         sts, ecs, logs = Mock(), Mock(), Mock()
         sts.get_caller_identity.return_value = {'Account': '804210702561'}
-        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-bootstrap-v-1234567890',
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
         counter = iter(range(1, 50))
@@ -387,10 +387,12 @@ class NoCommandLineTests(unittest.TestCase):
                 with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'Opération inconnue'):
                     operator.execute({'app': 'weather-api', 'work': work, 'action': action, 'document': document})
 
-    def test_platform_and_pilot_task_families_only(self):
-        for family in ('cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker', 'cnp-failover-bootstrap', 'cnp-failover-automation-v-0123456789'):
+    def test_platform_task_families_only(self):
+        for family in ('cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker'):
             self.assertRegex(family, f'^(?:{operator.TASK_FAMILY})$')
-        for family in ('cnp-failover-platform-other', 'other-worker', 'cnp-failover-platform-worker-v-0123456789'):
+        # Les tâches du worker historique du pilote (retiré le 07/11/2026) ne sont plus lançables.
+        for family in ('cnp-failover-platform-other', 'other-worker', 'cnp-failover-platform-worker-v-0123456789',
+                       'cnp-failover-bootstrap', 'cnp-failover-automation-v-0123456789'):
             self.assertNotRegex(family, f'^(?:{operator.TASK_FAMILY})$')
 
 
@@ -574,12 +576,10 @@ class HealthNamesTests(unittest.TestCase):
                 'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
         return result, clients
 
-    def test_each_regime_reads_its_own_state_table_and_rules(self):
+    def test_health_reads_the_platform_state_table_and_rules(self):
         sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
         import test_worker_phase1 as fixtures
-        from test_phase1_package import profile as pilot
-        for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),
-                                     (pilot(), 'cnp-failover-automation', 'cnp-failover-automation-')):
+        for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),):
             with self.subTest(table=table):
                 result, clients = self.health(profile)
                 self.assertFalse(result['verified'])

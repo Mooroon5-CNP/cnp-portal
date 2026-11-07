@@ -52,10 +52,7 @@ const UPDATE_CHECK_MS = 30000;
 const lastUpdateCheck = new Map();
 // worker-failback-route : un passage du worker commencé avant la pause garde son bail jusqu'à 2 min ; on réessaie.
 const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check', 'worker-failback-route']);
-// Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
-// TEMPORAIRE (G5, premier passage cloud) : CNP_FAILOVER_STEP_BY_STEP=true remet la revue manager de chaque publication.
-// À retirer après la recette de panne (G7).
-const stepByStep = () => ['1', 'true'].includes(String(process.env.CNP_FAILOVER_STEP_BY_STEP || '').toLowerCase());
+// Une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_provisioning (
     app TEXT PRIMARY KEY, requested_by TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 0,
@@ -214,7 +211,6 @@ async function advance(app) {
       }
       if (candidate.state === 'published') { save('running', `${action} publié.`, null, true); return; }
       if (!['pending', 'approving'].includes(candidate.state)) throw new Error(`Proposition ${action} rejetée. Reprendre pour préparer un nouveau candidat.`);
-      if (stepByStep()) { save('review', `Validation manager requise : ${action}.`, `candidate:${candidate.id}`); return; }
       await profiles.autoApprove(candidate.id, actor);
       // Argo CD relit Git tout de suite ; sans effet si l'Application n'existe pas encore (elle lira Git en naissant).
       require('../clients/kubernetes').refreshArgocdApplication(`${app}-prod`).catch(() => {});

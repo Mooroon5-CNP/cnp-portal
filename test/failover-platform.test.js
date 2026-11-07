@@ -42,11 +42,10 @@ beforeEach(() => {
     stdin: { end: jest.fn(body => { requests.push(JSON.parse(body)); callback(null, JSON.stringify({ priority: 77 })); }) },
   }));
   deployments.listForUser.mockReturnValue([{ app_name: 'weather-api', deployment_environment: 'prod', target_cluster: 'gcp', app_port: 8081 }]);
-  process.env.CNP_FAILOVER_SETTINGS = path.join(temp, 'absent-settings.json');
   process.env.CNP_FAILOVER_PLATFORM = write('platform.json', platform());
 });
 afterAll(() => {
-  for (const key of ['CNP_FAILOVER_SETTINGS', 'CNP_FAILOVER_PLATFORM']) delete process.env[key];
+  for (const key of ['CNP_FAILOVER_PLATFORM']) delete process.env[key];
   fs.rmSync(temp, { recursive: true, force: true });
 });
 
@@ -72,36 +71,14 @@ test('aucun nom de base n’est demandé : la plateforme prend appdb et le trans
   expect([profile.gcp.database_name, profile.aws.database_name]).toEqual(['appdb', 'appdb']);
   expect(profile.gcp.sql_contract).toEqual({ database: 'appdb' });
 });
-test('le formulaire de mise en service ne demande aucun nom de base', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../src/views/failover.ejs'), 'utf8');
-  const form = view.slice(view.indexOf('/failover/configure-deployment'), view.indexOf('</form>', view.indexOf('/failover/configure-deployment')));
-  expect(form).not.toMatch(/name="database"/);
-  expect(form).toMatch(/name="mode"/);
-});
 test('le profil créé ne contient aucune trace d’une autre application', async () => {
   await operations.createProfile('weather-api', 'postgres', contract, manager);
   expect(JSON.stringify(service.profileFor('weather-api'))).not.toMatch(/app4-pixelcam|pixelcalm|pixelcam/i);
 });
 
-test('le fichier de plateforme prime sur les paramètres hérités du pilote', async () => {
-  const pilot = { gcp: { gcp_lb_ip: '203.0.113.9', gcp_runtime: { service_account: 'pilot@example.test', subnetwork: 'pilot-subnet' } },
-    aws: { database_security_group_id: 'sg-0pilot0000000000', database_ca_pem: CA }, automation: platform().automation };
-  process.env.CNP_FAILOVER_SETTINGS = write('settings.json', { app: 'pilot', profile: write('p.json', pilot),
-    credentials: write('c.json', {}), secrets: write('s.json', { app: 'pilot' }) });
-  expect(service.platform().gcp.gcp_lb_ip).toBe('34.54.71.90');
-});
-
-test('sans fichier de plateforme, le repli hérité lit le profil du pilote (ancien comportement)', () => {
-  delete process.env.CNP_FAILOVER_PLATFORM;
-  const pilot = { gcp: { gcp_lb_ip: '203.0.113.9', gcp_runtime: { service_account: 'pilot@example.test', subnetwork: 'pilot-subnet' } },
-    aws: { database_security_group_id: 'sg-0pilot0000000000', database_ca_pem: CA }, automation: platform().automation };
-  process.env.CNP_FAILOVER_SETTINGS = write('settings-legacy.json', { app: 'pilot', profile: write('p2.json', pilot),
-    credentials: write('c2.json', {}), secrets: write('s2.json', { app: 'pilot' }) });
-  expect(service.platform().gcp.gcp_lb_ip).toBe('203.0.113.9');
-});
-
-test('sans fichier ni pilote, l’erreur dit où fournir les paramètres', () => {
-  delete process.env.CNP_FAILOVER_PLATFORM;
+test('sans fichier de plateforme, l’erreur dit où fournir les paramètres', () => {
+  // Un fichier absent, et non une variable supprimée : un poste de développement a souvent un vrai data/failover-platform.json.
+  process.env.CNP_FAILOVER_PLATFORM = path.join(temp, 'absent-platform.json');
   expect(() => service.platform()).toThrow('CNP_FAILOVER_PLATFORM');
 });
 
@@ -140,8 +117,8 @@ describe('régime plateforme du worker', () => {
     await expect(operations.createProfile('weather-api', 'postgres', contract, manager)).rejects.toThrow('worker_task_definition');
     expect(service.profileFor('weather-api')).toBeNull();
   });
-  test('le profil du pilote garde ses trois étapes, sans étape worker', () => {
-    expect(service.stagesFor({ profile: { automation: {} } })).toEqual(['databases', 'runtime', 'dns']);
+  test('une app PostgreSQL a toujours l’étape worker, après les DNS', () => {
+    expect(service.stagesFor({ profile: { automation: {} } })).toEqual(['databases', 'runtime', 'dns', 'worker']);
   });
   test('toute app PostgreSQL neuve est en régime plateforme : RDS prend le mot de passe de son Secret, l’étape worker suit les DNS', async () => {
     await operations.createProfile('weather-api', 'postgres', contract, manager);

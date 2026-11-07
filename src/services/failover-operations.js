@@ -18,11 +18,8 @@ const FAILBACK_SQL = ['failback-sync', 'failback-reset'];
 // Suppression complète (failover-teardown) : libération, disparition des ressources, puis secrets et état du worker.
 const TEARDOWN = ['teardown-released', 'teardown-gone', 'teardown-cleanup'];
 const platformRegime = document => document.profile.automation?.regime === 'platform';
-// Tâches ECS : celles de la pile plateforme (noms dans le profil), ou celles du pilote, dont les noms sont fixes.
-function taskDefinition(document, kind, existingPilot) {
-  if (platformRegime(document)) return document.profile.automation[`${kind}_task_definition`];
-  return existingPilot ? { bootstrap: 'cnp-failover-bootstrap', worker: 'cnp-failover-automation' }[kind] : null;
-}
+// Tâches ECS de la pile plateforme : leurs noms sont dans le profil.
+const taskDefinition = (document, kind) => document.profile.automation?.[`${kind}_task_definition`] || null;
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_operations (id TEXT PRIMARY KEY, app TEXT NOT NULL,
     action TEXT NOT NULL, state TEXT NOT NULL, input_hash TEXT NOT NULL, requested_by TEXT NOT NULL,
@@ -72,9 +69,6 @@ function start(app, action, user) {
   }
   if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify', 'runtime-rollout'].includes(action))) throw new Error('Profil SQL requis.');
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
-  const legacySettings = service.settings();
-  const existingPilot = legacySettings?.exposeLegacyApplication !== false && legacySettings?.app === app && document.secrets.initialized;
-  if (existingPilot && ['bootstrap', 'bootstrap-roles', 'worker-configure'].includes(action)) throw new Error('Pilote déjà initialisé : utiliser les vérifications, sans réinitialiser ses bases ou son worker.');
   if (['bootstrap', 'bootstrap-roles'].includes(action) && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
   if (['bootstrap-roles', 'schema-check'].includes(action) && !isIntrospected(document)) throw new Error('Étape réservée aux profils dont le schéma est lu dans la base.');
   // Le schéma se lit dans la base de l'application : elle doit tourner (et avoir créé ses tables) avant qu'on le copie.
@@ -83,9 +77,9 @@ function start(app, action, user) {
     if (!previous(app, 'bootstrap-roles')) throw new Error('Préparer d’abord les rôles SQL de la cible.');
     if (!previous(app, 'schema-check')?.result?.verified) throw new Error('Le schéma de l’application doit exister sur la source : l’appeler une fois pour qu’elle crée ses tables.');
   }
-  if (['verify', 'resync', 'schema-diff'].includes(action) && !existingPilot && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
+  if (['verify', 'resync', 'schema-diff'].includes(action) && !previous(app, 'bootstrap')) throw new Error('Initialisation SQL non terminée.');
   if ((action === 'failback-check' || FAILBACK_SQL.includes(action) || ['worker-failback-route', 'worker-rearm'].includes(action))
-    && (existingPilot || !platformRegime(document) || !isIntrospected(document))) throw new Error('Retour vers GCP réservé aux applications du régime plateforme.');
+    && (!platformRegime(document) || !isIntrospected(document))) throw new Error('Retour vers GCP réservé aux applications du régime plateforme.');
   if (['worker-configure', 'worker-verify'].includes(action) && !previous(app, 'verify')) throw new Error('Vérification de réplication requise.');
   if (action === 'worker-resume') {
     const verified = previous(app, 'verify');
@@ -108,17 +102,16 @@ function start(app, action, user) {
   }
   if (action === 'health' && document.profile.mode !== 'stateless') {
     request.packages = service.operationalPackage(app, 'automation', user);
-    // Pilote : sa tâche active vient de son dernier plan d'activation, conservé dans l'historique.
-    request.task_definition = taskDefinition(document, 'worker', false) || previous(app, 'activation-plan')?.result?.worker_task_definition;
+    request.task_definition = taskDefinition(document, 'worker');
   }
   if (['bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff', ...FAILBACK_SQL].includes(action)) {
     request.packages = service.operationalPackage(app, 'bootstrap', user);
-    request.task_definition = taskDefinition(document, 'bootstrap', existingPilot);
+    request.task_definition = taskDefinition(document, 'bootstrap');
     if (!request.task_definition) throw new Error('Tâche d’initialisation SQL absente : la pile plateforme doit être appliquée.');
   }
   if (action.startsWith('worker-')) {
     request.packages = service.operationalPackage(app, 'automation', user);
-    request.task_definition = taskDefinition(document, 'worker', existingPilot);
+    request.task_definition = taskDefinition(document, 'worker');
     if (!request.task_definition) throw new Error('Tâche du worker absente : la pile plateforme doit être appliquée.');
   }
   fs.mkdirSync(request.work, { recursive: true, mode: 0o700 });

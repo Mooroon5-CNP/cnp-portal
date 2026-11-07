@@ -159,6 +159,11 @@
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
+                      <% if (environmentStatus.failoverResumable && can('k8s:manifest:approve')) { %>
+                        <form method="POST" action="/deployments/<%= deployment.id %>/failover/resume" class="inline-form">
+                          <button type="submit" class="btn btn-primary">Reprendre après correction</button>
+                        </form>
+                      <% } %>
                       <% if (environmentStatus.failoverState === 'AWS_ACTIVE') { %>
                         <p id="gcp-availability" data-available="<%= environmentStatus.gcpAvailable ? 'true' : 'false' %>">
                           <span aria-hidden="true" style="display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:<%= environmentStatus.gcpAvailable ? '#1a7f37' : '#9aa5b1' %>;"></span>

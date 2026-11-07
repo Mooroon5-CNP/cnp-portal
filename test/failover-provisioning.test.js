@@ -29,7 +29,6 @@ beforeEach(() => {
     const row = { id: `candidate-${++serial}`, app, stage, state: 'pending' };
     candidates.push(row); return { id: row.id, stage, prUrl: `https://example.test/pull/${serial}`, head: 'h'.repeat(40) };
   });
-  delete process.env.CNP_FAILOVER_STEP_BY_STEP;
   // Approbation automatique : publie le candidat (les contrôles réels sont testés dans failover-environment.test.js).
   profiles.autoApprove.mockImplementation(async id => { candidates.find(value => value.id === id).state = 'published'; return { published: true }; });
   operations.list.mockImplementation(app => tasks.filter(value => value.app === app).slice().reverse());
@@ -57,23 +56,6 @@ test('un profil historique (plans Terraform par app) ne se met plus en service p
   profiles.profileFor.mockReturnValue({ profile: { gcp: { sql_contract: { database: 'appdb' } }, aws: {}, automation: {} } });
   expect(() => workflow.start('weather-api', manager)).toThrow('régime plateforme');
   expect(operations.start).not.toHaveBeenCalled();
-});
-test('pas à pas (G5) : chaque publication attend la revue manager, puis le parcours reprend sans doublon', async () => {
-  process.env.CNP_FAILOVER_STEP_BY_STEP = 'true';
-  workflow.start('weather-api', manager);
-  await tick();
-  expect(tasks[0].action).toBe('initialize-secrets');
-  await tick();
-  expect(operations.start).toHaveBeenCalledTimes(1);                 // pas de second lancement pendant l'exécution
-  succeed(); await tick();
-  expect(workflow.get('weather-api').step).toBe(1);
-  expect((await tick()).state).toBe('review');
-  expect(candidates[0].stage).toBe('databases');
-  await tick(); expect(profiles.prepare).toHaveBeenCalledTimes(1);
-  candidates[0].state = 'published';
-  await tick(); await tick();
-  expect(tasks.at(-1).action).toBe('observe');
-  expect(profiles.autoApprove).not.toHaveBeenCalled();
 });
 test('par défaut, une publication contrôlée s’approuve seule au nom du manager qui a lancé la mise en service', async () => {
   workflow.start('weather-api', manager);

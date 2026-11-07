@@ -14,40 +14,25 @@ const { config } = require('../config/env');
 const github = require('../clients/github');
 const sourceRoot = path.resolve(path.dirname(fs.realpathSync(__filename)), '../..');
 
-const STAGES = ['databases', 'runtime', 'dns'];
-// Régime « plateforme » : l'alarme et la configuration du worker sont publiées par GitOps, après les DNS (la sonde Route 53 doit exister).
-const PLATFORM_STAGES = [...STAGES, 'worker'];
+// L'alarme et la configuration du worker sont publiées par GitOps, après les DNS (la sonde Route 53 doit exister).
+const PLATFORM_STAGES = ['databases', 'runtime', 'dns', 'worker'];
 function stagesFor(document) {
-  if (document.profile.mode === 'stateless') return ['runtime', 'dns'];
-  return document.profile.automation?.regime === 'platform' ? PLATFORM_STAGES : STAGES;
-}
-const settingsPath = () => process.env.CNP_FAILOVER_SETTINGS || path.resolve(sourceRoot, '../phase1-deployment-20261029/portal-settings.json');
-function settings() {
-  const file = settingsPath();
-  if (!fs.existsSync(file)) return null;
-  const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(value.app)) throw new Error('Nom de profil invalide.');
-  return value;
+  return document.profile.mode === 'stateless' ? ['runtime', 'dns'] : PLATFORM_STAGES;
 }
 function profileFor(app) {
   schema();
   const saved = db.prepare('SELECT document FROM failover_profiles WHERE app_name=?').get(app);
-  if (saved) return JSON.parse(saved.document);
-  const legacy = settings();
-  return legacy?.app === app && legacy.exposeLegacyApplication !== false ? inputs(legacy) : null;
+  return saved ? JSON.parse(saved.document) : null;
 }
 const enabled = dep => !!dep && dep.environment === 'prod'
   && dep.targetCluster !== 'azure' && !!profileFor(dep.appName);
 function selectedApp(app) {
-  const name = app || settings()?.app;
-  if (!name || !profileFor(name)) throw new Error('Sélectionnez une application avec un profil failover configuré.');
-  return name;
+  if (!app || !profileFor(app)) throw new Error('Application sans profil failover configuré.');
+  return app;
 }
 function profiles() {
   schema();
-  const names = db.prepare('SELECT app_name FROM failover_profiles ORDER BY app_name').all().map(row => row.app_name);
-  const legacy = settings();
-  return [...new Set([...names, ...(legacy?.app && legacy.exposeLegacyApplication !== false ? [legacy.app] : [])])].sort();
+  return db.prepare('SELECT app_name FROM failover_profiles ORDER BY app_name').all().map(row => row.app_name);
 }
 function configure(app, document, user) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
@@ -95,9 +80,6 @@ function schema() {
     files TEXT NOT NULL, input_hash TEXT NOT NULL, state TEXT NOT NULL,
     requested_by TEXT NOT NULL, reviewed_by TEXT, created_at TEXT NOT NULL
   )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS failover_adoptions (
-    deployment_id TEXT PRIMARY KEY, app_name TEXT NOT NULL, base_sha TEXT NOT NULL, reviewed_by TEXT NOT NULL, adopted_at TEXT NOT NULL
-  )`);
   db.exec(`CREATE TABLE IF NOT EXISTS failover_profiles (
     app_name TEXT PRIMARY KEY, document TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL
   )`);
@@ -114,15 +96,9 @@ function schema() {
   }
 }
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-function inputs(s) {
-  const read = key => JSON.parse(fs.readFileSync(s[key], 'utf8'));
-  return { profile: read('profile'), credentials: read('credentials'), secrets: read('secrets'),
-    observations: s.observations && fs.existsSync(s.observations) ? read('observations') : {} };
-}
 // Paramètres propres à la plateforme, identiques pour toutes les applications : IP du LB GCP, identité et sous-réseau
 // de Cloud Run, groupe de sécurité et CA de RDS, configuration de l'orchestration. Source : CNP_FAILOVER_PLATFORM,
-// sinon data/failover-platform.json. Repli hérité, tant que ce fichier n'existe pas : le profil du pilote référencé par
-// les paramètres partagés (ancien comportement de createProfile).
+// sinon data/failover-platform.json (dans le cluster : un ConfigMap monté, désigné par CNP_FAILOVER_PLATFORM).
 const platformPath = () => process.env.CNP_FAILOVER_PLATFORM || path.resolve(sourceRoot, 'data/failover-platform.json');
 const AUTOMATION_REQUIRED = ['worker_image', 'ecs_cluster_arn', 'ecs_security_group_id', 'public_subnet_ids', 'subscription_ca_path_on_rds', 'kube_context'];
 function validatePlatform(value) {
@@ -141,16 +117,8 @@ function validatePlatform(value) {
 }
 function platform() {
   const file = platformPath();
-  if (fs.existsSync(file)) return validatePlatform(JSON.parse(fs.readFileSync(file, 'utf8')));
-  const legacy = settings();
-  if (!legacy) throw new Error(`Paramètres de plateforme absents : créer ${file} ou définir CNP_FAILOVER_PLATFORM.`);
-  const pilot = inputs(legacy).profile;
-  return validatePlatform({
-    gcp: { gcp_lb_ip: pilot.gcp?.gcp_lb_ip,
-      gcp_runtime: { service_account: pilot.gcp?.gcp_runtime?.service_account, subnetwork: pilot.gcp?.gcp_runtime?.subnetwork } },
-    aws: { database_security_group_id: pilot.aws?.database_security_group_id, database_ca_pem: pilot.aws?.database_ca_pem },
-    automation: pilot.automation,
-  });
+  if (!fs.existsSync(file)) throw new Error(`Paramètres de plateforme absents : créer ${file} ou définir CNP_FAILOVER_PLATFORM.`);
+  return validatePlatform(JSON.parse(fs.readFileSync(file, 'utf8')));
 }
 function repository() {
   const name = config.github.configRepoName || 'Mooroon5-CNP/config-repo';
@@ -206,7 +174,7 @@ let busy = false;
 const busyError = text => Object.assign(new Error(text), { retryable: true });
 async function prepare(stage, user, requestedApp) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
-  if (!PLATFORM_STAGES.includes(stage) && stage !== 'protection') throw new Error('Étape phase 1 invalide.');
+  if (!PLATFORM_STAGES.includes(stage)) throw new Error('Étape failover invalide.');
   if (busy) throw busyError('Préparation déjà en cours.');
   busy = true;
   try {
@@ -215,8 +183,8 @@ async function prepare(stage, user, requestedApp) {
     const pending = db.prepare("SELECT id FROM failover_candidates WHERE app_name=? AND state IN ('pending','approving')").get(app);
     if (pending) throw new Error('Une proposition attend déjà sa validation.');
     const stages = stagesFor(profileFor(app));
-    if (stage !== 'protection' && !stages.includes(stage)) throw new Error(stage === 'worker' ? 'Étape réservée au régime plateforme.' : 'Cette application ne nécessite pas de base SQL.');
-    for (const previous of (stage === 'protection' ? [] : stages.slice(0, stages.indexOf(stage)))) {
+    if (!stages.includes(stage)) throw new Error('Cette application ne nécessite pas de base SQL.');
+    for (const previous of stages.slice(0, stages.indexOf(stage))) {
       if (!db.prepare("SELECT id FROM failover_candidates WHERE app_name=? AND stage=? AND state='published'").get(app, previous)) {
         throw new Error(`Étape préalable non publiée : ${previous}.`);
       }
@@ -364,7 +332,7 @@ function manifests(dep) {
   if (!enabled(dep)) return null;
   schema();
   const row = db.prepare("SELECT files FROM failover_candidates WHERE app_name=? AND state='published' ORDER BY created_at DESC LIMIT 1").get(dep.appName);
-  if (!row) throw new Error('Profil phase 1 : préparer et approuver le premier lot dans /failover.');
+  if (!row) throw new Error('Mise en service du secours pas encore publiée.');
   // Un déploiement CI ordinaire conserve le profil effectivement approuvé.
   // Changer une image ou un endpoint exige une nouvelle proposition runtime.
   return Object.fromEntries(Object.entries(JSON.parse(row.files)).filter(([name]) => name.startsWith('apps/')));
@@ -373,71 +341,8 @@ function operationalPackage(app, stage, user) {
   if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
   selectedApp(app);
   if (!['bootstrap', 'automation', 'secrets'].includes(stage)) throw new Error('Paquet inconnu.');
-  const input = profileFor(app);
-  if (stage !== 'automation') return render({ ...input, stage });
-  // Régime plateforme : chaque app a son enregistrement, aucun varfile partagé à reconstituer.
-  if (input.profile.automation?.regime === 'platform') return render({ ...input, stage });
-  // Le worker est partagé : ne jamais produire un varfile qui ferait disparaître
-  // les applications déjà configurées du plan Terraform suivant.
-  const applications = [];
-  let combined, selected;
-  for (const name of profiles()) {
-    const document = profileFor(name);
-    if (document.profile.mode === 'stateless') continue;
-    if (name !== app && !rows(name).some(row => row.stage === 'dns' && row.state === 'published')) continue;
-    const result = render({ ...document, stage: 'automation' });
-    const vars = result['automation.tfvars.json'];
-    const shared = Object.fromEntries(Object.entries(vars).filter(([key]) => key !== 'applications'));
-    if (combined && hash(combined) !== hash(shared)) throw new Error('Les applications doivent partager le même worker et réseau ECS.');
-    combined = shared;
-    applications.push(...vars.applications);
-    if (name === app) selected = result;
-  }
-  if (!selected || applications.length > 10) throw new Error('Configuration du worker absente ou capacité dépassée.');
-  return { ...selected, 'worker-config.json': { applications },
-    'automation.tfvars.json': { ...combined, applications },
-    'review.json': { applications: applications.map(value => value.app), enable_triggers: false,
-      applied: false, note: 'Conserver les varfiles bootstrap et activation existants ; plan sans suppression ni remplacement obligatoire.' } };
-}
-async function adoptionPreview(app, user) {
-  if (!user || user.role !== 'manager' || !user.id) throw new Error('Validation manager requise.');
-  selectedApp(app);
-  const api = await github.getInstallationOctokit();
-  const repo = repository();
-  const { data: ref } = await api.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...repo, ref: 'heads/main' });
-  const registry = yaml.load(await readFile(api, repo, 'apps/registry.yaml', ref.object.sha));
-  const registered = registry.apps?.find(item => item.app_name === app);
-  if (!registered || !registered.environments?.includes('prod')) throw new Error('Application de production absente du registre.');
-  const remote = await baseline(api, repo, ref.object.sha, app);
-  if (!remote.kustomization.resources.length) throw new Error('Aucune ressource de production à rattacher.');
-  const application = await require('../clients/argocd').getApplicationDetails(`${app}-prod`);
-  const spec = application.spec;
-  if (application.metadata?.deletionTimestamp || spec?.source?.repoURL !== `https://github.com/${repo.owner}/${repo.repo}.git`
-    || spec.source.path !== `apps/${app}/crossplane/prod` || spec.source.targetRevision !== 'main'
-    || spec.destination?.server !== 'https://kubernetes.default.svc') throw new Error('Propriétaire GitOps absent, en suppression ou incompatible.');
-  return { app, githubRepoUrl: registered.repo_url, head: ref.object.sha, resources: remote.kustomization.resources, cloudChanges: false };
-}
-async function adopt(app, expectedHead, user) {
-  const preview = await adoptionPreview(app, user);
-  if (preview.head !== expectedHead) throw new Error('La baseline a changé : examinez de nouveau le rattachement.');
-  const deployments = require('../models/deployment');
-  const registered = deployments.listForUser(null).find(row => row.app_name === app && row.deployment_environment === 'prod');
-  if (registered && registered.github_repo_url !== preview.githubRepoUrl) throw new Error('Ce déploiement local appartient à un autre dépôt.');
-  const port = profileFor(app).profile.gcp.container_port || 8080;
-  return db.transaction(() => {
-    const dep = registered ? deployments.get(registered.id) : deployments.create({ appName: app,
-      githubRepoUrl: preview.githubRepoUrl, appPort: port, ownerUserId: user.id, environment: 'prod', targetCluster: 'gcp', failoverRequested: true });
-    db.prepare(`INSERT INTO failover_adoptions VALUES (?,?,?,?,?) ON CONFLICT(deployment_id) DO UPDATE SET
-      base_sha=excluded.base_sha,reviewed_by=excluded.reviewed_by,adopted_at=excluded.adopted_at`)
-      .run(dep.id, app, preview.head, user.id, new Date().toISOString());
-    db.prepare('UPDATE deployments SET failover_requested=1 WHERE id=?').run(dep.id);
-    deployments.updateOnboardingStatus(dep.id, 'ready');
-    return { app, deploymentId: dep.id, adopted: true, cloudChanges: false };
-  })();
-}
-function adopted(dep) {
-  schema();
-  return !!db.prepare('SELECT deployment_id FROM failover_adoptions WHERE deployment_id=? AND app_name=?').get(dep.id, dep.appName);
+  // Chaque app a son enregistrement de configuration du worker : aucun varfile partagé à reconstituer.
+  return render({ ...profileFor(app), stage });
 }
 async function deploymentStatus(dep) {
   if (!dep.failoverRequested) return readiness(dep);
@@ -449,10 +354,11 @@ async function deploymentStatus(dep) {
     // sans proposer d'action. Seul un blocage demande l'intervention d'un manager.
     const progress = require('./failover-provisioning').progress(dep.appName);
     if (!progress) return { phase: 'deploying', message: 'Images prêtes sur GCP et AWS ; mise en service du secours pas encore lancée.', runUrl: run.html_url };
-    if (progress.state === 'blocked') return { phase: 'failed', message: `Mise en service du secours bloquée : ${progress.message}`, runUrl: run.html_url };
+    const label = { update: 'Mise à jour sur GCP et AWS', failback: 'Retour vers GCP' }[progress.phase] || 'Mise en service du secours';
+    // Un blocage seul demande un manager : il reprend depuis la page du déploiement, après correction de la cause affichée.
+    if (progress.state === 'blocked') return { phase: 'failed', message: `${label} bloqué(e) : ${progress.message}`, runUrl: run.html_url, failoverResumable: true };
     if (progress.state !== 'completed') {
       const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
-      const label = { update: 'Mise à jour sur GCP et AWS', failback: 'Retour vers GCP' }[progress.phase] || 'Mise en service du secours';
       return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
     }
     return readiness(dep);
@@ -478,5 +384,5 @@ function readiness(dep) {
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
-module.exports = { profiles, configure, profileFor, enabled, settings, inputs, platform, render, rows, runtimeRevision, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
-  adoptionPreview, adopt, adopted, operationalPackage, deploymentStatus, stagesFor };
+module.exports = { profiles, configure, profileFor, enabled, platform, render, rows, runtimeRevision, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
+  operationalPackage, deploymentStatus, stagesFor };
