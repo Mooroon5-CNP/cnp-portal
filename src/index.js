@@ -83,6 +83,7 @@ app.get('/pending', requirePending, (req, res) => {
 app.use('/profile',      require('./routes/profile'));
 app.use('/',             require('./routes/dashboard'));
 app.use('/deployments',  require('./routes/deployments'));
+app.use('/failover',     require('./routes/failover'));
 app.use('/k8s',          require('./routes/k8s'));
 app.use('/observability',require('./routes/observability'));
 app.use('/argocd',       require('./routes/argocd'));
@@ -107,6 +108,7 @@ app.use((err, req, res, _next) => {
 
 if (require.main === module) {
   require('./services/environment-deployment').startReconciler();
+  require('./services/failover-provisioning').startReconciler();
   const PORT = process.env.PORT || 3000;
   const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
   app.listen(PORT, HOST, () => {

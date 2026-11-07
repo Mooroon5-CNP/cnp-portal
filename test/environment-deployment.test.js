@@ -186,6 +186,18 @@ test('deletion closes pending candidates and only removes the selected environme
   expect((await service.reconcile(dep)).phase).toBe('configuring');
 });
 
+test('after a failover teardown, the Application is removed only once its folder has left Git', async () => {
+  production(); await service.reconcile(dep);
+  for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep, { afterFailoverTeardown: true });
+  expect(trees.at(-1).tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/prod/') && file.sha === null)).toBe(true);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(1);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
+  const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+});
+
 test('invalid environments and malformed image revisions fail before manifest generation', () => {
   expect(() => service.manifests({ ...dep, environment: 'other' }, revision)).toThrow('Environnement invalide');
   expect(() => service.manifests(dep, 'placeholder')).toThrow('Révision CI invalide');
@@ -407,6 +419,16 @@ test('runtime secret configuration rejects plaintext values before publication',
   existing.set('config/apps/pixelcam/crossplane/dev/runtime-secrets.yaml', yaml.dump([{ name: 'SESSION_SECRET', value: 'plaintext-not-allowed' }]));
   await expect(service.reconcile(dep)).rejects.toThrow('Invalid runtime secret references');
   expect(published).toHaveLength(0);
+});
+
+test('le failover publie la provenance seulement après succès du pipeline prod', () => {
+  const doc = yaml.load(service.workflow('telemetry-api', { appName: 'telemetry-api', environment: 'prod', failoverRequested: true, appPort: 8080 }));
+  expect(doc.jobs.pipeline.with.target_cloud).toBe('both');
+  expect(doc.jobs.pipeline.with.gitops_mode).toBe('portal');
+  expect(doc.jobs['failover-images'].needs).toEqual(['pipeline']);
+  expect(doc.jobs['failover-images'].if).toContain("needs.pipeline.result == 'success'");
+  expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
+  expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
 });
 
 test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {

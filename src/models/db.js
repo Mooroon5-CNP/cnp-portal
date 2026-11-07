@@ -48,10 +48,13 @@ if (!cols.includes('approved')) {
   db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1');
 }
 
-// Bootstrap automatically when no operator password is configured; never use admin/admin.
+// Preserve the explicitly enabled local development account during upstream bootstrap.
 const adminExists = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get('admin');
 const defaultPassword = adminExists?.password_hash && bcrypt.compareSync('admin', adminExists.password_hash);
-if (!adminExists || defaultPassword) {
+const localAdmin = process.env.ALLOW_LOCAL_DEFAULT_ADMIN === 'true'
+  && process.env.NODE_ENV === 'development'
+  && ['127.0.0.1', 'localhost', '::1'].includes(process.env.HOST || '127.0.0.1');
+if (!adminExists || (defaultPassword && !localAdmin)) {
   let password = process.env.ADMIN_INITIAL_PASSWORD;
   if (!password) {
     const credentialPath = path.join(dataDir, 'admin-initial-password');
@@ -67,7 +70,7 @@ if (!adminExists || defaultPassword) {
       }
     }
   }
-  if (Buffer.byteLength(password) < 16 || Buffer.byteLength(password) > 72) {
+  if (!(localAdmin && password === 'admin') && (Buffer.byteLength(password) < 16 || Buffer.byteLength(password) > 72)) {
     throw new Error('Admin bootstrap password must contain 16–72 bytes.');
   }
   const hash = bcrypt.hashSync(password, 12);

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title><%= title %></title>
+<style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#173047}pre{white-space:pre-wrap;background:#f0f4f7;padding:20px}button{padding:10px 16px;margin:8px}article{border-top:1px solid #ccc;padding:20px 0}</style>
+</head><body>
+<a href="/">Tableau de bord</a><h1><%= title %></h1>
+<p>Secours GCP → AWS, avec réplication PostgreSQL lorsque l’application utilise une base. Les propositions sont générées par la plateforme et publiées par sa GitHub App après approbation manager. Le bucket existant est conservé.</p>
+<p>Un merge ne prouve pas que les bases, la réplication ou le worker sont opérationnels. Aucun test de panne n’est lancé ici.</p>
+<form action="/failover" method="get"><label>Application <select name="app" onchange="this.form.submit()"><option value="">Choisir une application</option><% for (const app of profiles) { %><option value="<%= app %>" <%= selectedApp === app ? 'selected' : '' %>><%= app %> — production</option><% } %></select></label><button>Afficher</button></form>
+<% if (selectedApp && typeof provisioning !== 'undefined' && provisioning) { %>
+<section><h2>Préparation automatique — <%= provisioning.state %></h2><p><%= provisioning.message || 'La plateforme prépare les prochaines étapes.' %></p>
+<% if (provisioning.state === 'blocked') { %><form action="/failover/provisioning/resume" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Reprendre après correction</button></form><% } %>
+<% if (provisioning.reference && provisioning.reference.startsWith('candidate:')) { %><a href="/failover/<%= provisioning.reference.slice(10) %>">Examiner la proposition à valider</a><% } %>
+<p>Les étapes techniques s’enchaînent automatiquement. Les publications GitOps sont contrôlées puis publiées automatiquement ; un contrôle en échec arrête la mise en service avec sa raison. Après activation vérifiée, la bascule sur panne est automatique.</p></section>
+<% } else if (selectedApp && typeof profileConfigured !== 'undefined' && profileConfigured) { %>
+<form action="/failover/provisioning/start" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Démarrer la préparation automatique</button></form>
+<% } %>
+<% if (typeof deploymentChoices !== 'undefined') { %>
+<h2>Préparer le secours d’un déploiement</h2>
+<% if (selectedApp && typeof profileConfigured !== 'undefined' && !profileConfigured) { %><p>Le déploiement est enregistré. Choisissez son mode de données ci-dessous pour préparer son secours.</p><% } %>
+<form action="/failover/configure-deployment" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>">
+<label>Application <select name="app" required><% for (const deployment of deploymentChoices) { %><option value="<%= deployment.app_name %>"><%= deployment.app_name %></option><% } %></select></label>
+<label>Données <select name="mode"><option value="postgres" selected>PostgreSQL</option><option value="stateless">Sans base et sans fichiers persistants</option></select></label>
+<p>PostgreSQL est le seul moteur de base pris en charge par le failover CNP.</p>
+<p>Rien d’autre à fournir : CNP crée la base des deux côtés et la donne à l’application par <code>DB_NAME</code> (avec <code>DB_HOST</code>, <code>DB_USER</code>, <code>DB_PASSWORD</code>). Les tables ne se décrivent pas : CNP lit le schéma dans la base une fois l’application démarrée sur GCP, puis le restaure sur AWS.</p>
+<button>Préparer le profil de secours</button></form><% } %>
+<details><summary>Configuration avancée du failover d’une application (manager)</summary>
+<p>Le profil contient les paramètres GCP/AWS, les références des secrets initialisés et les observations de cette application. L’enregistrement prépare le parcours ; il n’active aucune bascule.</p>
+<form action="/failover/profiles" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><label>Nom de l’application <input name="app" required pattern="[a-z][a-z0-9-]{0,38}[a-z0-9]"></label><p><label>Configuration JSON (profile, credentials, secrets, observations)<br><textarea name="document" rows="12" cols="90" required></textarea></label></p><button>Vérifier et enregistrer le profil</button></form></details>
+<% if (selectedApp && (typeof profileConfigured === 'undefined' || profileConfigured)) { %>
+<form action="/failover/ci/configure" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Configurer la CI sur les deux clouds</button></form>
+<form action="/failover/adoption/preview" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Rattacher la production existante au portail</button></form>
+<% if (typeof adoption !== 'undefined') { %><article><h2>Confirmer le rattachement de <%= adoption.app %></h2><p>Dépôt : <%= adoption.githubRepoUrl %>. Cette action ajoute le déploiement au portail et conserve ses ressources et données.</p><p>Révision examinée : <code><%= adoption.head %></code></p><ul><% for (const resource of adoption.resources) { %><li><%= resource %></li><% } %></ul><form action="/failover/adoption/confirm" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= adoption.app %>"><input type="hidden" name="head" value="<%= adoption.head %>"><button>Confirmer le rattachement sans modifier le cloud</button></form></article><% } %>
+
+<% for (const stage of (typeof provisioning !== 'undefined' && provisioning && provisioning.state !== 'completed' ? [] : typeof profileMode !== 'undefined' && profileMode === 'stateless' ? ['protection', 'runtime', 'dns'] : ['protection', 'databases', 'runtime', 'dns', 'worker'])) { %>
+<form action="/failover/prepare/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Préparer : <%= stage %></button></form>
+<% } %>
+<% } %>
+<% if (selectedApp && (typeof profileConfigured === 'undefined' || profileConfigured)) { %><details><summary>Paquets de préparation SQL et worker</summary><p>Ces paquets ne lancent aucune opération ; ils montrent ce que reçoivent l'initialisation SQL et le worker.</p><% for (const stage of ['secrets', 'bootstrap', 'automation']) { %><form action="/failover/packages/<%= stage %>" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button>Préparer le paquet <%= stage %></button></form><% } %></details><% } %>
+<% if (selectedApp && typeof operations !== 'undefined' && (typeof profileConfigured === 'undefined' || profileConfigured)) { %>
+<h2>Mise en service</h2>
+<% if (typeof profileMode !== 'undefined' && profileMode === 'stateless') { %><p>Publier le runtime, puis le DNS, puis vérifier la disponibilité du secours.</p><% } %>
+<% for (const [action, label] of [['initialize-secrets','Initialiser les secrets'],['observe','Vérifier les bases réelles'],['bootstrap','Initialiser la réplication'],['verify','Vérifier la réplication'],['worker-configure','Configurer le worker en pause'],['worker-verify','Vérifier le worker'],['worker-resume','Activer le worker vérifié'],['health','Vérifier l’état opérationnel']]) { %>
+<% if ((typeof provisioning === 'undefined' || !provisioning || provisioning.state === 'completed') && (typeof profileMode === 'undefined' || profileMode !== 'stateless' || action === 'health')) { %>
+<form method="post" action="/failover/operations/<%= action %>"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><input type="hidden" name="app" value="<%= selectedApp %>"><button><%= label %></button></form>
+<% } } %>
+<% for (const operation of operations) { %><article><strong><%= operation.action %> — <%= operation.state %></strong><pre><%= JSON.stringify(operation.result, null, 2) %></pre></article><% } %>
+<% } %>
+<% for (const row of rows) { %>
+<article><h2><%= row.app_name %> · <%= row.stage %> — <%= row.state %></h2>
+<p>Baseline <code><%= row.base_sha %></code></p>
+<a href="<%= row.pr_url %>">Pull request</a> · <a href="/failover/<%= row.id %>">Examiner le candidat</a>
+</article><% } %>
+<% if (typeof files !== 'undefined') { for (const [name, content] of Object.entries(files)) { %>
+<h3><%= name %></h3><pre><%= content %></pre>
+<% } if (['pending', 'approving'].includes(candidate.state)) { %>
+<form action="/failover/<%= candidate.id %>/approve" method="post">
+<input type="hidden" name="head" value="<%= candidate.head_sha %>">
+<input type="hidden" name="csrf" value="<%= failoverCsrf %>">
+<button>Approuver ce candidat et publier en production</button></form>
+<% if (candidate.state === 'pending') { %>
+<form action="/failover/<%= candidate.id %>/reject" method="post"><input type="hidden" name="csrf" value="<%= failoverCsrf %>"><button>Rejeter et fermer cette proposition</button></form>
+<% } %>
+<% } } %>
+</body></html>

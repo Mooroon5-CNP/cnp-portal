@@ -117,3 +117,38 @@ test('an unknown source value falls back to the historical flow', async () => {
     expect(scaffolder.scaffoldRepository).not.toHaveBeenCalled();
     expect(flash).toHaveBeenCalledWith('error', "Veuillez renseigner le nom de l'application et l'URL du dépôt GitHub.");
 });
+
+
+test('new repository works with the Cloud Run wizard JSON response', async () => {
+    const response = await request(app).post('/deployments').set('Accept', 'application/json').type('form')
+        .send({ source: 'new', repoLanguage: 'node', appName: 'fresh-app', targetCluster: 'gcp' });
+    expect(response.status).toBe(202);
+    expect(response.body.redirect).toBe(`/deployments/${deployments.listForUser(null)[0].id}`);
+});
+
+test('scaffolding errors stay JSON for the Cloud Run wizard', async () => {
+    scaffolder.scaffoldRepository.mockRejectedValue(new scaffolder.ScaffoldError('Le dépôt existe déjà.'));
+    const response = await request(app).post('/deployments').set('Accept', 'application/json').type('form')
+        .send({ source: 'new', repoLanguage: 'node', appName: 'fresh-app' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Le dépôt existe déjà.');
+    expect(deployments.listForUser(null)).toHaveLength(0);
+});
+
+test('a new repository can register a failover production while keeping the supplied deployment id', async () => {
+    const response = await request(app).post('/deployments').set('Accept', 'application/json').type('form')
+        .send({ source: 'new', repoLanguage: 'node', appName: 'fresh-app', environment: 'prod', targetCluster: 'gcp', failoverRequested: 'on' });
+    expect(response.status).toBe(202);
+    const dep = deployments.get(deployments.listForUser(null)[0].id);
+    expect(dep.failoverRequested).toBe(true);
+    expect(dep.unsupportedRuntime).toBe(false);
+    expect(response.body.redirect).toBe(`/deployments/${dep.id}`);
+});
+
+test('invalid failover requests return JSON and never create a repository', async () => {
+    const response = await request(app).post('/deployments').set('Accept', 'application/json').type('form')
+        .send({ source: 'new', repoLanguage: 'node', appName: 'fresh-app', environment: 'dev', failoverRequested: 'on' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('production GCP');
+    expect(scaffolder.scaffoldRepository).not.toHaveBeenCalled();
+});

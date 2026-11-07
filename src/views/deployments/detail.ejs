@@ -159,7 +159,9 @@
                     <div class="card-header"><span class="card-title">Application</span></div>
                     <div class="card-body" id="url-card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
                       <span id="url-card-spinner" style="font-size:18px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
-                      <span id="url-card-msg"><%= environmentStatus?.phase === 'approval'
+                      <span id="url-card-msg"><%= deployment.failoverRequested && environmentStatus && environmentStatus.phase !== 'success'
+                        ? 'L’application sera disponible à la fin de la mise en service du secours.'
+                        : environmentStatus?.phase === 'approval'
                         ? 'L’application sera disponible après validation du manager.'
                         : environmentStatus?.phase === 'rejected'
                           ? 'La production a été refusée.'
@@ -176,7 +178,12 @@
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
-                      <% if (environmentStatus.phase === 'approval') { %>
+                      <% if (environmentStatus.failoverConfirm && can('k8s:manifest:approve')) { %>
+                        <form method="POST" action="/deployments/<%= deployment.id %>/failover/confirm" class="inline-form">
+                          <button type="submit" class="btn btn-primary">Confirmer le déploiement</button>
+                        </form>
+                      <% } %>
+                      <% if (environmentStatus.phase === 'approval' && /^[a-f0-9]{40}$/.test(environmentStatus.revision || '') && !environmentStatus.failoverUrl) { %>
                         <p><a href="<%= environmentStatus.prUrl %>" target="_blank" rel="noreferrer">Consulter le candidat</a>. La validation se fait ici, dans le portail.</p>
                         <% if (can('k8s:manifest:approve')) { %>
                           <form method="POST" action="/deployments/<%= deployment.id %>/releases/<%= environmentStatus.revision %>/approve" class="inline-form">

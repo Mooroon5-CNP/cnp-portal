@@ -35,7 +35,7 @@
   }
   function renderSummary() {
     const target = form.querySelector('[data-deployment-summary]'); target.replaceChildren();
-    const lines = [`Application : ${form.elements.appName.value}`, `Dépôt : ${form.elements.source.value === 'new' ? 'Nouveau dépôt (' + form.elements.repoLanguage.value + ')' : form.elements.githubRepoUrl.value}`,
+    const lines = [`Application : ${form.elements.appName.value}`, `Dépôt : ${form.elements.source?.value === 'new' ? 'Nouveau dépôt (' + form.elements.repoLanguage.value + ')' : form.elements.githubRepoUrl.value}`,
       `Environnement : ${form.elements.environment.value}`, `Cloud : ${form.elements.targetCluster.value}`, `Port : ${form.elements.appPort.value}`,
       ...variables.summary()];
     if (!variables.entries().length) lines.push('Aucune variable additionnelle.');

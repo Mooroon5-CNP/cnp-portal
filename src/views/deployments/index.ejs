@@ -236,6 +236,7 @@
                       <div class="form-hint">Monte un bucket GCS sur <code>/data</code> — les données survivent aux redémarrages. Le bucket est créé automatiquement par la plateforme.</div>
                     </div>
 
+                      <div class="form-group"><label><input type="checkbox" name="failoverRequested"> Activer le failover GCP → AWS</label><div class="form-hint">Production uniquement. L’image est publiée sur les deux clouds. Un manager prépare et valide le runtime secondaire et, si nécessaire, la réplication PostgreSQL. Le statut reste en préparation jusqu’aux vérifications.</div></div>
                     </div>
                     <div data-deployment-step="2" hidden>
                       <h4>Variables de l’application</h4>

@@ -296,6 +296,10 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     catch (err) {
         return creationError(req, res, err.message, 400);
     }
+    const failoverRequested = ['on', 'true', true].includes(req.body.failoverRequested);
+    if (failoverRequested && (environment !== 'prod' || (targetCluster && targetCluster !== 'gcp') || hasPersistentStorage)) {
+        return creationError(req, res, 'Le failover GCP → AWS nécessite une production GCP sans stockage SQLite local.', 400);
+    }
     const port = Number(appPort || 8080);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return creationError(req, res, 'Le port applicatif doit être compris entre 1 et 65535.', 400);
@@ -361,6 +365,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             persistentStorage: hasPersistentStorage,
             targetCluster: targetCluster || 'gcp',
             environment,
+            failoverRequested,
             });
             if (variableConfiguration) environmentStorage.save(created.id, variableConfiguration.refs, variableConfiguration);
             return created;
@@ -400,6 +405,21 @@ router.post('/:id/resume-deployment', requireAuth, requirePermission('deployment
     try {
         await environmentService.resumeAfterCleanupFailure(dep);
         req.flash('success', 'Suivi CI repris. La prochaine CI valide sera prise en compte ; la production reste soumise à approbation.');
+    } catch (error) { req.flash('error', error.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+// Production avec failover : la confirmation du manager crée le profil de secours (PostgreSQL, rien à remplir : la base,
+// ses identifiants et son schéma sont pris en charge par la plateforme) et lance la mise en service, qui s'enchaîne seule.
+router.post('/:id/failover/confirm', requireAuth, requirePermission('k8s:manifest:approve'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé.');
+    try {
+        if (!dep.failoverRequested || dep.environment !== 'prod') throw new Error('Aucun failover demandé pour ce déploiement.');
+        await require('../services/failover-operations').createProfile(dep.appName, 'postgres', null, req.user);
+        require('../services/failover-provisioning').start(dep.appName, req.user);
+        req.flash('success', 'Déploiement confirmé : la mise en service sur GCP et AWS, la réplication et la bascule se mettent en place.');
     } catch (error) { req.flash('error', error.message); }
     return res.redirect(`/deployments/${dep.id}`);
 });
@@ -698,6 +718,19 @@ router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'),
 
     if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
 
+    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
+    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
+    if (require('../services/environment-failover').enabled(dep)) {
+        try {
+            require('../services/failover-teardown').start(dep, req.user);
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
+        } catch (e) {
+            req.flash('error', `Suppression impossible : ${e.message}`);
+        }
+        return res.redirect(`/deployments/${dep.id}`);
+    }
+
     try {
         if (usesEnvironment(dep)) {
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
@@ -762,6 +795,19 @@ router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:d
     if (request) deletionRequestModel.approve(request.id, req.user.id);
 
     if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
+
+    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
+    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
+    if (require('../services/environment-failover').enabled(dep)) {
+        try {
+            require('../services/failover-teardown').start(dep, req.user);
+            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
+            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
+        } catch (e) {
+            req.flash('error', `Suppression impossible : ${e.message}`);
+        }
+        return res.redirect(`/deployments/${dep.id}`);
+    }
 
     try {
         if (usesEnvironment(dep)) {
