@@ -319,6 +319,14 @@ async function deleteArgocdApplication(name) {
 // Lit une Application Argo CD par l'API Kubernetes (le compte cnp-portal y a get/list dans le namespace argocd).
 // L'API Argo CD répond 403 « permission denied » à ce compte pour une application qui n'existe pas (il n'a pas le
 // droit de lecture sur toutes les applications), alors que Kubernetes répond proprement 404. Renvoie null si absente.
+// Demande à Argo CD de relire Git tout de suite (au lieu d'attendre sa lecture régulière, ~3 min).
+async function refreshArgocdApplication(name) {
+  const customApi = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  await customApi.patchNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+    { metadata: { annotations: { 'argocd.argoproj.io/refresh': 'normal' } } },
+    undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
+}
 async function getArgocdApplicationIfExists(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -622,6 +630,7 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
 }
 
 module.exports = {
+  refreshArgocdApplication,
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,

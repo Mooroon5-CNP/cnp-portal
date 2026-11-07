@@ -47,7 +47,7 @@ class UserAction(ValueError):
 # Lectures sans effet : jamais de reprise d'une ancienne tâche (son résultat serait périmé), un nouveau jeton à chaque fois.
 READ_ONLY_OPERATIONS = {'inspect-source'}
 # Actions exécutées par la tâche d'initialisation SQL (image bootstrap) ; les autres passent par celle du worker.
-BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync'}
+BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff'}
 
 
 def bootstrap_operations(action, introspected):
@@ -60,7 +60,7 @@ def bootstrap_operations(action, introspected):
         return (['prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'] if introspected
                 else ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
     return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication'],
-            'resync': ['resync-schema']}[action]
+            'resync': ['resync-schema'], 'schema-diff': ['monitor']}[action]
 
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
@@ -472,6 +472,10 @@ def execute(request):
             if action in {'bootstrap', 'bootstrap-roles'} and operation in completed: continue
             completed[operation] = task(operation)
             ledger.write_text(json.dumps(completed))
+        if action == 'schema-diff':
+            # Lecture seule : la migration de la mise à jour a-t-elle changé le schéma de GCP ? Sans mesure, on reconstruit.
+            seen = [value.get('schema_in_sync') for value in completed['monitor']['results'] if 'schema_in_sync' in value]
+            return {'completed': True, 'tasks': completed, 'activated': False, 'verified': True, 'changed': seen[-1:] != [True]}
         if action == 'resync':
             # Après une mise à jour : schémas identiques, rien à faire ; sinon la copie AWS vient d'être vidée et l'initialisation
             # habituelle la reconstruit depuis GCP (publication, schéma, abonnement avec recopie).

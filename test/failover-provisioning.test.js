@@ -261,9 +261,21 @@ describe('mise à jour d’une app en service', () => {
         const last = tasks.at(-1);
         if (last.state === 'running') { actions.push(last.action); succeed(); }
       }
-      expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
+      expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'schema-diff', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
       expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
     }
+  });
+  test('sans migration, ni pause du worker ni reconstruction : directement le contrôle de santé', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+    await tick(); await tick();
+    const actions = [];
+    for (let i = 0; i < 20 && workflow.get('weather-api').state !== 'completed'; i++) {
+      await tick();
+      const last = tasks.at(-1);
+      if (last.state === 'running') { actions.push(last.action); last.state = 'completed'; last.result = { verified: true, changed: false }; }
+    }
+    expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'schema-diff', 'health']);
   });
   test('une mise à jour bloquée reprend depuis sa publication, avec une nouvelle proposition', async () => {
     inService();

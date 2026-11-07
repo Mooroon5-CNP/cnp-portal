@@ -37,11 +37,11 @@ const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify
 const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'health']];
 // Avec une base : la migration de l'application a pu changer le schéma de GCP, que la réplication ne transporte pas. Le worker
 // est mis en pause (aucune bascule vers une copie en reconstruction), la copie AWS est reconstruite si les schémas diffèrent,
-// puis vérifiée avant la reprise du worker.
-const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'worker-pause'], ['operation', 'resync'],
+// puis vérifiée avant la reprise du worker. Schéma inchangé (lecture seule « schema-diff ») : tout cela est sauté.
+const SQL_UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'schema-diff'], ['operation', 'worker-pause'], ['operation', 'resync'],
   ['operation', 'verify'], ['operation', 'worker-resume'], ['operation', 'health']];
 
-const UPDATE_CHECK_MS = 120000;
+const UPDATE_CHECK_MS = 30000;
 const lastUpdateCheck = new Map();
 const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check']);
 // Par défaut, une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
@@ -188,6 +188,8 @@ async function advance(app) {
       if (!['pending', 'approving'].includes(candidate.state)) throw new Error(`Proposition ${action} rejetée. Reprendre pour préparer un nouveau candidat.`);
       if (stepByStep()) { save('review', `Validation manager requise : ${action}.`, `candidate:${candidate.id}`); return; }
       await profiles.autoApprove(candidate.id, actor);
+      // Argo CD relit Git tout de suite ; sans effet si l'Application n'existe pas encore (elle lira Git en naissant).
+      require('../clients/kubernetes').refreshArgocdApplication(`${app}-prod`).catch(() => {});
       save('running', `${action} contrôlé et publié automatiquement.`, null, true);
       return;
     }
@@ -211,9 +213,16 @@ async function advance(app) {
     }
     const reference = `operation:${operation.id}`;
     if (operation.state === 'running') { save('running', `En cours : ${action}.`, reference); return; }
-    const requiresProof = ['observe', 'verify', 'runtime-rollout', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
+    const requiresProof = ['observe', 'verify', 'runtime-rollout', 'schema-diff', 'runtime-verify', 'worker-verify', 'health', 'schema-check'].includes(action);
     // Une cause que le manager doit corriger (schéma non pris en charge) ne se rejoue pas : on l'affiche et on s'arrête.
     if (operation.state === 'failed' && operation.result?.action_required) throw new Error(operation.result.error);
+    if (operation.state === 'completed' && action === 'schema-diff' && operation.result?.verified === true && operation.result.changed === false) {
+      // Mise à jour sans migration : pas de pause du worker ni de reconstruction, directement le contrôle de santé.
+      db.prepare('UPDATE failover_provisioning SET step=?,reference=NULL,step_started_at=? WHERE app=? AND lease_owner=?')
+        .run(steps.findIndex(value => value[1] === 'health'), new Date().toISOString(), app, owner);
+      save('running', 'Schéma inchangé : aucune reconstruction.');
+      return;
+    }
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {
       save('running', `${action} vérifié.`, null, true); return;
     }
