@@ -438,7 +438,15 @@ async function remove(dep) {
       const app = registry.apps?.find(item => item.app_name === dep.appName);
       if (app) {
         app.environments = (app.environments || []).filter(environment => environment !== dep.environment);
-        if (!app.environments.length) registry.apps = registry.apps.filter(item => item !== app);
+        if (!app.environments.length) {
+          registry.apps = registry.apps.filter(item => item !== app);
+          // Le fichier racine vide, écrit à l'enregistrement, part avec le dernier environnement : sinon l'ApplicationSet
+          // cloudrun-autodiscovery garde une Application <app>-cloudrun vide (constaté le 07/11/2026 sur quatre apps
+          // supprimées). Seulement s'il est resté vide : un fichier qui déclare des ressources n'est jamais retiré ici.
+          const rootPath = `apps/${dep.appName}/crossplane/kustomization.yaml`;
+          const root = yaml.load(await readFile(api, target(), rootPath, head) || 'null');
+          if (root?.kind === 'Kustomization' && Array.isArray(root.resources) && !root.resources.length) result[rootPath] = null;
+        }
         result['apps/registry.yaml'] = yaml.dump(registry);
       }
     }
