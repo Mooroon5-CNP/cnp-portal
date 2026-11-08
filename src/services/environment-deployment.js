@@ -131,6 +131,11 @@ function manifests(dep, revision) {
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
   const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  if (dep.billing === 'instance') {
+    // Facturation à l'instance : une instance toujours active et son CPU toujours alloué (pas de démarrage à froid).
+    template.scaling = { minInstanceCount: 1 };
+    container.resources = { cpuIdle: false };
+  }
   if (dep.persistentStorage) {
     template.volumes = [{ name: 'data', gcs: { bucket, readOnly: false } }];
     container.volumeMounts = [{ name: 'data', mountPath: '/data' }];

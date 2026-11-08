@@ -253,8 +253,34 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
 // POST /deployments — create and trigger onboarding
 // ---------------------------------------------------------------------------
 
+// Formulaire (08/11/2026) : un seul choix « hébergement et données », traduit en réglages internes. En prod, GCP Cloud SQL
+// implique toujours le secours vers AWS ; en dev, Cloud SQL sans secours. Les anciens champs restent compris (API, tests).
+const STACKS = {
+    'azure-postgres': { targetCluster: 'azure' },
+    'gcp-sqlite': { targetCluster: 'gcp', persistentStorage: 'on' },
+    'gcp-postgres': { targetCluster: 'gcp', database: 'postgres' },
+};
+function fromStack(body) {
+    const stack = STACKS[body.stack];
+    if (!body.stack) return body;
+    if (!stack) throw new Error('Choix d’hébergement inconnu.');
+    // Seul le choix décide de la base, du stockage et du secours : une case forgée ou restée d'un ancien formulaire ne compte pas.
+    const values = { ...body };
+    for (const key of ['failoverRequested', 'database', 'persistentStorage']) delete values[key];
+    Object.assign(values, stack);
+    if (body.stack === 'gcp-postgres' && body.environment === 'prod') { values.failoverRequested = 'on'; delete values.database; }
+    return values;
+}
+
 router.post('/', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    try { req.body = fromStack(req.body); }
+    catch (err) {
+        req.flash('error', err.message);
+        return res.redirect('/deployments');
+    }
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
+    // Mode de facturation de Cloud Run : « usage » (défaut, mise à l'échelle à zéro) ou « instance » (une instance toujours active).
+    const billing = req.body.billing === 'instance' && targetCluster !== 'azure' ? 'instance' : 'usage';
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
     const hasPersistentStorage = targetCluster !== 'azure'
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
@@ -326,6 +352,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
             environment,
             failoverRequested,
             database,
+            billing,
         });
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");

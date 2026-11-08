@@ -344,6 +344,12 @@ function operationalPackage(app, stage, user) {
   // Chaque app a son enregistrement de configuration du worker : aucun varfile partagé à reconstituer.
   return render({ ...profileFor(app), stage });
 }
+// Durée courte et lisible : « 45 s », « 3 min », « 1 h 05 ».
+function duration(seconds) {
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
+}
 async function deploymentStatus(dep) {
   if (!dep.failoverRequested) return readiness(dep);
   try {
@@ -359,7 +365,11 @@ async function deploymentStatus(dep) {
     if (progress.state === 'blocked') return { phase: 'failed', message: `${label} bloqué(e) : ${progress.message}`, runUrl: run.html_url, failoverResumable: true };
     if (progress.state !== 'completed') {
       const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
-      return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
+      if (!progress.label) return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
+      const timing = `étape ${duration(progress.elapsed)} / ~${duration(progress.estimate)}, parcours ${duration(progress.totalElapsed)} / ~${duration(progress.totalEstimate)}`;
+      const slow = progress.slow ? ' Plus long que d’habitude : rien n’est bloqué tant qu’aucune erreur n’est affichée.' : '';
+      return { phase: 'deploying', message: `${label}${step} : ${progress.label} (${timing}).${progress.message ? ` ${progress.message}` : ''}${slow}`, runUrl: run.html_url,
+        failoverTiming: { ...progress } };
     }
     return readiness(dep);
   } catch (error) {
@@ -385,4 +395,4 @@ function readiness(dep) {
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
 module.exports = { profiles, configure, profileFor, enabled, platform, render, rows, runtimeRevision, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
-  operationalPackage, deploymentStatus, stagesFor };
+  operationalPackage, deploymentStatus, stagesFor, duration };

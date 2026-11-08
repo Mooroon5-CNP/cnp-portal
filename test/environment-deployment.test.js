@@ -527,3 +527,14 @@ test('an old Cloud Run revision failure is not attributed to the newly published
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: `registry.test/project/apps/pixelcam:${revision}`, failure: 'Current revision failed to start', url: null });
   expect(await service.reconcile(dep)).toMatchObject({ phase: 'failed', message: 'Cloud Run : Current revision failed to start' });
 });
+
+test('la facturation « à l’instance » garde une instance active et son CPU alloué ; l’usage ne change rien', () => {
+  const path = 'apps/pixelcam/crossplane/dev';
+  const run = billing => yaml.load(service.manifests({ ...dep, billing }, revision)[`${path}/cloudrun-claim.yaml`]).spec.forProvider.template;
+  const instance = run('instance');
+  expect(instance.scaling).toEqual({ minInstanceCount: 1 });
+  expect(instance.containers[0].resources).toEqual({ cpuIdle: false });
+  const usage = run('usage');
+  expect(usage.scaling).toBeUndefined();
+  expect(usage.containers[0].resources).toBeUndefined();
+});

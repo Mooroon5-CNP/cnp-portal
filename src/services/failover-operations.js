@@ -164,6 +164,8 @@ async function createProfile(app, mode, contract, user) {
   const allocation = await run({ action: 'allocate-listener', app, document: temporary,
     work: path.join(workRoot, id), used_priorities: used });
   for (const side of ['gcp', 'aws']) { profile[side].app_name = app; profile[side].container_port = row.app_port || 8080; }
+  // Facturation choisie au déploiement : le Cloud Run de GCP garde une instance active (le secours AWS n'est pas concerné).
+  if (row.billing_mode === 'instance') profile.gcp.billing_mode = 'instance';
   profile.gcp.gcp_lb_ip = platform.gcp.gcp_lb_ip;
   profile.gcp.gcp_runtime.service_account = platform.gcp.gcp_runtime.service_account;
   profile.gcp.gcp_runtime.subnetwork = platform.gcp.gcp_runtime.subnetwork;

@@ -137,3 +137,12 @@ describe('régime plateforme du worker', () => {
     expect(service.stagesFor({ profile: { mode: 'stateless', automation: { regime: 'platform' } } })).toEqual(['runtime', 'dns']);
   });
 });
+test('sans choix, la facturation reste à l’usage', async () => {
+  await operations.createProfile('weather-api', 'postgres', null, manager);
+  expect(service.profileFor('weather-api').profile.gcp.billing_mode).toBeUndefined();
+});
+test('la facturation « à l’instance » choisie au déploiement passe dans le profil', async () => {
+  deployments.listForUser.mockReturnValue([{ app_name: 'weather-api', deployment_environment: 'prod', target_cluster: 'gcp', app_port: 8081, billing_mode: 'instance' }]);
+  await operations.createProfile('weather-api', 'postgres', null, manager);
+  expect(service.profileFor('weather-api').profile.gcp.billing_mode).toBe('instance');
+});

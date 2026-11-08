@@ -105,13 +105,39 @@ function start(app, user) {
     .run(app, user.id, now, now, now);
   return get(app);
 }
-// Avancement lisible d'une mise en service, pour la page de l'application (aucune action proposée).
-function progress(app) {
+// Libellé lisible et durée habituelle (en secondes) de chaque étape, d'après les recettes du 06 au 08/11/2026 : un ordre de
+// grandeur pour l'utilisateur, pas une limite. Une publication (« candidate ») attend la fusion puis la synchronisation Argo CD.
+const STEP_INFO = {
+  'candidate:databases': ['Publication des bases', 240], 'candidate:runtime': ['Publication de l’application sur GCP et AWS', 240],
+  'candidate:dns': ['Publication du DNS', 240], 'candidate:worker': ['Publication de la surveillance', 240],
+  'initialize-secrets': ['Création des secrets', 60], observe: ['Attente de la synchronisation Argo CD', 180],
+  'bootstrap-roles': ['Création des rôles de base de données', 60], 'runtime-verify': ['Vérification de l’application sur GCP et AWS', 180],
+  'runtime-rollout': ['Déploiement de la nouvelle version', 240], 'schema-check': ['Attente du schéma créé par l’application', 120],
+  'schema-diff': ['Comparaison des schémas GCP et AWS', 60], bootstrap: ['Copie initiale de la base vers AWS', 180],
+  verify: ['Vérification de la réplication', 60], 'worker-configure': ['Configuration de la surveillance', 60],
+  'worker-verify': ['Vérification de la surveillance', 120], 'worker-pause': ['Pause de la surveillance', 60],
+  'worker-resume': ['Reprise de la surveillance', 60], 'worker-rearm': ['Réarmement de la surveillance', 60],
+  resync: ['Reconstruction de la copie AWS', 240], health: ['Contrôle de santé final', 120],
+  'failback-check': ['Contrôle avant le retour', 60], 'worker-failback-route': ['Réouverture du DNS vers GCP', 120],
+  'failback-sync': ['Copie AWS → GCP vérifiée et rouverture de GCP', 180], 'failback-reset': ['Reconstruction de la copie AWS depuis GCP', 240],
+};
+const stepInfo = ([kind, name]) => STEP_INFO[kind === 'candidate' ? `candidate:${name}` : name] || [name, 120];
+// Avancement lisible d'une mise en service, pour la page de l'application (aucune action proposée) : étape en cours, temps
+// écoulé et estimé (étape et parcours), et « long » quand l'étape dure plus du double de l'habitude.
+function progress(app, now = Date.now()) {
   const row = get(app);
   if (!row) return null;
-  let total = null;
-  try { total = stepsOf(row, profiles.profileFor(app)).length; } catch (_) { /* profil absent ou historique */ }
-  return { state: row.state, step: row.step, total, message: row.message, phase: row.phase || 'provision' };
+  let steps = null;
+  try { steps = stepsOf(row, profiles.profileFor(app)); } catch (_) { /* profil absent ou historique */ }
+  const value = { state: row.state, step: row.step, total: steps ? steps.length : null, message: row.message, phase: row.phase || 'provision' };
+  if (!steps) return value;
+  const current = steps[Math.min(row.step, steps.length - 1)];
+  const [label, estimate] = stepInfo(current);
+  const elapsed = Math.max(0, Math.round((now - Date.parse(row.step_started_at)) / 1000));
+  const totalElapsed = Math.max(0, Math.round((now - Date.parse(row.started_at)) / 1000));
+  // Reste estimé : le reste de l'étape en cours (au moins rien) plus les étapes suivantes.
+  const remaining = Math.max(0, estimate - elapsed) + steps.slice(row.step + 1).reduce((sum, item) => sum + stepInfo(item)[1], 0);
+  return { ...value, label, elapsed, estimate, totalElapsed, totalEstimate: totalElapsed + remaining, slow: elapsed > 2 * estimate };
 }
 // Voyant d'une app servie par AWS : le dernier contrôle de santé dit si GCP est revenu (lecture seule, aucune action).
 function gcpStatus(app) {
@@ -128,8 +154,8 @@ function failback(app, user) {
   if (!status) throw new Error('L’application n’est pas servie par AWS : aucun retour à faire.');
   if (!status.available || !status.fresh) throw new Error(status.message || 'GCP indisponible.');
   const now = new Date().toISOString();
-  db.prepare(`UPDATE failover_provisioning SET phase='failback',requested_by=?,step=0,state='running',reference=NULL,message=?,step_started_at=?,updated_at=?
-    WHERE app=? AND state='completed' AND lease_until < ?`).run(user.id, 'Retour vers GCP demandé.', now, now, app, Date.now());
+  db.prepare(`UPDATE failover_provisioning SET phase='failback',requested_by=?,step=0,state='running',reference=NULL,message=?,started_at=?,step_started_at=?,updated_at=?
+    WHERE app=? AND state='completed' AND lease_until < ?`).run(user.id, 'Retour vers GCP demandé.', now, now, now, app, Date.now());
   return get(app);
 }
 function resume(app, user) {
@@ -182,8 +208,8 @@ async function advance(app) {
       const revision = await pendingRevision(app, health);
       if (revision) {
         const now = new Date().toISOString();
-        db.prepare(`UPDATE failover_provisioning SET phase='update',step=0,state='running',reference=NULL,message=?,step_started_at=?,updated_at=?
-          WHERE app=? AND lease_owner=?`).run(`Mise à jour vers ${revision.slice(0, 7)}.`, now, now, app, owner);
+        db.prepare(`UPDATE failover_provisioning SET phase='update',step=0,state='running',reference=NULL,message=?,started_at=?,step_started_at=?,updated_at=?
+          WHERE app=? AND lease_owner=?`).run(`Mise à jour vers ${revision.slice(0, 7)}.`, now, now, now, app, owner);
         return;
       }
       if (!health || Date.now() - Date.parse(health.created_at) >= 60000) operations.start(app, 'health', actor);

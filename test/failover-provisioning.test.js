@@ -346,3 +346,15 @@ describe('retour manuel vers GCP', () => {
     expect(operations.retry).toHaveBeenCalledWith(route.id, expect.objectContaining({ id: manager.id }));
   });
 });
+test('le suivi donne l’étape en clair, le temps écoulé et estimé, et signale une étape anormalement longue', () => {
+  workflow.start('weather-api', manager);
+  const start = Date.now();
+  let value = workflow.progress('weather-api', start + 30000);
+  expect(value).toMatchObject({ label: 'Création des secrets', elapsed: 30, estimate: 60, totalElapsed: 30, slow: false });
+  expect(value.totalEstimate).toBeGreaterThan(30 * 60);                   // le parcours complet dure de l'ordre d'une demi-heure
+  value = workflow.progress('weather-api', start + 5 * 60000);
+  expect(value).toMatchObject({ elapsed: 300, slow: true });            // plus du double de l'habitude
+  expect(value.totalEstimate).toBeGreaterThan(value.totalElapsed);      // le reste ne devient jamais négatif
+  profiles.profileFor.mockReturnValue(null);
+  expect(workflow.progress('weather-api', start).label).toBeUndefined(); // profil absent : avancement brut, sans durée
+});
