@@ -29,7 +29,7 @@ class OperatorTests(unittest.TestCase):
         self.request = {'app': 'weather-api', 'work': self.directory.name, 'document': self.document}
 
     def test_platform_secrets_are_created_by_the_api_without_terraform_or_any_cli(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
@@ -309,51 +309,43 @@ class EntryPointTests(unittest.TestCase):
 
 
 class EngineRootTests(unittest.TestCase):
-    """Le moteur doit être trouvé dans les deux dispositions du dépôt, sans PYTHONPATH."""
+    """Le moteur est dans engine/ à côté de l'opérateur, sans PYTHONPATH ni dépôt voisin."""
 
-    def engine(self, base, *parts):
-        directory = Path(base).joinpath(*parts, 'deployment', 'failover-phase1')
-        directory.mkdir(parents=True)
-        (directory / 'bootstrap.py').write_text('')
-        return directory
-
-    def script(self, base, *parts):
-        file = Path(base).joinpath(*parts, 'scripts', 'failover', 'operate.py')
+    def script(self, base, with_engine=True):
+        file = Path(base) / 'scripts' / 'failover' / 'operate.py'
         file.parent.mkdir(parents=True)
         file.write_text('')
+        if with_engine:
+            (file.parent / 'engine').mkdir()
+            (file.parent / 'engine' / 'bootstrap.py').write_text('')
         return file.resolve()
 
-    def test_repositories_side_by_side(self):
+    def test_engine_next_to_the_operator(self):
         with tempfile.TemporaryDirectory() as base:
-            expected = self.engine(base, 'cnp')
-            here = self.script(base, 'cnp-portal')
-            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+            here = self.script(base)
+            self.assertEqual(operator.engine_root({}, here), (here.parent / 'engine').resolve())
 
-    def test_portal_nested_inside_cnp(self):
+    def test_a_neighbouring_repository_is_never_used(self):
         with tempfile.TemporaryDirectory() as base:
-            expected = self.engine(base)
-            here = self.script(base, 'cnp-portal')
-            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+            old = Path(base) / 'deployment' / 'failover-phase1'
+            old.mkdir(parents=True)
+            (old / 'bootstrap.py').write_text('')
+            with self.assertRaises(FileNotFoundError):
+                operator.engine_root({}, self.script(base, with_engine=False))
 
     def test_environment_variable_wins(self):
         with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as other:
-            self.engine(base)
-            chosen = self.engine(other)
-            here = self.script(base, 'cnp-portal')
+            chosen = Path(other) / 'engine'
+            chosen.mkdir()
+            (chosen / 'bootstrap.py').write_text('')
+            here = self.script(base)
             self.assertEqual(operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(chosen)}, here), chosen.resolve())
 
     def test_wrong_variable_does_not_fall_back_silently(self):
         with tempfile.TemporaryDirectory() as base:
-            self.engine(base)
-            here = self.script(base, 'cnp-portal')
-            with self.assertRaises(FileNotFoundError):
-                operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(Path(base) / 'absent')}, here)
-
-    def test_missing_engine_is_explicit(self):
-        with tempfile.TemporaryDirectory() as base:
-            here = self.script(base, 'cnp-portal')
+            here = self.script(base)
             with self.assertRaisesRegex(FileNotFoundError, 'CNP_FAILOVER_ENGINE_ROOT'):
-                operator.engine_root({}, here)
+                operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(Path(base) / 'absent')}, here)
 
     def test_real_layout_resolves_without_pythonpath(self):
         self.assertTrue((operator.ROOT / 'bootstrap.py').is_file() and (operator.ROOT / 'platform_secrets.py').is_file())
@@ -449,7 +441,7 @@ class ObserveTests(unittest.TestCase):
             operator.observe_objects('weather-api', self.apis, self.custom)
 
     def observe(self, objects, expect_probes=False, expect_worker=False):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
@@ -489,7 +481,7 @@ class ObserveTests(unittest.TestCase):
         self.assertIs(self.observe({**dbs, **probes, **worker}, expect_probes=True, expect_worker=True)['verified'], True)
 
     def test_the_action_reads_the_source_ca_from_the_cloud_sql_api(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
@@ -576,7 +568,7 @@ class HealthNamesTests(unittest.TestCase):
         return result, clients
 
     def test_health_reads_the_platform_state_table_and_rules(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),):
             with self.subTest(table=table):
@@ -608,7 +600,7 @@ class TeardownTests(unittest.TestCase):
         self.custom.list_cluster_custom_object.side_effect = lambda group, v, plural, label_selector: {'items': self.items.get(plural, [])}
 
     def run_action(self, action):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
@@ -671,7 +663,7 @@ class TeardownTests(unittest.TestCase):
         child = {'apiVersion': 'sql.gcp.upbound.io/v1beta1', 'kind': 'Database',
                  'metadata': {'name': 'app-db', 'deletionTimestamp': 'x'}, 'spec': {}}
         def run(status):
-            sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+            sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
             import test_worker_phase1 as fixtures
             profile = fixtures.platform_profile()
             session = Mock()
@@ -697,7 +689,7 @@ class TeardownTests(unittest.TestCase):
         task = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'TaskDefinition', 'metadata': {'name': 'weather-api-prod-td'},
                 'spec': {}, 'status': {'conditions': ok, 'atProvider': {'arn': arn, 'containerDefinitions': '[{"image": "old"}]'}}}
         def run():
-            sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+            sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
             import test_worker_phase1 as fixtures
             profile = fixtures.platform_profile()
             parent = SOURCE.parents[2] / 'data' / 'failover-operations'

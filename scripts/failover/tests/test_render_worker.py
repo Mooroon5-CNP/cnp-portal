@@ -1,6 +1,6 @@
 """Étape « worker » vue par le portail : l'alarme et l'enregistrement de configuration suivent la vie de l'application.
 
-Les générateurs et leurs fixtures viennent du config-repo voisin (CNP_FAILOVER_CONFIG_REPO, sinon le dépôt à côté du portail).
+Les générateurs et leurs fixtures sont dans engine/ (moteur unique du failover, dans ce dépôt).
 """
 import json
 import os
@@ -8,9 +8,9 @@ from pathlib import Path
 import sys
 import unittest
 
-CONFIG_REPO = Path(os.environ.get('CNP_FAILOVER_CONFIG_REPO') or Path(__file__).resolve().parents[4] / 'config-repo')
-sys.path.insert(0, str(CONFIG_REPO / 'scripts'))
-sys.path.insert(0, str(CONFIG_REPO / 'scripts' / 'tests'))
+ENGINE = Path(__file__).resolve().parents[1] / 'engine'
+sys.path.insert(0, str(ENGINE))
+sys.path.insert(0, str(ENGINE / 'tests'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import render  # noqa: E402
 import test_worker_phase1 as fixtures  # noqa: E402
@@ -55,7 +55,7 @@ class WorkerStageTests(unittest.TestCase):
     def test_a_refusal_shows_the_generator_reason_and_never_a_path(self):
         import io, subprocess
         result = subprocess.run([sys.executable, str(Path(render.__file__))], input=json.dumps(request(fixtures.legacy_profile(), outputs())),
-                                capture_output=True, text=True, env={**os.environ, 'CNP_FAILOVER_CONFIG_REPO': str(CONFIG_REPO)})
+                                capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr.strip(), "Rendu refusé : Profil hors du régime plateforme : le régime historique du pilote n'existe plus.")
 

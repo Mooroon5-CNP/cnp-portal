@@ -17,3 +17,7 @@ docs/
 **/.pytest_cache
 .kilo
 coverage
+
+# Tests du moteur failover et leurs fixtures : jamais dans l'image.
+scripts/failover/tests
+scripts/failover/engine/tests

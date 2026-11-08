@@ -5,10 +5,8 @@ import os
 from pathlib import Path
 import sys
 
-# CNP_FAILOVER_CONFIG_REPO : racine du config-repo (portail déployé) ; sinon le dépôt voisin du portail, ce qui
-# convient aux deux dispositions connues (côte à côte, ou imbriqué dans cnp).
-CONFIG_REPO = Path(os.environ.get('CNP_FAILOVER_CONFIG_REPO') or Path(__file__).resolve().parents[3] / 'config-repo')
-sys.path.insert(0, str(CONFIG_REPO / 'scripts'))
+# Générateurs : dans engine/, à côté de ce script (déplacés du config-repo le 08/11/2026, une seule copie).
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'engine'))
 from prepare_failover_phase1 import build, resolve_credentials, automation_profile, runtime_profiles, credentials_profile, validate
 import render_stateless_phase1 as stateless
 import render_failover_phase1 as gcp

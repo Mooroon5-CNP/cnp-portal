@@ -1,0 +1,13 @@
+FROM python:3.13-slim@sha256:b3575dcf816cdacc5292df77a6e3e59b8941631078373a045efa2ac1e9c5c3b2
+WORKDIR /app
+# pg_dump lit le schéma de l'application (opération restore-schema). Le client doit être au moins de la version du
+# serveur (Cloud SQL : PostgreSQL 15) ; Debian fournit une version égale ou plus récente.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt requirements.automation.txt ./
+RUN pip install --no-cache-dir -r requirements.automation.txt && chmod 1777 /tmp
+COPY postgres_contract.py database.py replication_tls.py automation.py bootstrap.py ./
+VOLUME ["/tmp"]
+USER 10001
+ENTRYPOINT ["python", "bootstrap.py"]
+CMD ["--help"]

@@ -10,18 +10,17 @@ import time
 from uuid import uuid4
 
 def engine_root(environ=os.environ, here=Path(__file__).resolve()):
-    """Racine du moteur phase 1 (bootstrap.py, automation.py, platform_secrets.py…).
+    """Racine du moteur failover : le moteur, les générateurs et leurs gabarits (bootstrap.py, automation.py,
+    platform_secrets.py, render_*.py, templates/…).
 
-    CNP_FAILOVER_ENGINE_ROOT l'impose (portail déployé, disposition inhabituelle) et n'a alors aucun repli : une
-    valeur fausse doit échouer, pas être remplacée en silence par un autre moteur. Sans elle, on reconnaît les deux
-    dispositions du dépôt : dépôts côte à côte (projet/cnp et projet/cnp-portal) ou portail imbriqué dans cnp
-    (cnp/cnp-portal).
+    Depuis le 08/11/2026, tout le Python du failover vit dans ce dépôt, dans engine/ à côté de ce script : une seule
+    copie, la même sur un poste et dans l'image du portail. Il était auparavant réparti entre cnp/deployment/failover-phase1
+    et config-repo/scripts, trouvés « à côté » du portail sur le disque, ce qui n'existait pas dans l'image.
+    CNP_FAILOVER_ENGINE_ROOT l'impose encore (essai d'un autre moteur) et n'a alors aucun repli : une valeur fausse
+    doit échouer, pas être remplacée en silence par un autre moteur.
     """
     configured = environ.get('CNP_FAILOVER_ENGINE_ROOT')
-    candidates = [Path(configured)] if configured else [
-        here.parents[3] / 'cnp' / 'deployment' / 'failover-phase1',
-        here.parents[3] / 'deployment' / 'failover-phase1',
-    ]
+    candidates = [Path(configured)] if configured else [here.parent / 'engine']
     for candidate in candidates:
         if (candidate / 'bootstrap.py').is_file():
             return candidate.resolve()
@@ -333,7 +332,6 @@ def execute(request):
         except Exception: public_ready = False
         services = client('ecs').describe_services(cluster=document['profile'].get('automation', {}).get('ecs_cluster_arn', 'cnp-cluster'), services=[app + '-prod'])['services']
         aws_ready = len(services) == 1 and services[0]['runningCount'] >= 1 and services[0]['pendingCount'] == 0
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from render_failover_phase1 import ZONE
         records = client('route53').list_resource_record_sets(HostedZoneId=ZONE, StartRecordName=app + '.apps.mooroon5.fr', StartRecordType='A', MaxItems='10')['ResourceRecordSets']
         own = [record for record in records if record['Name'].rstrip('.') == app + '.apps.mooroon5.fr' and record['Type'] == 'A']
@@ -376,7 +374,6 @@ def execute(request):
             'observed_at': int(time.time()), 'zero_loss_proven': False, **({'gcp': gcp} if gcp else {})}
     if action == 'failback-check':
         # Lecture seule, avant de lancer le retour : AWS actif (le worker a basculé), GCP revenu et clôturé.
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import regime
         if regime(document['profile']) != 'platform':
             raise UserAction('Retour vers GCP réservé aux applications du régime plateforme.')
@@ -389,7 +386,6 @@ def execute(request):
         return {'verified': True, 'gcp': gcp, 'observed_at': int(time.time())}
     if action == 'allocate-listener':
         import boto3
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from render_aws_prod_example import PLATFORM
         client = boto3.client('elbv2', region_name='eu-west-3')
         used = set(request.get('used_priorities', []))
@@ -397,14 +393,12 @@ def execute(request):
             used.update(int(rule['Priority']) for rule in page['Rules'] if rule['Priority'].isdigit())
         return {'priority': next(value for value in range(20000, 50001) if value not in used)}
     if action == 'initialize-secrets':
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import platform_secrets_profile
         # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
         import platform_secrets
         return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
     if action == 'observe':
         # Le validateur partagé vérifie les références de secrets (et le contexte GKE quand il est fourni).
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import credentials_profile
         credentials_profile(document['profile'], document['credentials'])
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
@@ -466,7 +460,6 @@ def execute(request):
         return {'verified': bool(items) and not pending, 'resources': len(items), 'pending': sorted(pending),
                 'message': None if items and not pending else 'En attente de la libération de : ' + ', '.join(sorted(pending)[:6])}
     if action == 'teardown-cleanup':
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import platform_secrets_profile, regime
         import platform_secrets
         if regime(document['profile']) != 'platform':

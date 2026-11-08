@@ -11,7 +11,9 @@ const db = require('../src/models/db');
 const github = require('../src/clients/github');
 const deployment = require('../src/services/environment-deployment');
 const service = require('../src/services/environment-failover');
+// Contenu GitOps réel du config-repo voisin, pour simuler les lectures GitHub ; les gabarits du moteur sont dans ce dépôt.
 const root = path.resolve(__dirname, '../../config-repo');
+const templates = path.resolve(__dirname, '../scripts/failover/engine/templates');
 const APP = 'demo-api';
 const dir = `apps/${APP}/crossplane/prod`;
 const base = 'a'.repeat(40), head = 'b'.repeat(40);
@@ -23,7 +25,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   db.exec('DROP TABLE IF EXISTS failover_candidates; DROP TABLE IF EXISTS failover_profiles');
   // Profil d'une app du régime plateforme, comme createProfile le construit (schéma lu dans la base, base appdb).
-  const profile = JSON.parse(fs.readFileSync(path.join(root, 'docs/templates/failover-phase1/postgres/recipe.example.json')));
+  const profile = JSON.parse(fs.readFileSync(path.join(templates, 'postgres/recipe.example.json')));
   const contract = { database: 'appdb' };
   for (const side of ['gcp', 'aws']) Object.assign(profile[side], { app_name: APP, database_name: 'appdb', sql_contract: contract });
   Object.assign(profile.gcp, { gcp_lb_ip: '34.54.71.90', credentials_secret_name: `cnp-${APP}-sql`, database_instance: `${APP}-prod-gcp-db-abc` });

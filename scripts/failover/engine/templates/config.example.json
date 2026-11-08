@@ -1,0 +1,15 @@
+{
+  "app_name": "cnp-failover-recette",
+  "environment": "prod",
+  "database_name": "appdb",
+  "credentials_secret_name": "cnp-failover-recette-sql",
+  "gcp_lb_ip": "34.54.71.90",
+  "gcp_runtime": {
+    "image": null,
+    "service_account": "cloud-run-sa@cnp-terraform-512313.iam.gserviceaccount.com",
+    "subnetwork": null,
+    "password_secret": null,
+    "password_version": null,
+    "database_ca_pem": null
+  }
+}

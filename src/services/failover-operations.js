@@ -156,8 +156,8 @@ async function createProfile(app, mode, contract, user) {
   // Une app PostgreSQL neuve passe toujours par le régime plateforme (aucun plan Terraform par app) : ses tâches ECS doivent exister.
   if (mode === 'postgres' && !['bootstrap_task_definition', 'worker_task_definition'].every(key => platform.automation[key]))
     throw new Error('Paramètres de plateforme incomplets : automation.bootstrap_task_definition et automation.worker_task_definition (pile plateforme).');
-  const configRepo = process.env.CNP_FAILOVER_CONFIG_REPO || path.resolve(root, '../config-repo');
-  const profile = JSON.parse(fs.readFileSync(path.join(configRepo, `docs/templates/failover-phase1/${template}/recipe.example.json`)));
+  // Gabarit du profil : dans le moteur du portail (déplacé du config-repo le 08/11/2026), présent aussi dans l'image.
+  const profile = JSON.parse(fs.readFileSync(path.join(root, `scripts/failover/engine/templates/${template}/recipe.example.json`)));
   const used = service.profiles().map(name => service.profileFor(name).profile.aws.listener_priority).filter(Number.isInteger);
   const id = randomUUID();
   const temporary = { profile: { gcp: { app_name: app }, aws: { app_name: app } } };
