@@ -512,19 +512,17 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
   for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
+  let hasRuntime = false;
   if (!onAzure) {
     const application = await kubernetes.getArgocdApplicationIfExists(name);
-    const hasRuntime = Object.keys(files).length > 0 || application
+    hasRuntime = Object.keys(files).length > 0 || application
       || releases.list(dep.id).some(release => release.state === 'published');
     // A failed CI may never have published any resource or route. In that case
     // remove only its registration; do not wait on a route that was never created.
     if (hasRuntime) {
       await routing.sync(dep, { api, repo: target(), commitFiles }, true);
       if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
-      // Preserve the existing GCP cascade-before-source-removal ordering, using
-      // the scoped Kubernetes client already used for Azure (no Argo REST 415/403).
-      // Après la suppression du failover, l'Application est retirée seulement APRÈS le dossier (plus bas), comme pour Azure.
-      if (!afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
+      // L'Application n'est plus supprimée ici, avant le retrait du dossier : voir plus bas (GCP, comme Azure et le failover).
     }
   }
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
@@ -560,10 +558,15 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
     await kubernetes.cascadeDeleteArgocdApplication(name);
     await azure.confirmTeardown(dep);
   }
-  // Failover : les ressources sont déjà détruites. L'ApplicationSet (create-update) ne supprime jamais d'Application : c'est au
-  // portail de la retirer, une fois le dossier sorti de Git. Retirée avant, alors que le dossier existait encore, le contrôleur
-  // ne l'a plus recréée au redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
-  if (afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
+  // GCP : la cascade vient APRÈS le retrait du dossier et de son chemin dans l'ApplicationSet, comme pour Azure. Faite avant
+  // (ancien ordre), l'ApplicationSet (create-update, preserveResourcesOnDeletion) recréait l'Application 30 s plus tard, sans
+  // finalizer, puisque le dossier était encore dans Git : Cloud Run, Cloud SQL et répartiteur restaient (constaté le
+  // 08/11/2026 sur cnp-test-azure dev ; cascade relancée à la main après le retrait, tout a disparu). Le client Kubernetes
+  // restreint du portail, comme pour Azure (pas l'API REST d'Argo CD, qui refuse ce compte).
+  // Failover : les ressources sont déjà détruites ; l'Application est retirée pour la même raison (l'ApplicationSet ne
+  // supprime jamais d'Application). Retirée avant, alors que le dossier existait encore, le contrôleur ne l'a plus recréée au
+  // redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
+  if (!onAzure && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
   // Base Cloud SQL de dev : ses manifestes sont retirés avec le reste (vagues Argo : Cloud Run, puis base et utilisateur, puis
   // instance) ; ses deux secrets partent ensuite.
   await databaseSecrets(dep, 'app-sql-cleanup');

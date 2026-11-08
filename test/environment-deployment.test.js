@@ -185,7 +185,10 @@ test('deletion closes pending candidates and only removes the selected environme
   expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
   expect(argo.deleteApplication).not.toHaveBeenCalled();
   const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
-  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeLessThan(api.request.mock.invocationCallOrder[sourceDelete]);
+  // Après le retrait du dossier ET de son chemin dans l'ApplicationSet : sinon l'Application est recréée (08/11/2026).
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(kubernetes.removeApplicationSetPath.mock.invocationCallOrder[0]);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(1);
   expect((await service.reconcile(dep)).phase).toBe('configuring');
 });
 
@@ -361,12 +364,19 @@ test('setup preserves a real legacy root unchanged', async () => {
   expect(argo.getApplicationIfExists).not.toHaveBeenCalled();
 });
 
-test('a failed explicit cascade keeps the GitOps source available for cleanup retry', async () => {
+test('a failed cascade after the source removal is retried by the next deletion attempt', async () => {
+  // Depuis le 08/11/2026 la cascade suit le retrait du dossier : un échec laisse l'Application (et ses ressources) en place,
+  // et une nouvelle tentative de suppression la relance, sans rien republier.
   for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
   deployments.updateOnboardingStatus(dep.id, 'deleting');
-  kubernetes.cascadeDeleteArgocdApplication.mockRejectedValue(new Error('Kubernetes unavailable'));
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-prod' } });
+  kubernetes.cascadeDeleteArgocdApplication.mockRejectedValueOnce(new Error('Kubernetes unavailable'));
   await expect(service.remove(dep)).rejects.toThrow('Kubernetes unavailable');
-  expect(published).toHaveLength(0); expect(trees).toHaveLength(0);
+  expect(trees.at(-1).tree.some(file => file.sha === null)).toBe(true);                      // dossier déjà retiré de Git
+  await expect(service.remove(dep)).resolves.toBeUndefined();
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(2);
+  // Seulement des retraits (et le registre) : aucun manifeste de l'app n'est republié par la reprise.
+  expect(trees.flatMap(tree => tree.tree).filter(file => file.sha !== null && file.path.startsWith('apps/pixelcam/crossplane/'))).toHaveLength(0);
 });
 
 test('setup will not adopt a preexisting historical prod directory without a tracked release', async () => {
