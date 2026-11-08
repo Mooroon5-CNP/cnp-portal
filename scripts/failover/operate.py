@@ -410,6 +410,14 @@ def execute(request):
         wanted = ['cloudsql', 'rds'] + (['healthcheck', 'routing_latch', 'primary_healthcheck'] if request.get('expect_probes') else [])
         wanted += ['worker_alarm', 'worker_config'] if request.get('expect_worker') else []
         missing = [key for key in wanted if not ready(objects.get(key))]
+        # « Ready » chez Crossplane ne suffit pas pour les bases : le 08/11/2026, la ressource Cloud SQL était prête alors que
+        # l'instance restait en PENDING_CREATE chez Google, sans IP privée ; l'étape suivante a été refusée (« Address cannot
+        # be empty »). On exige l'instance RUNNABLE chez Google et les deux adresses renseignées.
+        provider = lambda key: (objects.get(key) or {}).get('status', {}).get('atProvider', {})
+        if 'cloudsql' not in missing and (instance.get('state') != 'RUNNABLE' or not provider('cloudsql').get('privateIpAddress')):
+            missing.append('cloudsql')
+        if 'rds' not in missing and not provider('rds').get('address'):
+            missing.append('rds')
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert'], 'verified': not missing,
                 'message': None if not missing else 'En attente : ' + ', '.join(missing) + ' pas encore prêt(s).'}
     if action in {'teardown-released', 'teardown-gone'}:

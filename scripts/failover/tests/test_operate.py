@@ -445,9 +445,13 @@ class ObserveTests(unittest.TestCase):
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
-        self.objects = {(plural, name.format(app=app)): value for (plural, name), value in objects.items()}
+        # Bases prêtes par défaut avec leurs adresses ; un test qui les retire le fait explicitement.
+        addresses = {'databaseinstances': {'privateIpAddress': '10.189.0.25'}, 'instances': {'address': 'db.eu-west-3.rds.amazonaws.com'}}
+        self.objects = {(plural, name.format(app=app)): ({**value, 'status': {'atProvider': addresses[plural], **value['status']}}
+                                                          if plural in addresses and 'status' in value else value)
+                        for (plural, name), value in objects.items()}
         session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
-                               {'serverCaCert': {'cert': 'CA'}}})
+                               {'serverCaCert': {'cert': 'CA'}, 'state': self.sql_state}})
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
         parent.mkdir(exist_ok=True, parents=True)
         with tempfile.TemporaryDirectory(dir=parent) as work:
@@ -461,6 +465,25 @@ class ObserveTests(unittest.TestCase):
         self.assertIs(result['verified'], False)
         self.assertIn('rds', result['message'])
         self.assertIs(self.observe({('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok})['verified'], True)
+
+    sql_state = 'RUNNABLE'
+
+    def test_a_ready_resource_is_not_enough_without_a_running_instance_and_its_addresses(self):
+        # 08/11/2026 : Cloud SQL « Ready » chez Crossplane, encore en PENDING_CREATE chez Google et sans IP privée.
+        ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
+        dbs = {('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok}
+        self.sql_state = 'PENDING_CREATE'
+        result = self.observe(dbs)
+        self.assertIs(result['verified'], False)
+        self.assertIn('cloudsql', result['message'])
+        self.sql_state = 'RUNNABLE'
+        no_ip = {'status': {'atProvider': {'privateIpAddress': ''}, **ok['status']}}
+        self.assertIs(self.observe({**dbs, ('databaseinstances', '{app}-prod-gcp-db'): no_ip})['verified'], False)
+        no_address = {'status': {'atProvider': {'address': ''}, **ok['status']}}
+        result = self.observe({**dbs, ('instances', '{app}-prod-db'): no_address})
+        self.assertIs(result['verified'], False)
+        self.assertIn('rds', result['message'])
+        self.assertIs(self.observe(dbs)['verified'], True)
 
     def test_after_dns_the_probes_must_be_ready_too(self):
         ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
