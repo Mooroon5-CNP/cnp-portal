@@ -67,7 +67,7 @@ function start(app, action, user) {
     void finish(id, request);
     return { id, state: 'running' };
   }
-  if (!document || (document.profile.mode === 'stateless' && !['health', 'runtime-verify', 'runtime-rollout'].includes(action))) throw new Error('Profil SQL requis.');
+  if (!document || document.profile.mode === 'stateless') throw new Error('Profil SQL requis.');
   if (list(app).some(row => ['running', 'applying'].includes(row.state))) throw new Error('Une opération est déjà en cours.');
   if (['bootstrap', 'bootstrap-roles'].includes(action) && !document.secrets.initialized) throw new Error('Initialisez d’abord les secrets.');
   if (['bootstrap-roles', 'schema-check'].includes(action) && !isIntrospected(document)) throw new Error('Étape réservée aux profils dont le schéma est lu dans la base.');
@@ -100,7 +100,7 @@ function start(app, action, user) {
     if (!runtime) throw new Error('Publication des runtimes requise avant vérification.');
     request.images = runtime.image_record ? JSON.parse(runtime.image_record) : null;
   }
-  if (action === 'health' && document.profile.mode !== 'stateless') {
+  if (action === 'health') {
     request.packages = service.operationalPackage(app, 'automation', user);
     request.task_definition = taskDefinition(document, 'worker');
   }
@@ -151,8 +151,9 @@ async function createProfile(app, mode, contract, user) {
     if (!contract || Object.keys(contract).join() !== 'database' || !/^[a-z][a-z0-9_]{0,62}$/.test(contract.database || '')) throw new Error('Nom de base invalide (minuscules, chiffres et _, 63 caractères au plus).');
   }
   const platform = service.platform();
-  const template = mode === 'stateless' ? 'stateless' : mode === 'postgres' ? 'postgres' : null;
-  if (!template) throw new Error('Choisir sans base ou PostgreSQL.');
+  // Seul PostgreSQL : le failover sans base a été retiré le 08/11/2026 (jamais proposé par le formulaire).
+  const template = mode === 'postgres' ? 'postgres' : null;
+  if (!template) throw new Error('PostgreSQL requis : le failover sans base n’existe plus.');
   // Une app PostgreSQL neuve passe toujours par le régime plateforme (aucun plan Terraform par app) : ses tâches ECS doivent exister.
   if (mode === 'postgres' && !['bootstrap_task_definition', 'worker_task_definition'].every(key => platform.automation[key]))
     throw new Error('Paramètres de plateforme incomplets : automation.bootstrap_task_definition et automation.worker_task_definition (pile plateforme).');

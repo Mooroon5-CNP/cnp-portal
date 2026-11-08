@@ -214,23 +214,12 @@ describe('mise à jour d’une app en service', () => {
     deployments.get.mockReturnValue({ id: 'dep', appName: 'weather-api', environment: 'prod' });
     profiles.runtimeRevision.mockReturnValue('a'.repeat(40));
   }
-  test('une app sans base republie ses runtimes, les vérifie puis revient en service', async () => {
+  test('un ancien profil sans base est refusé avec la raison, sans rien publier', () => {
+    // Failover sans base retiré le 08/11/2026 : un profil resté en base locale ne doit ni partir ni être traité en PostgreSQL.
     profiles.profileFor.mockReturnValue({ profile: { mode: 'stateless', gcp: {}, aws: {} } });
-    inService();
-    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
-    let row = await tick();
-    expect(row).toMatchObject({ phase: 'update', step: 0, state: 'running' });
-    row = await tick();                                                    // nouvelle publication runtime, pas l'ancienne
-    expect(profiles.prepare).toHaveBeenCalledWith('runtime', expect.objectContaining({ id: manager.id }), 'weather-api');
-    expect(row.step).toBe(1);
-    await tick(); expect(tasks.at(-1).action).toBe('runtime-rollout'); succeed();
-    await tick(); await tick(); expect(tasks.at(-1).action).toBe('runtime-verify'); succeed();
-    await tick(); await tick(); expect(tasks.at(-1).action).toBe('health'); succeed();
-    await tick();
-    row = await tick();
-    expect(row).toMatchObject({ state: 'completed', phase: null });
-    expect(row.message).toContain('Mise à jour déployée');
-    expect(workflow.progress('weather-api').phase).toBe('provision');
+    expect(() => workflow.start('weather-api', manager)).toThrow('sans base retiré');
+    expect(profiles.prepare).not.toHaveBeenCalled();
+    expect(operations.start).not.toHaveBeenCalled();
   });
   test('une app avec base met le worker en pause et reconstruit sa copie si la migration a changé le schéma', async () => {
     {

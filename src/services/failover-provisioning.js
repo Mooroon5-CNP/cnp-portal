@@ -10,7 +10,7 @@ const { isIntrospected } = require('./failover-profile');
 // Le parcours d'une app : sans base, ou PostgreSQL en régime plateforme. Les profils historiques (le pilote) ne se remettent plus en
 // service par ce parcours : ils n'avaient que des plans Terraform par app, retirés.
 function stepsFor(document) {
-  if (document.profile.mode === 'stateless') return STATELESS_STEPS;
+  if (document.profile.mode === 'stateless') throw new Error('Failover sans base retiré le 08/11/2026 : seul le profil PostgreSQL existe (choix « GCP Cloud SQL » en prod).');
   if (isIntrospected(document) && document.profile.automation?.regime === 'platform') return PLATFORM_STEPS;
   throw new Error('Profil historique : mise en service automatique retirée. Créer le profil de l’application en régime plateforme.');
 }
@@ -31,10 +31,8 @@ const PLATFORM_STEPS = [
   ['operation', 'observe'], ['operation', 'worker-configure'], ['operation', 'worker-verify'], ['operation', 'verify'],
   ['operation', 'worker-resume'], ['operation', 'health'],
 ];
-const STATELESS_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-verify'], ['candidate', 'dns'], ['operation', 'health']];
 // Mise à jour d'une app en service : une nouvelle CI de production réussie republie les runtimes GCP et AWS avec ses images
 // (même publication contrôlée que la mise en service), puis vérifie que les deux côtés servent la nouvelle version.
-const UPDATE_STEPS = [['candidate', 'runtime'], ['operation', 'runtime-rollout'], ['operation', 'runtime-verify'], ['operation', 'health']];
 // Avec une base : la migration de l'application a pu changer le schéma de GCP, que la réplication ne transporte pas. Le worker
 // est mis en pause (aucune bascule vers une copie en reconstruction), la copie AWS est reconstruite si les schémas diffèrent,
 // puis vérifiée avant la reprise du worker. Schéma inchangé (lecture seule « schema-diff ») : tout cela est sauté.
@@ -63,8 +61,7 @@ function schema() {
     db.exec('ALTER TABLE failover_provisioning ADD COLUMN phase TEXT');
   }
 }
-const stepsOf = (row, document) => row.phase === 'failback' ? FAILBACK_STEPS : row.phase !== 'update' ? stepsFor(document)
-  : document.profile.mode === 'stateless' ? UPDATE_STEPS : SQL_UPDATE_STEPS;
+const stepsOf = (row, document) => row.phase === 'failback' ? FAILBACK_STEPS : row.phase !== 'update' ? stepsFor(document) : SQL_UPDATE_STEPS;
 const PHASE_DONE = { update: 'Mise à jour déployée sur GCP et AWS ; secours vérifié.',
   failback: 'Application revenue sur GCP ; secours AWS reconstruit et surveillance rétablie.' };
 // Révision de production à déployer, ou null : seulement sur une app saine que GCP sert (une mise à jour pendant que le

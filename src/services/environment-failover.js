@@ -16,8 +16,8 @@ const sourceRoot = path.resolve(path.dirname(fs.realpathSync(__filename)), '../.
 
 // L'alarme et la configuration du worker sont publiées par GitOps, après les DNS (la sonde Route 53 doit exister).
 const PLATFORM_STAGES = ['databases', 'runtime', 'dns', 'worker'];
-function stagesFor(document) {
-  return document.profile.mode === 'stateless' ? ['runtime', 'dns'] : PLATFORM_STAGES;
+function stagesFor(_document) {
+  return PLATFORM_STAGES;                                  // seul profil : PostgreSQL (sans base retiré le 08/11/2026)
 }
 function profileFor(app) {
   schema();

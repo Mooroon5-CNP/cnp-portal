@@ -15,7 +15,7 @@ sont pas copiées dans l'image.
 | `platform_secrets.py` | secrets d'une app, créés par API depuis son Secret Kubernetes (utilisé par le portail) |
 | `postgres_contract.py` | profil PostgreSQL `{"database": "<nom>"}` (copie unique) |
 | `prepare_failover_phase1.py`, `render_*.py` | générateurs des manifestes GitOps (Crossplane) publiés dans le config-repo |
-| `templates/` | gabarits de profil (`postgres`, `stateless`) lus par le portail à la création d'un profil |
+| `templates/` | gabarit de profil (`postgres`, seul profil depuis le retrait du failover sans base le 08/11/2026) lu par le portail à la création d'un profil |
 
 Détails : `WORKER-PLATEFORME.md` (worker, retour vers GCP), `PROFIL-INTROSPECTE.md` (schéma lu dans la base).
 

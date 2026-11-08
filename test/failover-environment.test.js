@@ -213,36 +213,15 @@ test('un profil ou un secret appartenant à une autre application est refusé', 
   expect(() => service.configure(APP, document, manager)).toThrow('expurgé');
 });
 
-test('un site sans base génère les deux runtimes et un DNS sans base ni verrou SQL', async () => {
+test('un profil sans base n’est plus rendu : le failover exige PostgreSQL', async () => {
+  // Retiré le 08/11/2026 : jamais proposé par le formulaire, jamais recetté dans le régime plateforme.
   const app = 'iot-site';
   const document = { profile: { mode: 'stateless', automation: {},
-    gcp: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000,
-      gcp_lb_ip: '34.54.71.90', gcp_runtime: { image: `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/${app}@sha256:${'a'.repeat(64)}`,
-        service_account: 'cloud-run-sa@cnp-terraform-512313.iam.gserviceaccount.com', subnetwork: 'projects/cnp-terraform-512313/regions/europe-west9/subnetworks/gcp-hybrid-subnet' } },
-    aws: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000,
-      image: `804210702561.dkr.ecr.eu-west-3.amazonaws.com/${app}@sha256:${'a'.repeat(64)}`, listener_priority: 23999 } },
+    gcp: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000 },
+    aws: { app_name: app, application_profile: 'stateless', environment: 'prod', container_port: 3000 } },
     credentials: {}, secrets: { app }, observations: {} };
-  service.configure(app, document, manager);
-  const original = api.request.getMockImplementation();
-  api.request.mockImplementation(async (route, args) => {
-    if (route.endsWith('/contents/{path}') && args.path.startsWith(`apps/${app}/`)) {
-      const err = new Error('not found'); err.status = 404; throw err;
-    }
-    return original(route, args);
-  });
-  await expect(service.prepare('databases', manager, app)).rejects.toThrow('pas de base');
-  const candidate = await service.prepare('runtime', manager, app);
-  const dir = `apps/${app}/crossplane/prod`;
-  expect(candidate.files[`${dir}/cloudrun-claim.yaml`]).toBeDefined();
-  expect(candidate.files[`${dir}/ecs-task-definition.yaml`]).toBeDefined();
-  expect(JSON.stringify(candidate.files)).not.toMatch(/DB_PASSWORD|cloudsql|rds-instance/);
-  const task = yaml.load(candidate.files[`${dir}/ecs-task-definition.yaml`]);
-  expect(JSON.parse(task.spec.forProvider.containerDefinitions)[0].portMappings[0].containerPort).toBe(3000);
-  await service.approve(candidate.id, head, manager);
-  const dns = await service.prepare('dns', manager, app);
-  expect(dns.files[`${dir}/healthcheck.yaml`]).toBeDefined();
-  expect(dns.files[`${dir}/healthcheck-latch-http.yaml`]).toBeUndefined();
-  expect(yaml.load(dns.files[`${dir}/record-primary.yaml`]).spec.forProvider.healthCheckIdSelector.matchLabels['cnp-failover']).toBe('health');
+  expect(() => service.configure(app, document, manager)).toThrow();
+  expect(service.profileFor(app)).toBeNull();
 });
 
 test('la disponibilité refuse les preuves d’un ancien profil et les dates futures', () => {

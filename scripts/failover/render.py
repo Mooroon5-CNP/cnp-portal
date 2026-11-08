@@ -8,10 +8,7 @@ import sys
 # Générateurs : dans engine/, à côté de ce script (déplacés du config-repo le 08/11/2026, une seule copie).
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'engine'))
 from prepare_failover_phase1 import build, resolve_credentials, automation_profile, runtime_profiles, credentials_profile, validate
-import render_stateless_phase1 as stateless
-import render_failover_phase1 as gcp
 import render_aws_prod_example as aws
-from prepare_failover_phase1 import merge_kustomization
 
 WORKER_KINDS = {'MetricAlarm', 'TableItem'}
 
@@ -20,44 +17,24 @@ def render(request):
     stage = request['stage']
     if stage not in {'protection', 'databases', 'runtime', 'dns', 'worker', 'bootstrap', 'automation', 'secrets', 'validate'}:
         raise ValueError('Étape inconnue')
-    no_database = request['profile'].get('mode') == 'stateless'
+    # Plus de profil sans base (retiré le 08/11/2026) : refusé explicitement plutôt que rendu à moitié.
+    if request['profile'].get('mode') == 'stateless':
+        raise ValueError('Failover sans base retiré le 08/11/2026 : seul le profil PostgreSQL existe (choix « GCP Cloud SQL » en prod).')
     if stage == 'validate':
-        if no_database: stateless.validate(request['profile'])
-        else:
-            validate(request['profile'])
-            if request['secrets'].get('initialized'):
-                resolve_credentials(request['profile'], request['credentials'], request['secrets'])
+        validate(request['profile'])
+        if request['secrets'].get('initialized'):
+            resolve_credentials(request['profile'], request['credentials'], request['secrets'])
         return {}
-    if stage == 'worker' and no_database:
-        raise ValueError('Aucune configuration de worker pour une application sans état')
-    if no_database:
-        stateless.validate(request['profile'])
-        profile = request['profile']
-    else:
-        profile = resolve_credentials(request['profile'], request['credentials'], request['secrets'])
+    profile = resolve_credentials(request['profile'], request['credentials'], request['secrets'])
     if stage in {'bootstrap', 'automation', 'secrets', 'validate'}:
-        if no_database:
-            raise ValueError('Aucune initialisation SQL pour une application sans état')
         if stage == 'secrets':
             return {'initialize-secrets-config.json': credentials_profile(profile, request['credentials'])}
         if stage == 'bootstrap':
             return {'bootstrap-config.json': runtime_profiles(profile, request.get('observations', {}), request['credentials'], request['secrets'])}
         return automation_profile(profile, request.get('observations', {}), request['credentials'], request['secrets'])
     baseline = request['baseline']
-    if no_database:
-        if stage == 'databases':
-            raise ValueError('Aucune base pour une application sans état')
-        result = {} if stage == 'protection' else stateless.runtime(profile) if stage == 'runtime' else gcp.dns(profile['gcp'])
-        if stage == 'runtime':
-            result['application-network.yaml'] = {'apiVersion': 'v1', 'kind': 'List', 'items': list(gcp.network(profile['gcp']).values())}
-        if stage != 'protection':
-            result['kustomization.yaml'] = merge_kustomization(baseline['kustomization'], result)
-        result = {f"apps/{profile['gcp']['app_name']}/crossplane/prod/{name}": value for name, value in result.items()}
-        if stage == 'runtime':
-            result['platform/application-routing/urlmap.yaml'] = gcp.routing(profile['gcp'], baseline['urlmap'])
-    else:
-        result = {} if stage == 'protection' else build(profile, stage, baseline['kustomization'], request.get('observations', {}), baseline.get('urlmap'),
-                                  request.get('credentials'), request.get('secrets'))
+    result = {} if stage == 'protection' else build(profile, stage, baseline['kustomization'], request.get('observations', {}), baseline.get('urlmap'),
+                              request.get('credentials'), request.get('secrets'))
     ecs_path = f"apps/{profile['gcp']['app_name']}/crossplane/prod/ecs-task-definition.yaml"
     if stage == 'runtime' and ecs_path in baseline['files']:
         before = json.loads(baseline['files'][ecs_path])

@@ -132,9 +132,10 @@ describe('régime plateforme du worker', () => {
     await operations.createProfile('weather-api', 'postgres', contract, manager);
     expect(() => operations.start('weather-api', 'credentials-plan', manager)).toThrow('inconnue');
   });
-  test('une application sans état n’a jamais d’étape worker', () => {
-    expect(service.stagesFor({ profile: { mode: 'stateless' } })).toEqual(['runtime', 'dns']);
-    expect(service.stagesFor({ profile: { mode: 'stateless', automation: { regime: 'platform' } } })).toEqual(['runtime', 'dns']);
+  test('le failover sans base n’existe plus : création refusée, un seul parcours de publication', async () => {
+    await expect(operations.createProfile('weather-api', 'stateless', null, manager)).rejects.toThrow('PostgreSQL requis');
+    expect(service.profileFor('weather-api')).toBeNull();
+    expect(service.stagesFor({ profile: { mode: 'stateless' } })).toEqual(['databases', 'runtime', 'dns', 'worker']);
   });
 });
 test('sans choix, la facturation reste à l’usage', async () => {

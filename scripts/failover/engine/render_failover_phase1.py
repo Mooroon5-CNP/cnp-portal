@@ -21,8 +21,9 @@ def validate(config):
     allowed = {"app_name", "environment", "database_name", "credentials_secret_name", "gcp_lb_ip", "gcp_runtime", "application_profile", "sql_contract", "container_port", "liveness_path", "readiness_path", "database_instance", "billing_mode"}
     if set(config) - allowed:
         raise ValueError("Champs inconnus : aucun mot de passe/image/endpoint SQL dans ce profil.")
-    if config.get("application_profile") not in {"postgres", "stateless"}:
-        raise ValueError("Profil applicatif inconnu.")
+    # Seul le profil PostgreSQL existe : le profil sans base a été retiré le 08/11/2026.
+    if config.get("application_profile") != "postgres":
+        raise ValueError("Profil applicatif inconnu (PostgreSQL requis).")
     if config.get('application_profile') == 'postgres':
         contract = postgres_contract.validate(config.get('sql_contract'))
         if contract['database'] != config.get('database_name'):
@@ -52,8 +53,6 @@ def instance_name(config):
 
 def cloudsql(config):
     app = validate(config)
-    if config.get('application_profile') == 'stateless':
-        raise ValueError('Aucune base pour une application sans état.')
     secret = config.get("credentials_secret_name") or ""
     if not re.fullmatch(r"[a-z][a-z0-9-]{1,100}", secret):
         raise ValueError("Fournir le nom du secret Kubernetes privé préprovisionné, jamais sa valeur.")
@@ -246,9 +245,6 @@ def dns(config):
         **common, "setIdentifier": app + "-aws-secondary", "failoverRoutingPolicy": {"type": "SECONDARY"},
         "alias": {"name": "cnp-alb-1733646164.eu-west-3.elb.amazonaws.com", "zoneId": "Z3Q77PNBQS71R4",
             "evaluateTargetHealth": False}}, app, 2)
-    if config.get('application_profile') == 'stateless':
-        primary['spec']['forProvider']['healthCheckIdSelector'] = {'matchLabels': labels}
-        return {'healthcheck.yaml': check, 'record-primary.yaml': primary, 'record-secondary.yaml': secondary}
     # Le secondaire reste éligible même avant LOGIN : il répondra 503 jusque-là.
     # La santé globale d'un ALB partagé ne représente pas cette application et
     # deux réponses "unhealthy" pourraient faire choisir de nouveau le primaire.
