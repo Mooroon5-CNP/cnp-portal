@@ -21,3 +21,5 @@ coverage
 # Tests du moteur failover et leurs fixtures : jamais dans l'image.
 scripts/failover/tests
 scripts/failover/engine/tests
+# Démonstrations (gcloud, kubectl) : lancées depuis un poste, jamais depuis l'image.
+scripts/failover/demo

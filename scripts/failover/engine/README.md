@@ -3,8 +3,9 @@
 Tout le Python du failover, en **un seul endroit** depuis le 08/11/2026 : il était réparti entre
 `cnp/deployment/failover-phase1` (moteur) et `config-repo/scripts` (générateurs, gabarits), et le portail les trouvait
 « à côté » de lui sur le disque. Ce dossier est copié dans l'image du portail et sert aussi à construire les images ECS.
-L'infrastructure (Terraform `platform/`, `foundation/`, `crossplane-access/`) et les scripts de démonstration restent dans
-`cnp/deployment/failover-phase1`.
+L'infrastructure (Terraform `platform/`, `foundation/`, `crossplane-access/`) reste dans `cnp/deployment/failover-phase1`.
+Les démonstrations de panne et de retour (soutenance) sont dans `../demo` : elles utilisent `gcloud` et `kubectl` et ne
+sont pas copiées dans l'image.
 
 | Fichier | Rôle |
 |---|---|
