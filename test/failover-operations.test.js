@@ -1,5 +1,5 @@
 'use strict';
-jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), settings: jest.fn(), operationalPackage: jest.fn() }));
+jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), operationalPackage: jest.fn() }));
 const db = require('../src/models/db');
 const profiles = require('../src/services/environment-failover');
 const operations = require('../src/services/failover-operations');
@@ -7,15 +7,10 @@ const user = { id: 'manager', role: 'manager' };
 beforeEach(() => {
   db.exec('DROP TABLE IF EXISTS failover_operations');
   profiles.profileFor.mockReturnValue({ profile: { gcp: { app_name: 'pilot' }, aws: { app_name: 'pilot' } }, secrets: { initialized: true } });
-  profiles.settings.mockReturnValue({ app: 'pilot' });
 });
 test('un développeur ne peut ni exécuter ni reprendre une opération', () => {
   expect(() => operations.start('pilot', 'observe', { id: 'dev', role: 'dev' })).toThrow('manager');
   expect(() => operations.retry('missing', { id: 'dev', role: 'dev' })).toThrow('manager');
-});
-test('le pilote déjà initialisé ne peut pas être réinitialisé', () => {
-  expect(() => operations.start('pilot', 'bootstrap', user)).toThrow('déjà initialisé');
-  expect(() => operations.start('pilot', 'worker-configure', user)).toThrow('déjà initialisé');
 });
 test('le portail ne lance plus aucun plan Terraform ni apply', () => {
   expect(operations.apply).toBeUndefined();

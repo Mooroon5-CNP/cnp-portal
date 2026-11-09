@@ -182,28 +182,31 @@
                     <% } %>
 
                     <div class="form-group">
-                      <label for="targetCluster">Cloud cible</label>
-                      <select name="targetCluster" id="targetCluster" onchange="onCloudChange(this.value)">
-                        <option value="gcp" selected>GCP — Google Cloud Platform (Cloud Run)</option>
-                        <option value="aws">AWS — Amazon Web Services</option>
-                        <option value="azure">Azure — Souveraineté UE (Container Apps + PostgreSQL)</option>
+                      <label for="stack">Hébergement et données</label>
+                      <select name="stack" id="stack" onchange="onStackChange()" required>
+                        <option value="gcp-postgres" selected>GCP Cloud SQL (PostgreSQL)</option>
+                        <option value="gcp-sqlite">GCP GCS (SQLite)</option>
+                        <option value="azure-postgres">Azure souveraineté (PostgreSQL)</option>
                       </select>
-                      <div class="form-hint">Plateforme de déploiement de l'application.</div>
-                      <div id="cloudWarning" role="alert" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--text-primary);">
-                        <strong style="color:#ca8a04;">⚠ Cloud pas encore disponible</strong><br>
-                        Le déploiement sur <strong id="cloudWarningName"></strong> n'est pas encore pris en charge. Nos collaborateurs travailleront dessus plus tard. Seuls GCP et Azure sont utilisables pour le moment.
-                      </div>
+                      <div class="form-hint" id="stackHint"></div>
                     </div>
 
-                    <div class="form-group">
-                      <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:500;">
-                        <input type="checkbox" name="persistentStorage" id="persistentStorage" style="width:18px;height:18px;accent-color:#6366f1;">
-                        DB persistante (SQLite sur GCS)
+                    <div class="form-group" id="billingGroup">
+                      <label for="billing" style="display:flex;align-items:center;gap:.4rem;">Mode de facturation
+                        <span class="info-tip" tabindex="0" aria-label="Quand choisir quel mode ?">i
+                          <span class="info-tip-text" role="tooltip">
+                            <strong>À l’usage</strong> : l’application s’éteint quand personne ne l’appelle. Coût quasi nul au repos ; le premier appel après un temps calme prend quelques secondes. Pour le développement et les applications peu utilisées.<br><br>
+                            <strong>À l’instance</strong> : une instance reste toujours active, sans démarrage à froid. Pour une démonstration, une soutenance ou une application avec secours (la sonde ne prend pas un démarrage lent pour une panne). Facturé en continu : environ 40 à 50 € par mois et par application.
+                          </span>
+                        </span>
                       </label>
-                      <div class="form-hint">Monte un bucket GCS sur <code>/data</code> — les données survivent aux redémarrages. Le bucket est créé automatiquement par la plateforme.</div>
+                      <select name="billing" id="billing">
+                        <option value="usage" selected>À l’usage</option>
+                        <option value="instance">À l’instance</option>
+                      </select>
+                      <div class="form-hint">Réglé au déploiement ; pour en changer, redéployer l’application.</div>
                     </div>
 
-                      <div class="form-group"><label><input type="checkbox" name="failoverRequested"> Activer le failover GCP → AWS</label><div class="form-hint">Production uniquement. L’image est publiée sur les deux clouds. Un manager prépare et valide le runtime secondaire et, si nécessaire, la réplication PostgreSQL. Le statut reste en préparation jusqu’aux vérifications.</div></div>
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
@@ -311,22 +314,23 @@
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);
 
-                // Cloud selector: GCP and Azure are supported, AWS shows a warning.
-                const CLOUD_LABELS = { aws: 'AWS', azure: 'Azure' };
-                function onCloudChange(value) {
-                  const unsupported = value !== 'gcp' && value !== 'azure';
-                  // Azure stocke ses données dans PostgreSQL : l'option SQLite sur GCS ne s'applique pas.
-                  const storage = document.getElementById('persistentStorage');
-                  storage.disabled = value === 'azure';
-                  if (value === 'azure') storage.checked = false;
-                  storage.closest('.form-group').style.opacity = value === 'azure' ? '.5' : '';
-                  document.getElementById('cloudWarning').style.display = unsupported ? 'block' : 'none';
-                  document.getElementById('cloudWarningName').textContent = CLOUD_LABELS[value] || value;
-                  const btn = document.getElementById('deploySubmitBtn');
-                  btn.disabled = unsupported;
-                  btn.style.opacity = unsupported ? '.5' : '';
-                  btn.style.cursor = unsupported ? 'not-allowed' : '';
+                // Choix unique « hébergement et données » : l'aide explique ce que la plateforme crée, et le secours vers AWS
+                // en prod pour GCP Cloud SQL. La facturation ne concerne que Cloud Run (GCP).
+                const STACK_HINTS = {
+                  'gcp-postgres': { dev: 'Cloud Run et une base PostgreSQL 15 dédiée (Cloud SQL), donnée à l’application par DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Supprimée avec l’application.',
+                    prod: 'Cloud Run et PostgreSQL (Cloud SQL), avec secours automatique vers AWS : la base est répliquée en continu et l’application bascule seule si GCP tombe.' },
+                  'gcp-sqlite': { dev: 'Cloud Run avec un bucket GCS monté sur /data pour une base SQLite (les données survivent aux redémarrages).' },
+                  'azure-postgres': { dev: 'Container Apps et un serveur PostgreSQL dédié, hébergés dans l’Union européenne.' },
+                };
+                function onStackChange() {
+                  const stack = document.getElementById('stack').value;
+                  const environment = document.getElementById('environment').value;
+                  const hints = STACK_HINTS[stack] || {};
+                  document.getElementById('stackHint').textContent = hints[environment] || hints.dev || '';
+                  document.getElementById('billingGroup').style.display = stack.startsWith('gcp-') ? '' : 'none';
                 }
+                document.getElementById('environment').addEventListener('change', onStackChange);
+                onStackChange();
 
                 // Auto-suggest app name from repo URL
                 function suggestAppName(url) {

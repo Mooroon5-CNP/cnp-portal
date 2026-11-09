@@ -10,18 +10,17 @@ import time
 from uuid import uuid4
 
 def engine_root(environ=os.environ, here=Path(__file__).resolve()):
-    """Racine du moteur phase 1 (bootstrap.py, automation.py, platform_secrets.py…).
+    """Racine du moteur failover : le moteur, les générateurs et leurs gabarits (bootstrap.py, automation.py,
+    platform_secrets.py, render_*.py, templates/…).
 
-    CNP_FAILOVER_ENGINE_ROOT l'impose (portail déployé, disposition inhabituelle) et n'a alors aucun repli : une
-    valeur fausse doit échouer, pas être remplacée en silence par un autre moteur. Sans elle, on reconnaît les deux
-    dispositions du dépôt : dépôts côte à côte (projet/cnp et projet/cnp-portal) ou portail imbriqué dans cnp
-    (cnp/cnp-portal).
+    Depuis le 08/11/2026, tout le Python du failover vit dans ce dépôt, dans engine/ à côté de ce script : une seule
+    copie, la même sur un poste et dans l'image du portail. Il était auparavant réparti entre cnp/deployment/failover-phase1
+    et config-repo/scripts, trouvés « à côté » du portail sur le disque, ce qui n'existait pas dans l'image.
+    CNP_FAILOVER_ENGINE_ROOT l'impose encore (essai d'un autre moteur) et n'a alors aucun repli : une valeur fausse
+    doit échouer, pas être remplacée en silence par un autre moteur.
     """
     configured = environ.get('CNP_FAILOVER_ENGINE_ROOT')
-    candidates = [Path(configured)] if configured else [
-        here.parents[3] / 'cnp' / 'deployment' / 'failover-phase1',
-        here.parents[3] / 'deployment' / 'failover-phase1',
-    ]
+    candidates = [Path(configured)] if configured else [here.parent / 'engine']
     for candidate in candidates:
         if (candidate / 'bootstrap.py').is_file():
             return candidate.resolve()
@@ -47,7 +46,10 @@ class UserAction(ValueError):
 # Lectures sans effet : jamais de reprise d'une ancienne tâche (son résultat serait périmé), un nouveau jeton à chaque fois.
 READ_ONLY_OPERATIONS = {'inspect-source'}
 # Actions exécutées par la tâche d'initialisation SQL (image bootstrap) ; les autres passent par celle du worker.
-BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify'}
+BOOTSTRAP_ACTIONS = {'bootstrap', 'bootstrap-roles', 'schema-check', 'verify', 'resync', 'schema-diff', 'failback-sync', 'failback-reset'}
+# Opérations du worker lancées par le portail (tâche du worker, une opération par action).
+WORKER_ACTIONS = {'worker-configure': 'configure', 'worker-verify': 'status', 'worker-resume': 'resume', 'worker-pause': 'pause',
+                  'worker-failback-route': 'failback-route', 'worker-rearm': 'rearm'}
 
 
 def bootstrap_operations(action, introspected):
@@ -59,7 +61,10 @@ def bootstrap_operations(action, introspected):
     if action == 'bootstrap':
         return (['prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'] if introspected
                 else ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
-    return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication']}[action]
+    return {'bootstrap-roles': ['create-target-runtime'], 'schema-check': ['inspect-source'], 'verify': ['verify-replication'],
+            'resync': ['resync-schema'], 'schema-diff': ['monitor'], 'failback-sync': ['failback-sync'],
+            # Retour vers GCP : la copie AWS est vidée puis reconstruite depuis GCP par l'initialisation habituelle.
+            'failback-reset': ['failback-reset', *bootstrap_operations('bootstrap', True)]}[action]
 
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
@@ -73,10 +78,10 @@ OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-
             ('primary_healthcheck', 'route53.aws.upbound.io', 'healthchecks', '{app}-failover-primary-health'),
             ('worker_alarm', 'cloudwatch.aws.upbound.io', 'metricalarms', 'cnp-failover-platform-{app}'),
             ('worker_config', 'dynamodb.aws.upbound.io', 'tableitems', '{app}-failover-config')]
-# Noms des déclencheurs et de la table d'état, par régime (le pilote garde les siens).
-NAMES = {'pilot': {'state_table': 'cnp-failover-automation', 'rules': ['cnp-failover-automation-alarm', 'cnp-failover-automation-retry']},
+# Noms des déclencheurs et de la table d'état de la pile plateforme (le pilote et son worker historique ont été retirés le 07/11/2026).
+NAMES = {
          'platform': {'state_table': 'cnp-failover-platform-state', 'rules': ['cnp-failover-platform-alarm', 'cnp-failover-platform-retry']}}
-TASK_FAMILY = r'cnp-failover-(bootstrap|automation)(-v-[a-f0-9]{10})?|cnp-failover-platform-(bootstrap|worker)'
+TASK_FAMILY = r'cnp-failover-platform-(bootstrap|worker)'
 
 
 def google_session(session=None):
@@ -177,11 +182,82 @@ def observe_objects(app, apis, custom, worker=False):
     return objects
 
 
+def gcp_availability(app, document, request, control):
+    """Voyant « GCP disponible » d'une app servie par AWS : lectures seules, chacune par son API.
+
+    GCP est disponible pour un retour quand sa base tourne de nouveau (Cloud SQL démarrée, ressource Crossplane reprise et
+    prête), que son runtime Cloud Run est prêt, et que le worker l'a jointe à travers le tunnel et clôturée (GCP_FENCED) :
+    c'est la seule preuve que la base privée répond depuis AWS. Une lecture refusée rend le voyant éteint, jamais allumé.
+    """
+    checks = {'cloud_sql': False, 'crossplane': False, 'cloud_run': False, 'fenced': control.get('source_fence') == 'GCP_FENCED'}
+    try:
+        name = document['profile']['gcp'].get('database_instance') or f'{app}-prod-gcp-db'
+        instance = google_get(f'https://sqladmin.googleapis.com/v1/projects/{PROJECT}/instances/{name}', request.get('_google'))
+        checks['cloud_sql'] = instance.get('state') == 'RUNNABLE' and (instance.get('settings') or {}).get('activationPolicy') == 'ALWAYS'
+    except Exception:
+        pass
+    try:
+        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
+        checks['cloud_run'] = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and not cloudrun.get('reconciling', False)
+    except Exception:
+        pass
+    try:
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        resource = observe_objects(app, apis, custom)['cloudsql']
+        checks['crossplane'] = not (resource['metadata'].get('annotations') or {}).get('crossplane.io/paused') and ready(resource)
+    except Exception:
+        pass
+    missing = [key for key, value in checks.items() if not value]
+    labels = {'cloud_sql': 'base Cloud SQL arrêtée', 'crossplane': 'ressource Crossplane de la base en pause ou non prête',
+              'cloud_run': 'Cloud Run non prêt', 'fenced': 'base GCP pas encore jointe et clôturée par le worker'}
+    return {**checks, 'available': not missing,
+            'message': 'GCP disponible : le retour peut être lancé.' if not missing else 'GCP indisponible : ' + ', '.join(labels[key] for key in missing) + '.'}
+
+
+def worker_control(app, document):
+    import boto3
+    item = boto3.client('dynamodb', region_name='eu-west-3').get_item(TableName=NAMES['platform']['state_table'],
+        Key={'app': {'S': app}, 'record': {'S': 'CONTROL'}}, ConsistentRead=True).get('Item', {})
+    return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
+
+
+def remove_aws_leftovers(app, client):
+    """Ce que la suppression des ressources Crossplane laisse chez AWS (constaté le 07/11/2026) : les révisions de la définition de
+    tâche ECS de l'app (`<app>-prod`, enregistrées par Crossplane, jamais supprimées par lui) et le dépôt ECR de ses images,
+    créé par la CI sous le nom exact de l'app. Rien d'autre n'est touché ; un dépôt absent n'est pas une erreur."""
+    ecs, ecr = client('ecs'), client('ecr')
+    family = lambda arn: arn.rsplit('/', 1)[1].rsplit(':', 1)[0]
+    revisions = {}
+    for status in ('ACTIVE', 'INACTIVE'):
+        for page in ecs.get_paginator('list_task_definitions').paginate(familyPrefix=f'{app}-prod', status=status):
+            revisions.update({arn: status for arn in page['taskDefinitionArns'] if family(arn) == f'{app}-prod'})
+    for arn, status in revisions.items():
+        if status == 'ACTIVE':
+            ecs.deregister_task_definition(taskDefinition=arn)          # une révision doit être inactive pour être supprimée
+    arns = sorted(revisions)
+    for start in range(0, len(arns), 10):                               # au plus 10 révisions par appel
+        ecs.delete_task_definitions(taskDefinitions=arns[start:start + 10])
+    try:
+        ecr.delete_repository(repositoryName=app, force=True)
+        repository = True
+    except ecr.exceptions.RepositoryNotFoundException:
+        repository = False
+    return {'task_definitions_removed': len(arns), 'image_repository_removed': repository}
+
+
 def execute(request):
     action, app = request['action'], request['app']
     import re
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,38}[a-z0-9]', app):
         raise ValueError('Application invalide')
+    if action in {'app-sql-secrets', 'app-sql-cleanup'}:
+        # Base Cloud SQL d'un déploiement sans failover (dev) : mot de passe de l'app, créé avant publication, retiré à la suppression.
+        import platform_secrets
+        kube, gsm = request.get('_clients') or (platform_secrets.Kubernetes.from_environment(request.get('kube_context')),
+                                                platform_secrets.SecretManager.from_environment())
+        if action == 'app-sql-secrets':
+            return platform_secrets.app_sql_initialize(app, request['environment'], request['service_account'], kube, gsm)
+        return platform_secrets.app_sql_remove(app, request['environment'], kube, gsm)
     document = request['document']
     if document['profile']['gcp']['app_name'] != app or document['profile']['aws']['app_name'] != app:
         raise ValueError('Identité du profil différente')
@@ -190,6 +266,33 @@ def execute(request):
     if expected.resolve() not in work.parents:
         raise ValueError('Dossier opérateur hors périmètre')
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if action == 'runtime-rollout':
+        # Mise à jour : la définition de tâche publiée enregistre une nouvelle révision chez AWS, mais le service ECS garde la
+        # référence déjà résolue. On y écrit l'ARN complet de la nouvelle révision : le fournisseur conserve ce format, donc
+        # une seule mise à jour (un seul déploiement), puis plus de différence. Avec la famille seule, il relit
+        # « famille:N » et redéploie sans fin (constaté le 07/11/2026).
+        images = request.get('images')
+        if not images:
+            raise ValueError('Images de la publication requises')
+        apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
+        items = app_resources(app, apis, custom)
+        ecs = lambda item, kind: item['kind'] == kind and item.get('apiVersion', '').startswith('ecs.aws.upbound.io/')
+        services = [entry for entry in items if ecs(entry[3], 'Service')]
+        if len(services) != 1:
+            raise ValueError('Service ECS de l\'application introuvable ou ambigu')
+        group, version, plural, service = services[0]
+        wanted = service['spec']['forProvider'].get('taskDefinitionRef', {}).get('name')
+        tasks = [entry[3] for entry in items if ecs(entry[3], 'TaskDefinition') and entry[3]['metadata']['name'] == wanted]
+        task = tasks[0] if tasks else None
+        observed = (task or {}).get('status', {}).get('atProvider', {})
+        registered = bool(task) and ready(task) and images['aws'] in (observed.get('containerDefinitions') or '')
+        arn = observed.get('arn') or ''
+        if not registered or not re.fullmatch(r'arn:aws:ecs:eu-west-3:804210702561:task-definition/[A-Za-z0-9_-]+:\d+', arn):
+            return {'verified': False, 'message': 'En attente de la nouvelle définition de tâche chez AWS.'}
+        if service['spec']['forProvider'].get('taskDefinition') != arn:
+            custom.patch_cluster_custom_object(group, version, plural, service['metadata']['name'],
+                                               {'spec': {'forProvider': {'taskDefinition': arn}}})
+        return {'verified': True, 'task_definition': arn}
     if action == 'runtime-verify':
         import boto3
         cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
@@ -229,7 +332,6 @@ def execute(request):
         except Exception: public_ready = False
         services = client('ecs').describe_services(cluster=document['profile'].get('automation', {}).get('ecs_cluster_arn', 'cnp-cluster'), services=[app + '-prod'])['services']
         aws_ready = len(services) == 1 and services[0]['runningCount'] >= 1 and services[0]['pendingCount'] == 0
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from render_failover_phase1 import ZONE
         records = client('route53').list_resource_record_sets(HostedZoneId=ZONE, StartRecordName=app + '.apps.mooroon5.fr', StartRecordType='A', MaxItems='10')['ResourceRecordSets']
         own = [record for record in records if record['Name'].rstrip('.') == app + '.apps.mooroon5.fr' and record['Type'] == 'A']
@@ -237,11 +339,7 @@ def execute(request):
         secondary = next((record for record in own if record.get('Failover') == 'SECONDARY'), {})
         alias = secondary.get('AliasTarget', {}).get('DNSName', '').rstrip('.').removeprefix('dualstack.')
         dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == 'cnp-alb-1733646164.eu-west-3.elb.amazonaws.com'
-        if document['profile'].get('mode') == 'stateless':
-            return {'verified': public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready, 'dns_ready': dns_ready, 'observed_at': int(time.time()), 'state': 'STATELESS'}
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-        from prepare_failover_phase1 import regime
-        names = NAMES[regime(document['profile'])]
+        names = NAMES['platform']
         def decode(item):
             return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
         records = {}
@@ -253,7 +351,7 @@ def execute(request):
         expected = next(value for value in request['packages']['worker-config.json']['applications'] if value['app'] == app)
         configured = control.get('config_hash') == automation.config_hash(expected) and control.get('config_hash') == replication.get('config_hash')
         triggers_ready = bool(request.get('task_definition'))
-        # Le portail connaît la tâche par son nom (régime plateforme) ou par un ARN de révision (pilote) : comparer des ARN de
+        # Le portail connaît la tâche par son nom : comparer des ARN de
         # révision, celui que les règles lancent réellement.
         try:
             expected_task = client('ecs').describe_task_definition(taskDefinition=request['task_definition'])['taskDefinition']['taskDefinitionArn'] if triggers_ready else None
@@ -266,14 +364,26 @@ def execute(request):
                 targets = events.list_targets_by_rule(Rule=rule)['Targets']
                 triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == expected_task for value in targets)
             except Exception: triggers_ready = False
+        gcp = gcp_availability(app, document, request, control) if control.get('state') == 'AWS_ACTIVE' else None
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
         return {'verified': healthy and configured and triggers_ready and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
             'configured': configured, 'triggers_ready': triggers_ready,
             'dns_ready': dns_ready, 'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
-            'observed_at': int(time.time()), 'zero_loss_proven': False}
+            'observed_at': int(time.time()), 'zero_loss_proven': False, **({'gcp': gcp} if gcp else {})}
+    if action == 'failback-check':
+        # Lecture seule, avant de lancer le retour : AWS actif (le worker a basculé), GCP revenu et clôturé.
+        from prepare_failover_phase1 import regime
+        if regime(document['profile']) != 'platform':
+            raise UserAction('Retour vers GCP réservé aux applications du régime plateforme.')
+        control = request['_control'] if '_control' in request else worker_control(app, document)
+        if control.get('state') != 'AWS_ACTIVE':
+            raise UserAction('Retour impossible : l\'application n\'est pas servie par AWS (état du worker : ' + str(control.get('state')) + ').')
+        gcp = gcp_availability(app, document, request, control)
+        if not gcp['available']:
+            raise UserAction(gcp['message'])
+        return {'verified': True, 'gcp': gcp, 'observed_at': int(time.time())}
     if action == 'allocate-listener':
         import boto3
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from render_aws_prod_example import PLATFORM
         client = boto3.client('elbv2', region_name='eu-west-3')
         used = set(request.get('used_priorities', []))
@@ -281,21 +391,12 @@ def execute(request):
             used.update(int(rule['Priority']) for rule in page['Rules'] if rule['Priority'].isdigit())
         return {'priority': next(value for value in range(20000, 50001) if value not in used)}
     if action == 'initialize-secrets':
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
-        from prepare_failover_phase1 import credentials_profile, platform_secrets_profile, regime
-        if regime(document['profile']) == 'platform':
-            # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
-            import platform_secrets
-            return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
-        import initialize_secrets
-        import boto3
-        client = boto3.client('sts', region_name='eu-west-3')
-        if client.get_caller_identity()['Account'] != '804210702561': raise ValueError('Compte AWS inattendu')
-        config = credentials_profile(document['profile'], document['credentials'])
-        return {'secrets': initialize_secrets.initialize(config, boto3.client('secretsmanager', region_name='eu-west-3'))}
+        from prepare_failover_phase1 import platform_secrets_profile
+        # Conteneurs et valeurs naissent ensemble par l'API, depuis le Secret Kubernetes d'origine : ni Terraform ni CLI.
+        import platform_secrets
+        return platform_secrets.execute(platform_secrets_profile(document['profile']), document['profile']['automation'].get('kube_context'))
     if action == 'observe':
         # Le validateur partagé vérifie les références de secrets (et le contexte GKE quand il est fourni).
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import credentials_profile
         credentials_profile(document['profile'], document['credentials'])
         apis, custom = request.get('_kubernetes') or kubernetes_clients(document['profile']['automation'].get('kube_context'))
@@ -307,6 +408,14 @@ def execute(request):
         wanted = ['cloudsql', 'rds'] + (['healthcheck', 'routing_latch', 'primary_healthcheck'] if request.get('expect_probes') else [])
         wanted += ['worker_alarm', 'worker_config'] if request.get('expect_worker') else []
         missing = [key for key in wanted if not ready(objects.get(key))]
+        # « Ready » chez Crossplane ne suffit pas pour les bases : le 08/11/2026, la ressource Cloud SQL était prête alors que
+        # l'instance restait en PENDING_CREATE chez Google, sans IP privée ; l'étape suivante a été refusée (« Address cannot
+        # be empty »). On exige l'instance RUNNABLE chez Google et les deux adresses renseignées.
+        provider = lambda key: (objects.get(key) or {}).get('status', {}).get('atProvider', {})
+        if 'cloudsql' not in missing and (instance.get('state') != 'RUNNABLE' or not provider('cloudsql').get('privateIpAddress')):
+            missing.append('cloudsql')
+        if 'rds' not in missing and not provider('rds').get('address'):
+            missing.append('rds')
         return {'observations': objects, 'source_ca': instance['serverCaCert']['cert'], 'verified': not missing,
                 'message': None if not missing else 'En attente : ' + ', '.join(missing) + ' pas encore prêt(s).'}
     if action in {'teardown-released', 'teardown-gone'}:
@@ -357,7 +466,6 @@ def execute(request):
         return {'verified': bool(items) and not pending, 'resources': len(items), 'pending': sorted(pending),
                 'message': None if items and not pending else 'En attente de la libération de : ' + ', '.join(sorted(pending)[:6])}
     if action == 'teardown-cleanup':
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'config-repo' / 'scripts'))
         from prepare_failover_phase1 import platform_secrets_profile, regime
         import platform_secrets
         if regime(document['profile']) != 'platform':
@@ -371,8 +479,9 @@ def execute(request):
                 ExpressionAttributeNames={'#r': 'record'}) for item in page['Items']]
         for key in keys:
             table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
-        return {**result, 'worker_records_removed': len(keys), 'verified': True}
-    if action in BOOTSTRAP_ACTIONS | {'worker-configure', 'worker-verify', 'worker-resume'}:
+        leftovers = remove_aws_leftovers(app, request.get('_aws') or (lambda name: boto3.client(name, region_name='eu-west-3')))
+        return {**result, 'worker_records_removed': len(keys), **leftovers, 'verified': True}
+    if action in BOOTSTRAP_ACTIONS | set(WORKER_ACTIONS):
         import boto3
         from botocore.config import Config
         session = boto3.Session(region_name='eu-west-3')
@@ -437,12 +546,39 @@ def execute(request):
 
         ledger = work / 'completed.json'
         completed = json.loads(ledger.read_text()) if ledger.exists() else {}
-        operations = bootstrap_operations(action, introspected) if bootstrap else ['configure'] if action == 'worker-configure' else ['resume'] if action == 'worker-resume' else ['status']
+        if action in {'failback-sync', 'failback-reset'} and not introspected:
+            raise ValueError('Retour vers GCP réservé aux profils introspectés')
+        operations = bootstrap_operations(action, introspected) if bootstrap else [WORKER_ACTIONS[action]]
         for operation in operations:
             # Une initialisation interrompue reprend où elle s'est arrêtée : un rôle déjà créé ne se recrée pas.
-            if action in {'bootstrap', 'bootstrap-roles'} and operation in completed: continue
+            if action in {'bootstrap', 'bootstrap-roles', 'failback-reset'} and operation in completed: continue
             completed[operation] = task(operation)
             ledger.write_text(json.dumps(completed))
+        if action == 'schema-diff':
+            # Lecture seule : la migration de la mise à jour a-t-elle changé le schéma de GCP ? Sans mesure, on reconstruit.
+            seen = [value.get('schema_in_sync') for value in completed['monitor']['results'] if 'schema_in_sync' in value]
+            return {'completed': True, 'tasks': completed, 'activated': False, 'verified': True, 'changed': seen[-1:] != [True]}
+        if action == 'resync':
+            # Après une mise à jour : schémas identiques, rien à faire ; sinon la copie AWS vient d'être vidée et l'initialisation
+            # habituelle la reconstruit depuis GCP (publication, schéma, abonnement avec recopie).
+            resynced = any(value.get('resynced') for value in completed['resync-schema']['results'])
+            if resynced:
+                if not introspected: raise ValueError('Reconstruction réservée aux profils introspectés')
+                for operation in bootstrap_operations('bootstrap', True):
+                    completed[operation] = task(operation)
+                    ledger.write_text(json.dumps(completed))
+            return {'completed': True, 'tasks': completed, 'activated': False, 'verified': True, 'resynced': resynced}
+        if action == 'failback-sync':
+            # GCP rouvert avec les données d'AWS, vérifiées table par table ; AWS fermé.
+            done = [value for value in completed['failback-sync']['results'] if value.get('state') == 'GCP_OPEN']
+            if not done: raise ValueError('Retour vers GCP non confirmé')
+            return {'completed': True, 'tasks': completed, 'verified': True, **{key: done[-1].get(key) for key in ('tables', 'rows', 'checksums_equal', 'frozen_seconds', 'already_done')}}
+        if action == 'worker-failback-route':
+            if not any(value.get('state') == 'GCP_ROUTE_REOPENED' for value in completed['failback-route']['results']):
+                raise ValueError('Verrou DNS de GCP non rouvert')
+        if action == 'worker-rearm':
+            if not any(value.get('state') == 'DISABLED' and value.get('operation') == 'rearm' for value in completed['rearm']['results']):
+                raise ValueError('Worker non réarmé')
         if action == 'verify':
             proofs = completed['verify-replication']['results']
             # Un schéma introspecté doit être identique des deux côtés ; l'absence de la mesure n'est pas une preuve.

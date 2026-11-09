@@ -134,7 +134,7 @@ async function forget(row) {
   if (dep) await require('./environment-deployment').remove(dep, { afterFailoverTeardown: true });
   db.transaction(() => {
     for (const [table, column] of [['failover_candidates', 'app_name'], ['failover_operations', 'app'], ['failover_profiles', 'app_name'],
-      ['failover_provisioning', 'app'], ['failover_adoptions', 'app_name']]) {
+      ['failover_provisioning', 'app']]) {
       try { db.prepare(`DELETE FROM ${table} WHERE ${column}=?`).run(row.app); } catch (_) { /* table absente */ }
     }
     if (dep) {

@@ -1,0 +1,54 @@
+{
+  "gcp": {
+    "app_name": "telemetry-api",
+    "application_profile": "postgres",
+    "environment": "prod",
+    "database_name": "telemetry",
+    "credentials_secret_name": "cnp-telemetry-api-sql",
+    "gcp_lb_ip": null,
+    "gcp_runtime": {
+      "image": null,
+      "service_account": "cloud-run-sa@cnp-terraform-512313.iam.gserviceaccount.com",
+      "subnetwork": null,
+      "password_secret": null,
+      "password_version": null,
+      "database_ca_pem": null
+    },
+    "sql_contract": {
+      "database": "telemetry"
+    },
+    "container_port": 8080,
+    "readiness_path": "/health",
+    "liveness_path": "/healthz"
+  },
+  "aws": {
+    "app_name": "telemetry-api",
+    "application_profile": "postgres",
+    "environment": "prod",
+    "database_name": "telemetry",
+    "database_security_group_id": null,
+    "image": null,
+    "runtime_user": "cnp_runtime",
+    "runtime_secret_arn": null,
+    "listener_priority": null,
+    "log_group_name": "/ecs/cnp-failover",
+    "database_ca_pem": null,
+    "sql_contract": {
+      "database": "telemetry"
+    },
+    "container_port": 8080,
+    "readiness_path": "/health",
+    "liveness_path": "/healthz",
+    "backup_retention_period": 1
+  },
+  "automation": {
+    "worker_image": null,
+    "ecs_cluster_arn": null,
+    "ecs_security_group_id": null,
+    "public_subnet_ids": [],
+    "subscription_ca_path_on_rds": null,
+    "subscription_tls_mode": "server-ca",
+    "acknowledge_wireguard_subscriber_trust": false,
+    "kube_context": "gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform"
+  }
+}

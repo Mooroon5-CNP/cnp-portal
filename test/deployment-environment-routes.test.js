@@ -301,3 +301,30 @@ describe('confirmation d’une production avec failover', () => {
         expect(provisioning.start).not.toHaveBeenCalled();
     });
 });
+
+describe('choix « hébergement et données »', () => {
+    const stack = (stack, environment, extra = {}) => request(app).post('/deployments').type('form')
+        .send({ appName: 'sample-app', githubRepoUrl: input.githubRepoUrl, appPort: '8080', environment, stack, ...extra });
+    const saved = () => deployments.get(deployments.listForUser(null)[0].id);
+    test('GCP Cloud SQL en dev : une base dédiée, sans secours', async () => {
+        await stack('gcp-postgres', 'dev');
+        expect(saved()).toMatchObject({ targetCluster: 'gcp', database: 'postgres', failoverRequested: false, billing: 'usage' });
+    });
+    test('GCP Cloud SQL en prod : toujours avec le secours AWS, même si le formulaire tente de l’enlever', async () => {
+        await stack('gcp-postgres', 'prod', { failoverRequested: '' });
+        expect(saved()).toMatchObject({ targetCluster: 'gcp', database: null, failoverRequested: true });
+    });
+    test('GCP GCS : SQLite persistant, jamais de secours ni de Cloud SQL', async () => {
+        await stack('gcp-sqlite', 'prod', { failoverRequested: 'on', database: 'postgres', billing: 'instance' });
+        expect(saved()).toMatchObject({ targetCluster: 'gcp', persistentStorage: true, failoverRequested: false, database: null, billing: 'instance' });
+    });
+    test('Azure : la facturation Cloud Run ne s’applique pas', async () => {
+        await stack('azure-postgres', 'dev', { billing: 'instance' });
+        expect(saved()).toMatchObject({ targetCluster: 'azure', billing: 'usage', failoverRequested: false });
+    });
+    test('un choix inconnu (dont AWS) est refusé sans rien créer', async () => {
+        await stack('aws', 'dev');
+        expect(deployments.listForUser(null)).toHaveLength(0);
+        expect(service.onboard).not.toHaveBeenCalled();
+    });
+});

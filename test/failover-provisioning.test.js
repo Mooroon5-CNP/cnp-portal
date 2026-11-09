@@ -1,6 +1,8 @@
 'use strict';
-jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn() }));
+jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn(), runtimeRevision: jest.fn() }));
 jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start: jest.fn(), retry: jest.fn(), recoverInterrupted: jest.fn() }));
+jest.mock('../src/services/failover-ci-images', () => ({ latest: jest.fn() }));
+jest.mock('../src/models/deployment', () => ({ listForUser: jest.fn(() => []), get: jest.fn() }));
 const db = require('../src/models/db');
 const profiles = require('../src/services/environment-failover');
 const operations = require('../src/services/failover-operations');
@@ -27,7 +29,6 @@ beforeEach(() => {
     const row = { id: `candidate-${++serial}`, app, stage, state: 'pending' };
     candidates.push(row); return { id: row.id, stage, prUrl: `https://example.test/pull/${serial}`, head: 'h'.repeat(40) };
   });
-  delete process.env.CNP_FAILOVER_STEP_BY_STEP;
   // Approbation automatique : publie le candidat (les contrôles réels sont testés dans failover-environment.test.js).
   profiles.autoApprove.mockImplementation(async id => { candidates.find(value => value.id === id).state = 'published'; return { published: true }; });
   operations.list.mockImplementation(app => tasks.filter(value => value.app === app).slice().reverse());
@@ -55,23 +56,6 @@ test('un profil historique (plans Terraform par app) ne se met plus en service p
   profiles.profileFor.mockReturnValue({ profile: { gcp: { sql_contract: { database: 'appdb' } }, aws: {}, automation: {} } });
   expect(() => workflow.start('weather-api', manager)).toThrow('régime plateforme');
   expect(operations.start).not.toHaveBeenCalled();
-});
-test('pas à pas (G5) : chaque publication attend la revue manager, puis le parcours reprend sans doublon', async () => {
-  process.env.CNP_FAILOVER_STEP_BY_STEP = 'true';
-  workflow.start('weather-api', manager);
-  await tick();
-  expect(tasks[0].action).toBe('initialize-secrets');
-  await tick();
-  expect(operations.start).toHaveBeenCalledTimes(1);                 // pas de second lancement pendant l'exécution
-  succeed(); await tick();
-  expect(workflow.get('weather-api').step).toBe(1);
-  expect((await tick()).state).toBe('review');
-  expect(candidates[0].stage).toBe('databases');
-  await tick(); expect(profiles.prepare).toHaveBeenCalledTimes(1);
-  candidates[0].state = 'published';
-  await tick(); await tick();
-  expect(tasks.at(-1).action).toBe('observe');
-  expect(profiles.autoApprove).not.toHaveBeenCalled();
 });
 test('par défaut, une publication contrôlée s’approuve seule au nom du manager qui a lancé la mise en service', async () => {
   workflow.start('weather-api', manager);
@@ -213,4 +197,153 @@ test('un schéma non pris en charge bloque avec la cause, sans être rejoué', a
   expect(blocked.message).toContain('billing.invoices');
   expect(operations.retry).not.toHaveBeenCalled();
   expect(tasks).toHaveLength(1);
+});
+
+describe('mise à jour d’une app en service', () => {
+  const ciImages = require('../src/services/failover-ci-images');
+  const deployments = require('../src/models/deployment');
+  let hours = 0;
+  function inService(state = 'WAIT_SIGNALS') {
+    jest.setSystemTime(Date.now() + 3600000 * ++hours);                    // au-delà de la lecture GitHub d'un test précédent
+    workflow.start('weather-api', manager);
+    db.prepare("UPDATE failover_provisioning SET state='completed',step=? WHERE app='weather-api'").run(STEPS.length);
+    tasks.push({ id: 'health-1', app: 'weather-api', action: 'health', state: 'completed', created_at: new Date().toISOString(),
+      result: { verified: true, state } });
+    candidates.push({ id: 'old-runtime', app: 'weather-api', stage: 'runtime', state: 'published', created_at: '2026-11-01T00:00:00Z' });
+    deployments.listForUser.mockReturnValue([{ id: 'dep', app_name: 'weather-api', deployment_environment: 'prod', failover_requested: 1 }]);
+    deployments.get.mockReturnValue({ id: 'dep', appName: 'weather-api', environment: 'prod' });
+    profiles.runtimeRevision.mockReturnValue('a'.repeat(40));
+  }
+  test('un ancien profil sans base est refusé avec la raison, sans rien publier', () => {
+    // Failover sans base retiré le 08/11/2026 : un profil resté en base locale ne doit ni partir ni être traité en PostgreSQL.
+    profiles.profileFor.mockReturnValue({ profile: { mode: 'stateless', gcp: {}, aws: {} } });
+    expect(() => workflow.start('weather-api', manager)).toThrow('sans base retiré');
+    expect(profiles.prepare).not.toHaveBeenCalled();
+    expect(operations.start).not.toHaveBeenCalled();
+  });
+  test('une app avec base met le worker en pause et reconstruit sa copie si la migration a changé le schéma', async () => {
+    {
+      inService();
+      ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+      await tick(); await tick();                                          // passage en mise à jour, puis runtime publié
+      const actions = [];
+      for (let i = 0; i < 20 && workflow.get('weather-api').state !== 'completed'; i++) {
+        await tick();
+        const last = tasks.at(-1);
+        if (last.state === 'running') { actions.push(last.action); succeed(); }
+      }
+      expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'schema-diff', 'worker-pause', 'resync', 'verify', 'worker-resume', 'health']);
+      expect(workflow.progress('weather-api').total).toBe(18);           // revenu au parcours normal
+    }
+  });
+  test('sans migration, ni pause du worker ni reconstruction : directement le contrôle de santé', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+    await tick(); await tick();
+    const actions = [];
+    for (let i = 0; i < 20 && workflow.get('weather-api').state !== 'completed'; i++) {
+      await tick();
+      const last = tasks.at(-1);
+      if (last.state === 'running') { actions.push(last.action); last.state = 'completed'; last.result = { verified: true, changed: false }; }
+    }
+    expect(actions).toEqual(['runtime-rollout', 'runtime-verify', 'schema-diff', 'health']);
+  });
+  test('une mise à jour bloquée reprend depuis sa publication, avec une nouvelle proposition', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'b'.repeat(40) } });
+    await tick(); await tick();
+    db.prepare("UPDATE failover_provisioning SET state='blocked',step=1 WHERE app='weather-api'").run();
+    jest.setSystemTime(Date.now() + 60000);
+    expect(workflow.resume('weather-api', manager)).toMatchObject({ phase: 'update', step: 0, state: 'running' });
+    await tick();
+    expect(profiles.prepare).toHaveBeenCalledTimes(2);                   // republication, pas l'ancienne proposition
+  });
+  test('aucune mise à jour quand la révision est déjà servie, ou quand le secours AWS est actif', async () => {
+    inService();
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40) } });
+    expect((await tick()).phase).toBeNull();
+    db.exec('DROP TABLE failover_provisioning'); tasks = []; candidates = [];
+    inService('AWS_ACTIVE');
+    ciImages.latest.mockResolvedValue({ run: { status: 'completed', conclusion: 'success', head_sha: 'c'.repeat(40) } });
+    jest.setSystemTime(Date.now() + 600000);
+    expect((await tick()).phase).toBeNull();
+    expect(profiles.prepare).not.toHaveBeenCalled();
+  });
+});
+
+describe('retour manuel vers GCP', () => {
+  function onAws(gcp) {
+    workflow.start('weather-api', manager);
+    db.prepare("UPDATE failover_provisioning SET state='completed',step=? WHERE app='weather-api'").run(STEPS.length);
+    tasks.push({ id: 'health-aws', app: 'weather-api', action: 'health', state: 'completed', created_at: new Date().toISOString(),
+      result: { verified: true, state: 'AWS_ACTIVE', observed_at: Date.now() / 1000, gcp } });
+  }
+  const available = { available: true, message: 'GCP disponible : le retour peut être lancé.' };
+  test('le voyant reprend le dernier contrôle de santé, et rien n’est proposé tant que GCP sert l’application', () => {
+    onAws({ available: false, message: 'GCP indisponible : base Cloud SQL arrêtée.' });
+    expect(workflow.gcpStatus('weather-api')).toMatchObject({ available: false, fresh: true });
+    expect(() => workflow.failback('weather-api', manager)).toThrow('Cloud SQL arrêtée');
+    tasks[0].result.state = 'WAIT_SIGNALS';
+    expect(workflow.gcpStatus('weather-api')).toBeNull();
+    expect(() => workflow.failback('weather-api', manager)).toThrow('servie par AWS');
+  });
+  test('un voyant périmé ou un développeur ne lance pas le retour', () => {
+    onAws(available);
+    expect(() => workflow.failback('weather-api', { id: 'dev', role: 'developer' })).toThrow('manager');
+    jest.setSystemTime(Date.now() + 600000);
+    expect(() => workflow.failback('weather-api', manager)).toThrow();
+    expect(workflow.get('weather-api')).toMatchObject({ state: 'completed', phase: null });
+  });
+  test('le retour enchaîne pause, verrou DNS, copie, reconstruction et réarmement avant de revenir en surveillance', async () => {
+    onAws(available);
+    expect(workflow.failback('weather-api', manager)).toMatchObject({ phase: 'failback', step: 0, state: 'running' });
+    const actions = [];
+    for (let i = 0; i < 40 && workflow.get('weather-api').state !== 'completed'; i++) {
+      await tick();
+      const last = tasks.at(-1);
+      if (last.state === 'running') { actions.push(last.action); succeed(); }
+    }
+    expect(actions).toEqual(['failback-check', 'worker-pause', 'worker-failback-route', 'failback-sync', 'failback-reset', 'verify',
+      'worker-rearm', 'worker-verify', 'verify', 'worker-resume', 'health']);
+    const row = workflow.get('weather-api');
+    expect(row).toMatchObject({ state: 'completed', phase: null });
+    expect(row.message).toContain('revenue sur GCP');
+  });
+  test('une copie non vérifiée bloque le retour sans passer à la reconstruction de la copie AWS', async () => {
+    onAws(available);
+    workflow.failback('weather-api', manager);
+    for (let i = 0; i < 20 && tasks.at(-1).action !== 'failback-sync'; i++) {
+      await tick();
+      if (tasks.at(-1).state === 'running' && tasks.at(-1).action !== 'failback-sync') succeed();
+    }
+    const copy = tasks.at(-1);
+    copy.state = 'failed'; copy.result = { error: 'Opération interrompue.' };
+    const row = await tick();
+    expect(row.state).toBe('blocked');
+    expect(tasks.some(value => value.action === 'failback-reset')).toBe(false);
+  });
+  test('le worker encore en bail après la pause fait attendre l’ouverture du verrou, sans bloquer', async () => {
+    onAws(available);
+    workflow.failback('weather-api', manager);
+    for (let i = 0; i < 20 && tasks.at(-1).action !== 'worker-failback-route'; i++) {
+      await tick();
+      if (tasks.at(-1).state === 'running' && tasks.at(-1).action !== 'worker-failback-route') succeed();
+    }
+    const route = tasks.at(-1);
+    route.state = 'failed'; route.result = { error: 'Opération interrompue.' };
+    expect((await tick()).state).toBe('waiting');
+    expect(operations.retry).toHaveBeenCalledWith(route.id, expect.objectContaining({ id: manager.id }));
+  });
+});
+test('le suivi donne l’étape en clair, le temps écoulé et estimé, et signale une étape anormalement longue', () => {
+  workflow.start('weather-api', manager);
+  const start = Date.now();
+  let value = workflow.progress('weather-api', start + 30000);
+  expect(value).toMatchObject({ label: 'Création des secrets', elapsed: 30, estimate: 60, totalElapsed: 30, slow: false });
+  expect(value.totalEstimate).toBeGreaterThan(30 * 60);                   // le parcours complet dure de l'ordre d'une demi-heure
+  value = workflow.progress('weather-api', start + 5 * 60000);
+  expect(value).toMatchObject({ elapsed: 300, slow: true });            // plus du double de l'habitude
+  expect(value.totalEstimate).toBeGreaterThan(value.totalElapsed);      // le reste ne devient jamais négatif
+  profiles.profileFor.mockReturnValue(null);
+  expect(workflow.progress('weather-api', start).label).toBeUndefined(); // profil absent : avancement brut, sans durée
 });

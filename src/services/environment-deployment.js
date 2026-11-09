@@ -131,6 +131,11 @@ function manifests(dep, revision) {
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
   const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  if (dep.billing === 'instance') {
+    // Facturation à l'instance : une instance toujours active et son CPU toujours alloué (pas de démarrage à froid).
+    template.scaling = { minInstanceCount: 1 };
+    container.resources = { cpuIdle: false };
+  }
   if (dep.persistentStorage) {
     template.volumes = [{ name: 'data', gcs: { bucket, readOnly: false } }];
     container.volumeMounts = [{ name: 'data', mountPath: '/data' }];
@@ -152,6 +157,37 @@ function manifests(dep, revision) {
       { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
+  }
+  if (dep.database === 'postgres') {
+    // Base PostgreSQL de l'app (dev, sans failover). Cloud Run s'y connecte par la connexion Cloud SQL intégrée (socket
+    // /cloudsql/<instance>, rôle roles/cloudsql.client du compte runtime) : IP publique SANS aucun réseau autorisé, seul ce
+    // connecteur authentifié et chiffré l'atteint. Le mot de passe est créé avant publication (Secret Kubernetes lu par
+    // Crossplane, copie Secret Manager lue par Cloud Run). Supprimée avec l'app : aucune protection, deletionPolicy Delete.
+    const instance = `${name}-db-${createHash('sha256').update(dep.id).digest('hex').slice(0, 6)}`;   // nom bloqué ~1 semaine après suppression
+    const secret = { name: `cnp-${name}-sql`, namespace: 'crossplane-system', key: 'runtime-password' };
+    const wave = (object, value) => { object.metadata.annotations['argocd.argoproj.io/sync-wave'] = String(value); return object; };
+    const sqlInstance = wave(resource('sql.gcp.upbound.io/v1beta2', 'DatabaseInstance', `${name}-db`, {
+      project: config.gcp.project, region: config.gcp.region, databaseVersion: 'POSTGRES_15', deletionProtection: false,
+      settings: { edition: 'ENTERPRISE', tier: 'db-f1-micro', availabilityType: 'ZONAL', diskSize: 10, diskAutoresize: true,
+        deletionProtectionEnabled: false, backupConfiguration: { enabled: false },
+        ipConfiguration: { ipv4Enabled: true, sslMode: 'ENCRYPTED_ONLY' } } }), 0);
+    sqlInstance.metadata.annotations['crossplane.io/external-name'] = instance;
+    const sqlDatabase = wave(resource('sql.gcp.upbound.io/v1beta1', 'Database', `${name}-db-app`,
+      { project: config.gcp.project, instanceRef: { name: `${name}-db` } }), 1);
+    sqlDatabase.metadata.annotations['crossplane.io/external-name'] = 'appdb';
+    const sqlUser = wave(resource('sql.gcp.upbound.io/v1beta2', 'User', `${name}-db-user`,
+      { project: config.gcp.project, type: 'BUILT_IN', instanceRef: { name: `${name}-db` }, passwordSecretRef: secret }), 1);
+    sqlUser.metadata.annotations['crossplane.io/external-name'] = 'cnp_runtime';
+    for (const object of [sqlInstance, sqlDatabase, sqlUser]) object.spec.deletionPolicy = 'Delete';
+    files[`${path}/cloudsql.yaml`] = [sqlInstance, sqlDatabase, sqlUser].map(object => yaml.dump(object)).join('---\n');
+    resources.push('cloudsql.yaml');
+    const connection = `${config.gcp.project}:${config.gcp.region}:${instance}`;
+    template.volumes = [...(template.volumes || []), { name: 'cloudsql', cloudSqlInstance: { instances: [connection] } }];
+    container.volumeMounts = [...(container.volumeMounts || []), { name: 'cloudsql', mountPath: '/cloudsql' }];
+    container.env.push({ name: 'DB_HOST', value: `/cloudsql/${connection}` }, { name: 'DB_PORT', value: '5432' },
+      { name: 'DB_NAME', value: 'appdb' }, { name: 'DB_USER', value: 'cnp_runtime' }, { name: 'DB_ENGINE', value: 'postgres' },
+      { name: 'DB_PASSWORD', valueSource: { secretKeyRef: { secret: `${name}-db-password`, version: 'latest' } } });
+    files[`${path}/cloudrun-claim.yaml`] = yaml.dump(claim);           // réécrit avec le socket et les variables de la base
   }
   files[`${path}/kustomization.yaml`] = yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources });
   return files;
@@ -176,10 +212,19 @@ function current(dep) {
     && releases.get(dep.id, '__registration__')?.state === 'registered';
 }
 
+// Mot de passe de la base Cloud SQL d'une app de dev : créé (une seule fois) avant toute publication, car Crossplane le lit pour
+// créer l'utilisateur et Cloud Run dans Secret Manager. Par l'opérateur Python (clients Kubernetes et Secret Manager).
+async function databaseSecrets(dep, action) {
+  if (dep.database !== 'postgres' || azure.isAzure(dep)) return null;
+  const operator = require('./failover-operations');
+  return operator.run({ action, app: dep.appName, environment: dep.environment, service_account: config.gcp.cloudRunSa });
+}
+
 async function prepareOnboarding(dep) {
   validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
   if (azure.isAzure(dep)) azure.assertConfigured();
+  await databaseSecrets(dep, 'app-sql-secrets');
   const api = await github.getInstallationOctokit();
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
   const destination = target();
@@ -341,7 +386,7 @@ async function interruptedApproval(api, dep, release) {
 async function reconcile(dep) {
   // Seule décision humaine, comme pour toute prod : un manager confirme ; le secours se met ensuite en service seul.
   if (dep.failoverRequested && !failover.enabled(dep)) return { phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true };
-  if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && (failover.adopted(dep) || current(dep))) return failover.deploymentStatus(dep);
+  if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && current(dep)) return failover.deploymentStatus(dep);
   if (locks.has(dep.id)) return locks.get(dep.id);
   const work = (async () => {
     if (!current(dep)) return { phase: 'configuring', message: 'Déploiement non disponible pour publication.' };
@@ -463,23 +508,21 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
   const { path, name } = identity(dep);
   const onAzure = azure.isAzure(dep);
   const files = {};
-  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
   for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
+  let hasRuntime = false;
   if (!onAzure) {
     const application = await kubernetes.getArgocdApplicationIfExists(name);
-    const hasRuntime = Object.keys(files).length > 0 || application
+    hasRuntime = Object.keys(files).length > 0 || application
       || releases.list(dep.id).some(release => release.state === 'published');
     // A failed CI may never have published any resource or route. In that case
     // remove only its registration; do not wait on a route that was never created.
     if (hasRuntime) {
       await routing.sync(dep, { api, repo: target(), commitFiles }, true);
       if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
-      // Preserve the existing GCP cascade-before-source-removal ordering, using
-      // the scoped Kubernetes client already used for Azure (no Argo REST 415/403).
-      // Après la suppression du failover, l'Application est retirée seulement APRÈS le dossier (plus bas), comme pour Azure.
-      if (!afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
+      // L'Application n'est plus supprimée ici, avant le retrait du dossier : voir plus bas (GCP, comme Azure et le failover).
     }
   }
   const hasLegacy = deployments.listForUser(null).some(row => row.app_name === dep.appName && row.deployment_environment === 'legacy');
@@ -491,12 +534,22 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
       const app = registry.apps?.find(item => item.app_name === dep.appName);
       if (app) {
         app.environments = (app.environments || []).filter(environment => environment !== dep.environment);
-        if (!app.environments.length) registry.apps = registry.apps.filter(item => item !== app);
+        if (!app.environments.length) {
+          registry.apps = registry.apps.filter(item => item !== app);
+          // Le fichier racine vide, écrit à l'enregistrement, part avec le dernier environnement : sinon l'ApplicationSet
+          // cloudrun-autodiscovery garde une Application <app>-cloudrun vide (constaté le 07/11/2026 sur quatre apps
+          // supprimées). Seulement s'il est resté vide : un fichier qui déclare des ressources n'est jamais retiré ici.
+          const rootPath = `apps/${dep.appName}/crossplane/kustomization.yaml`;
+          const root = yaml.load(await readFile(api, target(), rootPath, head) || 'null');
+          if (root?.kind === 'Kustomization' && Array.isArray(root.resources) && !root.resources.length) result[rootPath] = null;
+        }
         result['apps/registry.yaml'] = yaml.dump(registry);
       }
     }
     return result;
   }, `chore(${dep.appName}): remove ${dep.environment}`);
+  // Le dossier est sorti de Git : son chemin quitte aussi la liste explicite de l'ApplicationSet de cet environnement.
+  if (!onAzure) await kubernetes.removeApplicationSetPath(`crossplane-autodiscovery-${dep.environment}`, `apps/${dep.appName}/crossplane/${dep.environment}`);
   // Azure : la cascade vient APRÈS le retrait des fichiers (ordre inverse de GCP, voir environment-azure.confirmTeardown).
   // Tant que le dossier est dans Git, l'ApplicationSet dev (preserveResourcesOnDeletion) retire le finalizer posé et
   // recrée l'Application : les ressources Azure restaient orphelines (constaté le 29/10/2026). L'API Kubernetes, car
@@ -505,10 +558,18 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
     await kubernetes.cascadeDeleteArgocdApplication(name);
     await azure.confirmTeardown(dep);
   }
-  // Failover : les ressources sont déjà détruites. L'ApplicationSet (create-update) ne supprime jamais d'Application : c'est au
-  // portail de la retirer, une fois le dossier sorti de Git. Retirée avant, alors que le dossier existait encore, le contrôleur
-  // ne l'a plus recréée au redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
-  if (afterFailoverTeardown) await kubernetes.cascadeDeleteArgocdApplication(name);
+  // GCP : la cascade vient APRÈS le retrait du dossier et de son chemin dans l'ApplicationSet, comme pour Azure. Faite avant
+  // (ancien ordre), l'ApplicationSet (create-update, preserveResourcesOnDeletion) recréait l'Application 30 s plus tard, sans
+  // finalizer, puisque le dossier était encore dans Git : Cloud Run, Cloud SQL et répartiteur restaient (constaté le
+  // 08/11/2026 sur cnp-test-azure dev ; cascade relancée à la main après le retrait, tout a disparu). Le client Kubernetes
+  // restreint du portail, comme pour Azure (pas l'API REST d'Argo CD, qui refuse ce compte).
+  // Failover : les ressources sont déjà détruites ; l'Application est retirée pour la même raison (l'ApplicationSet ne
+  // supprime jamais d'Application). Retirée avant, alors que le dossier existait encore, le contrôleur ne l'a plus recréée au
+  // redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
+  if (!onAzure && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
+  // Base Cloud SQL de dev : ses manifestes sont retirés avec le reste (vagues Argo : Cloud Run, puis base et utilisateur, puis
+  // instance) ; ses deux secrets partent ensuite.
+  await databaseSecrets(dep, 'app-sql-cleanup');
   // Secrets et workflow restent partagés avec l'autre environnement.
 }
 
@@ -562,4 +623,25 @@ function startReconciler() {
   return timer;
 }
 
-module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles };
+// Dossier de production orphelin : l'app n'existe plus (ni déploiement dans le portail, ni registre, ni Application Argo CD),
+// mais ses manifestes restent sous apps/<app>/crossplane/prod. Seul le bot du portail peut écrire sous ce chemin (garde
+// protect-prod-paths de config-repo) : ce retrait passe donc par lui, comme toute écriture de production. Il ne détruit rien
+// dans le cloud (les ressources doivent déjà avoir disparu) ; il empêche seulement une ancienne app de renaître.
+async function removeOrphanProduction(appName, user) {
+  if (!user?.id || user.role !== 'manager') throw new Error('Validation manager requise.');
+  if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(appName || '')) throw new Error('Nom d’application invalide.');
+  if (deployments.listForUser(null).some(row => row.app_name === appName)) throw new Error('Application connue du portail : utiliser sa suppression.');
+  if (await kubernetes.getArgocdApplicationIfExists(`${appName}-prod`)) throw new Error('Application Argo CD de production encore présente : retirer ses ressources d’abord.');
+  const api = await github.getInstallationOctokit();
+  const registry = yaml.load(await readFile(api, target(), 'apps/registry.yaml') || 'apps: []');
+  if (registry.apps?.some(item => item.app_name === appName)) throw new Error('Application encore inscrite au registre.');
+  const prefix = `apps/${appName}/crossplane/prod/`;
+  const { data: ref } = await api.request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ...target(), ref: 'heads/main' });
+  const { data: tree } = await api.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', { ...target(), tree_sha: ref.object.sha, recursive: 'true' });
+  const paths = tree.tree.filter(entry => entry.type === 'blob' && entry.path.startsWith(prefix)).map(entry => entry.path);
+  if (!paths.length) return { removed: 0 };
+  await commitFiles(api, target(), Object.fromEntries(paths.map(path => [path, null])), `chore(${appName}): remove orphaned prod folder`);
+  return { removed: paths.length };
+}
+
+module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles, removeOrphanProduction };

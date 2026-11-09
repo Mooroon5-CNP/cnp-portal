@@ -29,15 +29,14 @@ class OperatorTests(unittest.TestCase):
         self.request = {'app': 'weather-api', 'work': self.directory.name, 'document': self.document}
 
     def test_platform_secrets_are_created_by_the_api_without_terraform_or_any_cli(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
         expected = {'secrets': {'app': app, 'initialized': True}, 'credentials': {'aws_secret_arns': {'value': {}}}}
         request = {'app': app, 'work': self.directory.name, 'action': 'initialize-secrets',
                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}}
-        with patch('initialize_secrets.initialize', side_effect=AssertionError('chemin du pilote')), \
-                patch('platform_secrets.execute', return_value=expected) as run:
+        with patch('platform_secrets.execute', return_value=expected) as run:
             self.assertEqual(operator.execute(request), expected)
         self.assertEqual(run.call_args.args[0], {'app': app, 'kubernetes_secret': profile['gcp']['credentials_secret_name'],
                                                  'gcp_runtime_service_account': profile['gcp']['gcp_runtime']['service_account']})
@@ -47,7 +46,7 @@ class OperatorTests(unittest.TestCase):
         control = {'state': 'DISABLED', 'paused': paused, 'config_hash': config_hash}
         sts, ecs, logs = Mock(), Mock(), Mock()
         sts.get_caller_identity.return_value = {'Account': '804210702561'}
-        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-automation-v-1234567890',
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-worker',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'worker', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
         ecs.run_task.return_value = {'tasks': [{'taskArn': 'task/test'}]}
@@ -130,7 +129,7 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         """Exécute l'action avec de faux ECS et journaux ; chaque tâche lit la sortie suivante de `outputs`."""
         sts, ecs, logs = Mock(), Mock(), Mock()
         sts.get_caller_identity.return_value = {'Account': '804210702561'}
-        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-bootstrap-v-1234567890',
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
         counter = iter(range(1, 50))
@@ -200,6 +199,39 @@ class BootstrapOrchestrationTests(unittest.TestCase):
                          ['prepare-source', 'create-target-runtime', 'prepare-target', 'verify-native-tls', 'subscribe'])
         self.assertEqual(operator.bootstrap_operations('bootstrap-roles', True), ['create-target-runtime'])
         self.assertEqual(operator.bootstrap_operations('schema-check', True), ['inspect-source'])
+
+    def test_after_an_update_the_aws_copy_is_rebuilt_only_when_the_schemas_differ(self):
+        names = ('resync-schema', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe')
+        order = lambda: [next(name for name in names if f"'{name}'" in command or f'"{name}"' in command or f' {name} ' in command)
+                         for command in self.launched()]
+        result = self.run_action('resync', [{'completed': True, 'resynced': False}])
+        self.assertEqual((result['verified'], result['resynced'], order()), (True, False, ['resync-schema']))
+        self.ecs.run_task.reset_mock()
+        for name in ('task-requests.json', 'completed.json'):              # une nouvelle opération a son propre dossier
+            (Path(self.directory.name) / name).unlink(missing_ok=True)
+        result = self.run_action('resync', [{'completed': True, 'resynced': True}] + [{'completed': True}] * 5)
+        self.assertTrue(result['resynced'])
+        self.assertEqual(order(), ['resync-schema', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe'])
+
+    def test_failback_rebuilds_the_aws_copy_through_the_usual_initialisation(self):
+        names = ('failback-reset', 'prepare-source', 'restore-schema', 'prepare-target', 'verify-native-tls', 'subscribe')
+        result = self.run_action('failback-reset', [{'completed': True, 'reset': True}] + [{'completed': True}] * 5)
+        order = [next(name for name in names if f"'{name}'" in command or f'"{name}"' in command) for command in self.launched()]
+        self.assertEqual(order, list(names))
+        self.assertTrue(result['completed'])
+
+    def test_failback_sync_is_verified_only_when_gcp_is_reopened(self):
+        result = self.run_action('failback-sync', [{'state': 'GCP_OPEN', 'tables': 3, 'rows': 12, 'checksums_equal': True, 'frozen_seconds': 4.2}])
+        self.assertEqual((result['verified'], result['rows'], result['checksums_equal']), (True, 12, True))
+        for name in ('task-requests.json', 'completed.json'):
+            (Path(self.directory.name) / name).unlink(missing_ok=True)
+        with self.assertRaises(ValueError):
+            self.run_action('failback-sync', [{'operation': 'failback-sync'}])
+
+    def test_failback_is_refused_for_a_legacy_profile(self):
+        for action in ('failback-sync', 'failback-reset'):
+            with self.assertRaises(ValueError):
+                self.run_action(action, [{'state': 'GCP_OPEN'}], profile='pixelcalm')
 
     def test_phase_two_restores_the_schema_before_the_subscription_and_never_recreates_the_role(self):
         self.run_action('bootstrap', [{'completed': True}] * 5)
@@ -277,54 +309,46 @@ class EntryPointTests(unittest.TestCase):
 
 
 class EngineRootTests(unittest.TestCase):
-    """Le moteur doit être trouvé dans les deux dispositions du dépôt, sans PYTHONPATH."""
+    """Le moteur est dans engine/ à côté de l'opérateur, sans PYTHONPATH ni dépôt voisin."""
 
-    def engine(self, base, *parts):
-        directory = Path(base).joinpath(*parts, 'deployment', 'failover-phase1')
-        directory.mkdir(parents=True)
-        (directory / 'bootstrap.py').write_text('')
-        return directory
-
-    def script(self, base, *parts):
-        file = Path(base).joinpath(*parts, 'scripts', 'failover', 'operate.py')
+    def script(self, base, with_engine=True):
+        file = Path(base) / 'scripts' / 'failover' / 'operate.py'
         file.parent.mkdir(parents=True)
         file.write_text('')
+        if with_engine:
+            (file.parent / 'engine').mkdir()
+            (file.parent / 'engine' / 'bootstrap.py').write_text('')
         return file.resolve()
 
-    def test_repositories_side_by_side(self):
+    def test_engine_next_to_the_operator(self):
         with tempfile.TemporaryDirectory() as base:
-            expected = self.engine(base, 'cnp')
-            here = self.script(base, 'cnp-portal')
-            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+            here = self.script(base)
+            self.assertEqual(operator.engine_root({}, here), (here.parent / 'engine').resolve())
 
-    def test_portal_nested_inside_cnp(self):
+    def test_a_neighbouring_repository_is_never_used(self):
         with tempfile.TemporaryDirectory() as base:
-            expected = self.engine(base)
-            here = self.script(base, 'cnp-portal')
-            self.assertEqual(operator.engine_root({}, here), expected.resolve())
+            old = Path(base) / 'deployment' / 'failover-phase1'
+            old.mkdir(parents=True)
+            (old / 'bootstrap.py').write_text('')
+            with self.assertRaises(FileNotFoundError):
+                operator.engine_root({}, self.script(base, with_engine=False))
 
     def test_environment_variable_wins(self):
         with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as other:
-            self.engine(base)
-            chosen = self.engine(other)
-            here = self.script(base, 'cnp-portal')
+            chosen = Path(other) / 'engine'
+            chosen.mkdir()
+            (chosen / 'bootstrap.py').write_text('')
+            here = self.script(base)
             self.assertEqual(operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(chosen)}, here), chosen.resolve())
 
     def test_wrong_variable_does_not_fall_back_silently(self):
         with tempfile.TemporaryDirectory() as base:
-            self.engine(base)
-            here = self.script(base, 'cnp-portal')
-            with self.assertRaises(FileNotFoundError):
+            here = self.script(base)
+            with self.assertRaisesRegex(FileNotFoundError, 'CNP_FAILOVER_ENGINE_ROOT'):
                 operator.engine_root({'CNP_FAILOVER_ENGINE_ROOT': str(Path(base) / 'absent')}, here)
 
-    def test_missing_engine_is_explicit(self):
-        with tempfile.TemporaryDirectory() as base:
-            here = self.script(base, 'cnp-portal')
-            with self.assertRaisesRegex(FileNotFoundError, 'CNP_FAILOVER_ENGINE_ROOT'):
-                operator.engine_root({}, here)
-
     def test_real_layout_resolves_without_pythonpath(self):
-        self.assertTrue((operator.ROOT / 'safe_apply.py').is_file())
+        self.assertTrue((operator.ROOT / 'bootstrap.py').is_file() and (operator.ROOT / 'platform_secrets.py').is_file())
 
 
 if __name__ == '__main__':
@@ -354,10 +378,12 @@ class NoCommandLineTests(unittest.TestCase):
                 with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'Opération inconnue'):
                     operator.execute({'app': 'weather-api', 'work': work, 'action': action, 'document': document})
 
-    def test_platform_and_pilot_task_families_only(self):
-        for family in ('cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker', 'cnp-failover-bootstrap', 'cnp-failover-automation-v-0123456789'):
+    def test_platform_task_families_only(self):
+        for family in ('cnp-failover-platform-bootstrap', 'cnp-failover-platform-worker'):
             self.assertRegex(family, f'^(?:{operator.TASK_FAMILY})$')
-        for family in ('cnp-failover-platform-other', 'other-worker', 'cnp-failover-platform-worker-v-0123456789'):
+        # Les tâches du worker historique du pilote (retiré le 07/11/2026) ne sont plus lançables.
+        for family in ('cnp-failover-platform-other', 'other-worker', 'cnp-failover-platform-worker-v-0123456789',
+                       'cnp-failover-bootstrap', 'cnp-failover-automation-v-0123456789'):
             self.assertNotRegex(family, f'^(?:{operator.TASK_FAMILY})$')
 
 
@@ -415,13 +441,17 @@ class ObserveTests(unittest.TestCase):
             operator.observe_objects('weather-api', self.apis, self.custom)
 
     def observe(self, objects, expect_probes=False, expect_worker=False):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
-        self.objects = {(plural, name.format(app=app)): value for (plural, name), value in objects.items()}
+        # Bases prêtes par défaut avec leurs adresses ; un test qui les retire le fait explicitement.
+        addresses = {'databaseinstances': {'privateIpAddress': '10.189.0.25'}, 'instances': {'address': 'db.eu-west-3.rds.amazonaws.com'}}
+        self.objects = {(plural, name.format(app=app)): ({**value, 'status': {'atProvider': addresses[plural], **value['status']}}
+                                                          if plural in addresses and 'status' in value else value)
+                        for (plural, name), value in objects.items()}
         session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
-                               {'serverCaCert': {'cert': 'CA'}}})
+                               {'serverCaCert': {'cert': 'CA'}, 'state': self.sql_state}})
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
         parent.mkdir(exist_ok=True, parents=True)
         with tempfile.TemporaryDirectory(dir=parent) as work:
@@ -435,6 +465,25 @@ class ObserveTests(unittest.TestCase):
         self.assertIs(result['verified'], False)
         self.assertIn('rds', result['message'])
         self.assertIs(self.observe({('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok})['verified'], True)
+
+    sql_state = 'RUNNABLE'
+
+    def test_a_ready_resource_is_not_enough_without_a_running_instance_and_its_addresses(self):
+        # 08/11/2026 : Cloud SQL « Ready » chez Crossplane, encore en PENDING_CREATE chez Google et sans IP privée.
+        ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
+        dbs = {('databaseinstances', '{app}-prod-gcp-db'): ok, ('instances', '{app}-prod-db'): ok}
+        self.sql_state = 'PENDING_CREATE'
+        result = self.observe(dbs)
+        self.assertIs(result['verified'], False)
+        self.assertIn('cloudsql', result['message'])
+        self.sql_state = 'RUNNABLE'
+        no_ip = {'status': {'atProvider': {'privateIpAddress': ''}, **ok['status']}}
+        self.assertIs(self.observe({**dbs, ('databaseinstances', '{app}-prod-gcp-db'): no_ip})['verified'], False)
+        no_address = {'status': {'atProvider': {'address': ''}, **ok['status']}}
+        result = self.observe({**dbs, ('instances', '{app}-prod-db'): no_address})
+        self.assertIs(result['verified'], False)
+        self.assertIn('rds', result['message'])
+        self.assertIs(self.observe(dbs)['verified'], True)
 
     def test_after_dns_the_probes_must_be_ready_too(self):
         ok = {'status': {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}}
@@ -455,7 +504,7 @@ class ObserveTests(unittest.TestCase):
         self.assertIs(self.observe({**dbs, **probes, **worker}, expect_probes=True, expect_worker=True)['verified'], True)
 
     def test_the_action_reads_the_source_ca_from_the_cloud_sql_api(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
@@ -469,6 +518,52 @@ class ObserveTests(unittest.TestCase):
                 'document': {'profile': profile, 'credentials': fixtures.platform_outputs(), 'secrets': {}, 'observations': {}}})
         self.assertIn('BEGIN CERTIFICATE', result['source_ca'])
         self.assertEqual(set(result['observations']), {'cloudsql', 'rds'})
+
+
+class GcpAvailabilityTests(ObserveTests):
+    """Voyant « GCP disponible » : chaque condition se lit chez son fournisseur ; une lecture refusée l'éteint."""
+    APP = 'weather-api'
+    SQL = 'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/weather-api-prod-gcp-db'
+    RUN = 'https://run.googleapis.com/v2/projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod'
+
+    def gcp(self, sql=None, run=None, paused=False, fence='GCP_FENCED'):
+        ok = {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}
+        self.objects = {('databaseinstances', 'weather-api-prod-gcp-db'): {'metadata': {'annotations': {'crossplane.io/paused': 'true'} if paused else {}}, 'status': ok},
+                        ('instances', 'weather-api-prod-db'): {'metadata': {}, 'status': ok}}
+        pages = {}
+        if sql is not False:
+            pages[self.SQL] = sql or {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}}
+        if run is not False:
+            pages[self.RUN] = run or {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}
+        document = {'profile': {'gcp': {'app_name': self.APP}, 'aws': {'app_name': self.APP}, 'automation': {}}}
+        return operator.gcp_availability(self.APP, document, {'_google': FakeSession(pages), '_kubernetes': (self.apis, self.custom)}, {'source_fence': fence})
+
+    def test_available_only_when_every_condition_holds(self):
+        self.assertTrue(self.gcp()['available'])
+        for case, key in [(dict(sql={'state': 'STOPPED', 'settings': {'activationPolicy': 'NEVER'}}), 'cloud_sql'),
+                          (dict(sql=False), 'cloud_sql'), (dict(run=False), 'cloud_run'), (dict(paused=True), 'crossplane'),
+                          (dict(fence='GCP_FENCE_PENDING'), 'fenced')]:
+            result = self.gcp(**case)
+            self.assertFalse(result['available'], case)
+            self.assertFalse(result[key], case)
+            self.assertIn('GCP indisponible', result['message'])
+
+    def test_failback_check_refuses_an_app_not_served_by_aws(self):
+        work = tempfile.TemporaryDirectory(dir=SOURCE.parents[2] / 'data' / 'failover-operations')
+        self.addCleanup(work.cleanup)
+        document = {'profile': {'gcp': {'app_name': self.APP}, 'aws': {'app_name': self.APP}, 'automation': {'regime': 'platform'}}}
+        request = {'app': self.APP, 'work': work.name, 'document': document, 'action': 'failback-check', '_kubernetes': (self.apis, self.custom)}
+        self.gcp()
+        with self.assertRaisesRegex(operator.UserAction, 'WAIT_SIGNALS'):
+            operator.execute({**request, '_control': {'state': 'WAIT_SIGNALS'}})
+        with self.assertRaisesRegex(operator.UserAction, 'GCP indisponible'):
+            operator.execute({**request, '_control': {'state': 'AWS_ACTIVE', 'source_fence': 'GCP_FENCE_PENDING'},
+                              '_google': FakeSession({self.SQL: {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}},
+                                                      self.RUN: {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}})})
+        result = operator.execute({**request, '_control': {'state': 'AWS_ACTIVE', 'source_fence': 'GCP_FENCED'},
+                                   '_google': FakeSession({self.SQL: {'state': 'RUNNABLE', 'settings': {'activationPolicy': 'ALWAYS'}},
+                                                           self.RUN: {'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}}})})
+        self.assertTrue(result['verified'] and result['gcp']['available'])
 
 
 class HealthNamesTests(unittest.TestCase):
@@ -495,12 +590,10 @@ class HealthNamesTests(unittest.TestCase):
                 'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
         return result, clients
 
-    def test_each_regime_reads_its_own_state_table_and_rules(self):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+    def test_health_reads_the_platform_state_table_and_rules(self):
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
-        from test_phase1_package import profile as pilot
-        for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),
-                                     (pilot(), 'cnp-failover-automation', 'cnp-failover-automation-')):
+        for profile, table, rule in ((fixtures.platform_profile(), 'cnp-failover-platform-state', 'cnp-failover-platform-'),):
             with self.subTest(table=table):
                 result, clients = self.health(profile)
                 self.assertFalse(result['verified'])
@@ -530,7 +623,7 @@ class TeardownTests(unittest.TestCase):
         self.custom.list_cluster_custom_object.side_effect = lambda group, v, plural, label_selector: {'items': self.items.get(plural, [])}
 
     def run_action(self, action):
-        sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
         import test_worker_phase1 as fixtures
         profile = fixtures.platform_profile()
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
@@ -593,7 +686,7 @@ class TeardownTests(unittest.TestCase):
         child = {'apiVersion': 'sql.gcp.upbound.io/v1beta1', 'kind': 'Database',
                  'metadata': {'name': 'app-db', 'deletionTimestamp': 'x'}, 'spec': {}}
         def run(status):
-            sys.path.insert(0, str(SOURCE.parents[3] / 'config-repo' / 'scripts' / 'tests'))
+            sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
             import test_worker_phase1 as fixtures
             profile = fixtures.platform_profile()
             session = Mock()
@@ -610,6 +703,32 @@ class TeardownTests(unittest.TestCase):
         self.assertIs(run(404)['verified'], True)                          # instance disparue : la base ne peut plus exister
         self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:], ('app-db', {'metadata': {'finalizers': None}}))
 
+    def test_an_update_points_the_ecs_service_to_the_new_task_revision_by_full_arn(self):
+        image = '804210702561.dkr.ecr.eu-west-3.amazonaws.com/weather-api@sha256:' + 'b' * 64
+        ok = [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]
+        arn = 'arn:aws:ecs:eu-west-3:804210702561:task-definition/weather-api-prod:7'
+        service = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'Service', 'metadata': {'name': 'weather-api-prod'},
+                   'spec': {'forProvider': {'taskDefinition': 'weather-api-prod:6', 'taskDefinitionRef': {'name': 'weather-api-prod-td'}}}}
+        task = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'TaskDefinition', 'metadata': {'name': 'weather-api-prod-td'},
+                'spec': {}, 'status': {'conditions': ok, 'atProvider': {'arn': arn, 'containerDefinitions': '[{"image": "old"}]'}}}
+        def run():
+            sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
+            import test_worker_phase1 as fixtures
+            profile = fixtures.platform_profile()
+            parent = SOURCE.parents[2] / 'data' / 'failover-operations'
+            parent.mkdir(exist_ok=True, parents=True)
+            with tempfile.TemporaryDirectory(dir=parent) as work:
+                return operator.execute({'app': profile['gcp']['app_name'], 'work': work, 'action': 'runtime-rollout',
+                    '_kubernetes': (self.apis, self.custom), 'images': {'aws': image},
+                    'document': {'profile': profile, 'credentials': {}, 'secrets': {}, 'observations': {}}})
+        self.items = {'instances': [service, task]}                        # le faux cluster sert ce pluriel
+        self.assertIs(run()['verified'], False)                            # ancienne image encore enregistrée
+        self.custom.patch_cluster_custom_object.assert_not_called()
+        task['status']['atProvider']['containerDefinitions'] = json.dumps([{'image': image}])
+        self.assertEqual(run()['task_definition'], arn)
+        self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:],
+                         ('weather-api-prod', {'spec': {'forProvider': {'taskDefinition': arn}}}))
+
     def test_gone_only_when_nothing_is_left(self):
         self.items = {'instances': [{'kind': 'Instance', 'metadata': {'name': 'rds'}, 'spec': {}},
                                     {'kind': 'Instance', 'metadata': {'name': 'going', 'deletionTimestamp': 'x'}, 'spec': {}}]}
@@ -619,3 +738,30 @@ class TeardownTests(unittest.TestCase):
         self.assertEqual([call.args[3] for call in self.custom.delete_cluster_custom_object.call_args_list], ['rds'])
         self.items = {}
         self.assertIs(self.run_action('teardown-gone')['verified'], True)
+
+
+class AwsLeftoversTests(unittest.TestCase):
+    """Ce que la suppression laissait chez AWS : révisions de tâche ECS de l'app et dépôt ECR de ses images."""
+
+    def clients(self, active, inactive, repository=True):
+        ecs, ecr = Mock(), Mock()
+        pages = {'ACTIVE': active, 'INACTIVE': inactive}
+        ecs.get_paginator.return_value.paginate.side_effect = lambda familyPrefix, status: [{'taskDefinitionArns': pages[status]}]
+        ecr.exceptions.RepositoryNotFoundException = type('RepositoryNotFoundException', (Exception,), {})
+        if not repository:
+            ecr.delete_repository.side_effect = ecr.exceptions.RepositoryNotFoundException()
+        return ecs, ecr, (lambda name: {'ecs': ecs, 'ecr': ecr}[name])
+
+    def test_only_the_app_revisions_and_its_own_repository_are_removed(self):
+        arn = lambda name: f'arn:aws:ecs:eu-west-3:804210702561:task-definition/{name}'
+        ecs, ecr, client = self.clients([arn('weather-api-prod:7'), arn('weather-api-prod-extra:1')], [arn('weather-api-prod:6')])
+        result = operator.remove_aws_leftovers('weather-api', client)
+        self.assertEqual(result, {'task_definitions_removed': 2, 'image_repository_removed': True})
+        ecs.deregister_task_definition.assert_called_once_with(taskDefinition=arn('weather-api-prod:7'))
+        ecs.delete_task_definitions.assert_called_once_with(taskDefinitions=[arn('weather-api-prod:6'), arn('weather-api-prod:7')])
+        ecr.delete_repository.assert_called_once_with(repositoryName='weather-api', force=True)
+
+    def test_nothing_left_is_not_an_error(self):
+        ecs, ecr, client = self.clients([], [], repository=False)
+        self.assertEqual(operator.remove_aws_leftovers('weather-api', client), {'task_definitions_removed': 0, 'image_repository_removed': False})
+        ecs.delete_task_definitions.assert_not_called()

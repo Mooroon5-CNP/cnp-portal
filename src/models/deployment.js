@@ -64,6 +64,10 @@ try { db.exec(`ALTER TABLE deployment_team_access ADD COLUMN permission_level TE
 try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'configuring'`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN onboarding_error TEXT`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN persistent_storage INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column already exists */ }
+// Base de l'app : null (aucune) ou 'postgres' (Cloud SQL sur GCP, en dev ; la prod avec base passe par le failover).
+try { db.exec(`ALTER TABLE deployments ADD COLUMN database_engine TEXT`); } catch (_) { /* column already exists */ }
+// Facturation Cloud Run : 'usage' (défaut) ou 'instance' (une instance toujours active). Réglée au déploiement seulement.
+try { db.exec(`ALTER TABLE deployments ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'usage'`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN owner_team_id TEXT`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN target_cluster TEXT NOT NULL DEFAULT 'gcp'`); } catch (_) { /* column already exists */ }
 try { db.exec(`ALTER TABLE deployments ADD COLUMN cloud_run_url TEXT`); } catch (_) { /* column already exists */ }
@@ -82,7 +86,7 @@ const insertStmt = db.prepare(`
     (id, app_name, github_repo_url, app_port, config_repo_token, owner_user_id, owner_team_id, onboarding_status, persistent_storage, target_cluster, deployment_environment, created_at, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
-const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, deployment_environment, failover_requested, cloud_run_url, created_at, updated_at FROM deployments ORDER BY created_at DESC');
+const listStmt = db.prepare('SELECT id, app_name, github_repo_url, app_port, owner_user_id, owner_team_id, onboarding_status, onboarding_error, persistent_storage, target_cluster, deployment_environment, failover_requested, billing_mode, cloud_run_url, created_at, updated_at FROM deployments ORDER BY created_at DESC');
 const getStmt = db.prepare('SELECT * FROM deployments WHERE id = ?');
 const deleteStmt = db.prepare('DELETE FROM deployments WHERE id = ?');
 const updateStatusStmt = db.prepare('UPDATE deployments SET onboarding_status = ?, onboarding_error = ?, updated_at = ? WHERE id = ?');
@@ -102,6 +106,8 @@ function _rowToObj(row) {
             ? 'delete_failed' : row.onboarding_status || 'configuring',
         onboardingError: row.onboarding_error || null,
         persistentStorage: !!row.persistent_storage,
+        database: row.database_engine || null,
+        billing: row.billing_mode || 'usage',
         targetCluster: row.target_cluster || 'gcp',
         environment: row.deployment_environment || 'legacy',
         failoverRequested: !!row.failover_requested,
@@ -114,7 +120,7 @@ function _rowToObj(row) {
 }
 
 module.exports = {
-    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy', failoverRequested = false }) => {
+    create: ({ appName, githubRepoUrl, appPort, configRepoToken, ownerUserId, ownerTeamId = null, persistentStorage = false, targetCluster = 'gcp', environment = 'legacy', failoverRequested = false, database = null, billing = 'usage' }) => {
         if (!['legacy', 'dev', 'prod'].includes(environment)) throw new Error('Invalid deployment environment');
         const id = uuidv4();
         const now = new Date().toISOString();
@@ -122,6 +128,10 @@ module.exports = {
         const cluster = ['aws', 'azure'].includes(targetCluster) ? targetCluster : 'gcp';
         insertStmt.run(id, appName, githubRepoUrl, appPort || null, enc, ownerUserId, ownerTeamId || null, 'configuring', persistentStorage ? 1 : 0, cluster, environment, now, now);
         if (failoverRequested) db.prepare('UPDATE deployments SET failover_requested=1 WHERE id=?').run(id);
+        if (database !== null && database !== 'postgres') throw new Error('Base inconnue.');
+        if (database) db.prepare('UPDATE deployments SET database_engine=? WHERE id=?').run(database, id);
+        if (!['usage', 'instance'].includes(billing)) throw new Error('Mode de facturation inconnu.');
+        if (billing === 'instance') db.prepare("UPDATE deployments SET billing_mode='instance' WHERE id=?").run(id);
         // Grant access to owner team automatically.
         if (ownerTeamId) {
             try { db.prepare('INSERT INTO deployment_team_access (deployment_id, team_id) VALUES (?, ?)').run(id, ownerTeamId); } catch (_) { /* duplicate — already has access */ }

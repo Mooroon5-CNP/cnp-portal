@@ -4,23 +4,17 @@ Ce document décrit tout ce dont le failover générique a besoin **hors du code
 paramètres de plateforme, outils. Rien ici n'est propre à une application. Il remplace les chemins implicites de la
 première version (dépôts « côte à côte », dossier `phase1-deployment-…` local).
 
-## Disposition des dépôts
+## Où est le code
 
-Le portail reconnaît deux dispositions sans configuration :
-
-| Disposition | Moteur (`failover-phase1`) | `config-repo` |
-|---|---|---|
-| Dépôts côte à côte | `<projet>/cnp/deployment/failover-phase1` | `<projet>/config-repo` |
-| Portail imbriqué dans `cnp` | `cnp/deployment/failover-phase1` | `cnp/config-repo` |
-
-Pour toute autre disposition (et pour un portail déployé), imposer les chemins avec les variables ci-dessous.
+Tout le Python du failover (moteur, worker, bootstrap, générateurs, gabarits de profil, tests) est dans ce dépôt, dans
+`scripts/failover/engine/`, depuis le 08/11/2026 : une seule copie, la même sur un poste et dans l'image. Plus besoin de
+dépôts voisins (`cnp`, `config-repo`) pour exécuter le failover.
 
 ## Variables d'environnement
 
 | Variable | Rôle | Défaut |
 |---|---|---|
-| `CNP_FAILOVER_ENGINE_ROOT` | Racine du moteur (contient `bootstrap.py`, `automation.py`, `platform_secrets.py`). Une valeur fausse **échoue**, sans repli silencieux | détection des deux dispositions |
-| `CNP_FAILOVER_CONFIG_REPO` | Racine du `config-repo` (générateurs et modèles de profil) | dépôt voisin du portail |
+| `CNP_FAILOVER_ENGINE_ROOT` | Autre moteur à essayer (contient `bootstrap.py`). Une valeur fausse **échoue**, sans repli silencieux | `scripts/failover/engine` |
 | `CNP_FAILOVER_PLATFORM` | Fichier des paramètres de plateforme (voir plus bas) | `data/failover-platform.json` |
 | `CNP_FAILOVER_SETTINGS` | Paramètres partagés historiques du pilote (profil, varfiles du worker) | `../phase1-deployment-20261029/portal-settings.json` |
 | `CNP_FAILOVER_PYTHON` | Python des générateurs (PyYAML requis) | `python3` |
@@ -89,22 +83,22 @@ Toute app PostgreSQL neuve est créée en **régime plateforme** ; il faut donc 
   côte, remplacer `../deployment/` par `../cnp/deployment/`).
 
   ```sh
-  python3 -m venv .venv-failover
-  .venv-failover/bin/pip install -r ../deployment/failover-phase1/requirements.platform.txt \
-    -r ../config-repo/scripts/requirements.phase1.txt
-  export CNP_FAILOVER_PYTHON="$PWD/.venv-failover/bin/python"
+  python3 -m venv data/.venv-failover
+  data/.venv-failover/bin/pip install -r scripts/failover/engine/requirements.platform.txt
+  export CNP_FAILOVER_PYTHON="$PWD/data/.venv-failover/bin/python"
   ```
 
 - **Aucune CLI** (`terraform`, `gcloud`, `kubectl`) : tout passe par les API, avec les identifiants de l'environnement
   (identifiants par défaut de Google, profil AWS, kubeconfig). Un garde-fou de test refuse tout lancement de processus.
-- Les tests du portail exigent un `config-repo` voisin (modèles de profil et générateurs).
+- Un test du portail (`failover-environment.test.js`) lit encore le contenu GitOps réel d'un `config-repo` voisin pour simuler GitHub.
 
-## Portail déployé (à prévoir)
+## Portail déployé
 
-Ce qui manque aujourd'hui à l'image du portail pour exécuter le failover : Python opérateur (`requirements.platform.txt`), le
-moteur et le `config-repo` (variables `CNP_FAILOVER_ENGINE_ROOT` et `CNP_FAILOVER_CONFIG_REPO`), un stockage persistant pour la
-base SQLite et `data/failover-operations/`, et une identité cloud. L'opérateur suppose une seule instance du portail partageant
-cet état. Plus aucune CLI n'est nécessaire.
+L'image embarque Python (`/opt/failover`, avec `requirements.platform.txt`) et `scripts/failover/` (tests exclus) ;
+`CNP_FAILOVER_PYTHON` et `CNP_FAILOVER_OPERATOR_PYTHON` y sont réglées. Reste au déploiement : un stockage persistant pour la
+base SQLite et `data/failover-operations/`, le fichier de plateforme (`CNP_FAILOVER_PLATFORM`, sans `kube_context`), et
+l'identité cloud (voir `cnp/Runbook/PORTAIL-CLUSTER.md`). L'opérateur suppose une seule instance du portail partageant cet
+état. Plus aucune CLI n'est nécessaire.
 
 Droits de l'identité du portail (à créer par la pile plateforme) :
 
