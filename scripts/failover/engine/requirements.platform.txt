@@ -1,0 +1,9 @@
+# Opérations du portail en régime plateforme (secrets par l'API, sans CLI). Versions figées, comme requirements.txt.
+-r requirements.automation.txt
+kubernetes==31.0.0
+google-cloud-secret-manager==2.21.1
+# Importés directement par l'opérateur du portail (lectures Cloud Run et Cloud SQL Admin).
+google-auth==2.38.0
+requests==2.32.3
+# Générateurs de manifestes (engine/render_*.py), déplacés du config-repo le 08/11/2026.
+PyYAML==6.0.3

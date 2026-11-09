@@ -1,0 +1,11 @@
+{
+  "app_name": "exemple-app-cnp",
+  "environment": "prod",
+  "database_security_group_id": null,
+  "database_name": "appdb",
+  "image": null,
+  "runtime_user": "cnp_runtime",
+  "runtime_secret_arn": null,
+  "listener_priority": 100,
+  "log_group_name": null
+}

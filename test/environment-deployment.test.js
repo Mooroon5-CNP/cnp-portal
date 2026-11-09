@@ -6,9 +6,10 @@ jest.mock('../src/config/env', () => ({ config: {
 } }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), getRef: jest.fn(), createBranch: jest.fn(),
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), removeApplicationSetPath: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
+jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 
 const yaml = require('js-yaml');
@@ -43,6 +44,8 @@ beforeEach(() => {
       return { data: Array.isArray(content) ? content : { content: Buffer.from(content).toString('base64') } };
     }
     if (route.includes('/git/ref/')) return { data: { object: { sha: 'config-head' } } };
+    if (route === 'GET /repos/{owner}/{repo}/git/trees/{tree_sha}') return { data: { tree: [...existing.keys()]
+      .filter(key => key.startsWith(`${args.repo}/`)).map(key => ({ type: 'blob', path: key.slice(args.repo.length + 1) })) } };
     if (route.startsWith('GET ') && route.includes('/git/commits/')) return { data: { tree: { sha: 'base-tree' } } };
     if (route === 'POST /repos/{owner}/{repo}/git/trees') { trees.push(args); return { data: { sha: `tree-${trees.length}` } }; }
     if (route === 'POST /repos/{owner}/{repo}/git/commits') return { data: { sha: `commit-${trees.length}` } };
@@ -182,8 +185,23 @@ test('deletion closes pending candidates and only removes the selected environme
   expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
   expect(argo.deleteApplication).not.toHaveBeenCalled();
   const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
-  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeLessThan(api.request.mock.invocationCallOrder[sourceDelete]);
+  // Après le retrait du dossier ET de son chemin dans l'ApplicationSet : sinon l'Application est recréée (08/11/2026).
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(kubernetes.removeApplicationSetPath.mock.invocationCallOrder[0]);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(1);
   expect((await service.reconcile(dep)).phase).toBe('configuring');
+});
+
+test('after a failover teardown, the Application is removed only once its folder has left Git', async () => {
+  production(); await service.reconcile(dep);
+  for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep, { afterFailoverTeardown: true });
+  expect(trees.at(-1).tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/prod/') && file.sha === null)).toBe(true);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(1);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-prod');
+  const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
+  expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
 });
 
 test('invalid environments and malformed image revisions fail before manifest generation', () => {
@@ -198,6 +216,67 @@ test('deleting dev removes only dev from the registry and preserves prod', async
   const registry = trees.at(-1).tree.find(file => file.path === 'apps/registry.yaml');
   expect(yaml.load(registry.content).apps[0].environments).toEqual(['prod']);
   expect(trees.at(-1).tree.some(file => file.path.includes('/crossplane/prod/'))).toBe(false);
+});
+
+test('an orphaned prod folder is removed by the bot only when the app exists nowhere else', async () => {
+  const manager = { id: 'manager', role: 'manager' };
+  for (const file of ['kustomization.yaml', 'rds-instance.yaml']) existing.set(`config/apps/gone-app/crossplane/prod/${file}`, 'x');
+  existing.set('config/apps/gone-app/crossplane/dev/kustomization.yaml', 'x');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'other' }] }));
+  await expect(service.removeOrphanProduction('gone-app', { id: 'dev', role: 'dev' })).rejects.toThrow('manager');
+  await expect(service.removeOrphanProduction(dep.appName, manager)).rejects.toThrow('connue du portail');
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValueOnce({ metadata: { name: 'gone-app-prod' } });
+  await expect(service.removeOrphanProduction('gone-app', manager)).rejects.toThrow('Argo CD');
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'gone-app' }] }));
+  await expect(service.removeOrphanProduction('gone-app', manager)).rejects.toThrow('registre');
+  expect(trees).toHaveLength(0);
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [] }));
+  expect(await service.removeOrphanProduction('gone-app', manager)).toEqual({ removed: 2 });
+  expect(trees.at(-1).tree.map(file => [file.path, file.sha])).toEqual([
+    ['apps/gone-app/crossplane/prod/kustomization.yaml', null], ['apps/gone-app/crossplane/prod/rds-instance.yaml', null]]);
+});
+
+test('deleting an environment takes its path out of the ApplicationSet list, and only its own', async () => {
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: dep.appName, environments: ['dev', 'prod'] }] }));
+  deployments.updateOnboardingStatus(dep.id, 'deleting');
+  await service.remove(dep);
+  expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-dev', 'apps/pixelcam/crossplane/dev');
+  expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledTimes(1);
+});
+
+test('a dev app with a PostgreSQL database gets its own Cloud SQL, reached through the Cloud Run socket', () => {
+  const files = service.manifests({ ...dep, database: 'postgres' }, revision);
+  const path = 'apps/pixelcam/crossplane/dev';
+  expect(yaml.load(files[`${path}/kustomization.yaml`]).resources).toContain('cloudsql.yaml');
+  const [instance, database, user] = yaml.loadAll(files[`${path}/cloudsql.yaml`]);
+  expect(instance.spec.forProvider.settings.ipConfiguration).toEqual({ ipv4Enabled: true, sslMode: 'ENCRYPTED_ONLY' });   // aucun réseau autorisé
+  expect([instance.spec.forProvider.deletionProtection, instance.spec.deletionPolicy]).toEqual([false, 'Delete']);
+  expect(database.metadata.annotations['crossplane.io/external-name']).toBe('appdb');
+  expect(user.spec.forProvider.passwordSecretRef).toEqual({ name: 'cnp-pixelcam-dev-sql', namespace: 'crossplane-system', key: 'runtime-password' });
+  expect([instance, database, user].map(object => object.metadata.annotations['argocd.argoproj.io/sync-wave'])).toEqual(['0', '1', '1']);
+  const run = yaml.load(files[`${path}/cloudrun-claim.yaml`]).spec.forProvider.template;
+  const connection = `test-project:europe-west9:${instance.metadata.annotations['crossplane.io/external-name']}`;
+  expect(run.volumes).toContainEqual({ name: 'cloudsql', cloudSqlInstance: { instances: [connection] } });
+  const env = Object.fromEntries(run.containers[0].env.map(entry => [entry.name, entry.value ?? entry.valueSource]));
+  expect(env).toMatchObject({ DB_HOST: `/cloudsql/${connection}`, DB_NAME: 'appdb', DB_USER: 'cnp_runtime',
+    DB_PASSWORD: { secretKeyRef: { secret: 'pixelcam-dev-db-password', version: 'latest' } } });
+  expect(JSON.stringify(files)).not.toMatch(/runtime-password"?:\s*"[A-Za-z0-9_-]{20,}/);              // aucune valeur secrète
+  expect(service.manifests(dep, revision)[`${path}/cloudsql.yaml`]).toBeUndefined();                 // sans base : rien
+});
+
+test('the database password is created before onboarding and removed with the app', async () => {
+  const operator = require('../src/services/failover-operations');
+  const withDatabase = deployments.create({ environment: 'dev', appName: 'sqlapp', appPort: 8080, githubRepoUrl: 'https://github.com/team/sqlapp',
+    ownerUserId: 'owner', database: 'postgres' });
+  expect(withDatabase.database).toBe('postgres');
+  await service.onboard(withDatabase).catch(() => {});
+  expect(operator.run).toHaveBeenCalledWith({ action: 'app-sql-secrets', app: 'sqlapp', environment: 'dev', service_account: 'run@test' });
+  existing.set('config/apps/registry.yaml', yaml.dump({ apps: [{ app_name: 'sqlapp', environments: ['dev'] }] }));
+  releases.save(withDatabase.id, '__registration__', releases.acquire(withDatabase.id, '__registration__', 0), 'registered');
+  deployments.updateOnboardingStatus(withDatabase.id, 'deleting');
+  await service.remove(deployments.get(withDatabase.id));
+  expect(operator.run).toHaveBeenCalledWith({ action: 'app-sql-cleanup', app: 'sqlapp', environment: 'dev', service_account: 'run@test' });
+  expect(() => deployments.create({ environment: 'dev', appName: 'bad', githubRepoUrl: 'x', ownerUserId: 'o', database: 'mysql' })).toThrow('Base inconnue');
 });
 
 test('deleting the last environment also removes the empty root folder file, never a populated one', async () => {
@@ -285,12 +364,19 @@ test('setup preserves a real legacy root unchanged', async () => {
   expect(argo.getApplicationIfExists).not.toHaveBeenCalled();
 });
 
-test('a failed explicit cascade keeps the GitOps source available for cleanup retry', async () => {
+test('a failed cascade after the source removal is retried by the next deletion attempt', async () => {
+  // Depuis le 08/11/2026 la cascade suit le retrait du dossier : un échec laisse l'Application (et ses ressources) en place,
+  // et une nouvelle tentative de suppression la relance, sans rien republier.
   for (const [path, content] of Object.entries(service.manifests(dep, revision))) existing.set(`config/${path}`, content);
   deployments.updateOnboardingStatus(dep.id, 'deleting');
-  kubernetes.cascadeDeleteArgocdApplication.mockRejectedValue(new Error('Kubernetes unavailable'));
+  kubernetes.getArgocdApplicationIfExists.mockResolvedValue({ metadata: { name: 'pixelcam-prod' } });
+  kubernetes.cascadeDeleteArgocdApplication.mockRejectedValueOnce(new Error('Kubernetes unavailable'));
   await expect(service.remove(dep)).rejects.toThrow('Kubernetes unavailable');
-  expect(published).toHaveLength(0); expect(trees).toHaveLength(0);
+  expect(trees.at(-1).tree.some(file => file.sha === null)).toBe(true);                      // dossier déjà retiré de Git
+  await expect(service.remove(dep)).resolves.toBeUndefined();
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledTimes(2);
+  // Seulement des retraits (et le registre) : aucun manifeste de l'app n'est republié par la reprise.
+  expect(trees.flatMap(tree => tree.tree).filter(file => file.sha !== null && file.path.startsWith('apps/pixelcam/crossplane/'))).toHaveLength(0);
 });
 
 test('setup will not adopt a preexisting historical prod directory without a tracked release', async () => {
@@ -432,6 +518,16 @@ test('runtime secret configuration rejects plaintext values before publication',
   expect(published).toHaveLength(0);
 });
 
+test('le failover publie la provenance seulement après succès du pipeline prod', () => {
+  const doc = yaml.load(service.workflow('telemetry-api', { appName: 'telemetry-api', environment: 'prod', failoverRequested: true, appPort: 8080 }));
+  expect(doc.jobs.pipeline.with.target_cloud).toBe('both');
+  expect(doc.jobs.pipeline.with.gitops_mode).toBe('portal');
+  expect(doc.jobs['failover-images'].needs).toEqual(['pipeline']);
+  expect(doc.jobs['failover-images'].if).toContain("needs.pipeline.result == 'success'");
+  expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
+  expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
+});
+
 test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: 'registry.test/project/apps/pixelcam:old', failure: "Revision 'old' failed to start", url: null });
   const result = await service.reconcile(dep);
@@ -440,4 +536,15 @@ test('an old Cloud Run revision failure is not attributed to the newly published
   expect(result.message).not.toContain("Revision 'old'");
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: false, image: `registry.test/project/apps/pixelcam:${revision}`, failure: 'Current revision failed to start', url: null });
   expect(await service.reconcile(dep)).toMatchObject({ phase: 'failed', message: 'Cloud Run : Current revision failed to start' });
+});
+
+test('la facturation « à l’instance » garde une instance active et son CPU alloué ; l’usage ne change rien', () => {
+  const path = 'apps/pixelcam/crossplane/dev';
+  const run = billing => yaml.load(service.manifests({ ...dep, billing }, revision)[`${path}/cloudrun-claim.yaml`]).spec.forProvider.template;
+  const instance = run('instance');
+  expect(instance.scaling).toEqual({ minInstanceCount: 1 });
+  expect(instance.containers[0].resources).toEqual({ cpuIdle: false });
+  const usage = run('usage');
+  expect(usage.scaling).toBeUndefined();
+  expect(usage.containers[0].resources).toBeUndefined();
 });

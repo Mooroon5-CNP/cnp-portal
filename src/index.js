@@ -107,6 +107,7 @@ app.use((err, req, res, _next) => {
 
 if (require.main === module) {
   require('./services/environment-deployment').startReconciler();
+  require('./services/failover-provisioning').startReconciler();
   const PORT = process.env.PORT || 3000;
   const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
   app.listen(PORT, HOST, () => {

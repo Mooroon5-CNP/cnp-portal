@@ -116,10 +116,12 @@ async function getApplicationIfExists(name) {
   }
 }
 
-async function syncApplication(appName) {
+async function syncApplication(appName, resources) {
   const client = await makeClient();
   try {
-    const { data } = await client.post(`/applications/${encodeURIComponent(appName)}/sync`, {});
+    const { data } = await client.post(`/applications/${encodeURIComponent(appName)}/sync`, {
+      prune: false, ...(resources ? { resources } : {}),
+    });
     return {
       name: data.metadata?.name,
       sync: data.status?.sync?.status,

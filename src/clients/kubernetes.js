@@ -235,6 +235,17 @@ async function applyApplicationSet(manifest) {
     // Try to update first; if 404, create instead.
     try {
       const { body: existing } = await customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+      if (/^crossplane-autodiscovery-(dev|prod)$/.test(name)) {
+        const paths = manifest.spec.generators[0].git.directories.map(entry => entry.path);
+        const patch = require('../services/application-set-preservation').additivePatch(existing, paths);
+        // Le rôle borné du portail autorise UPDATE, pas PATCH. Conserver
+        // l'objet complet et son resourceVersion garde le contrôle de concurrence.
+        const updated = JSON.parse(JSON.stringify(existing));
+        updated.spec.generators[0].git.directories = patch[1].value;
+        updated.spec.syncPolicy = patch[2].value;
+        await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, updated);
+        return;
+      }
       manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
       await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, manifest);
     } catch (e) {
@@ -246,6 +257,28 @@ async function applyApplicationSet(manifest) {
     }
   } catch (err) {
     handleError(err, `applyApplicationSet(${name})`);
+  }
+}
+
+// Retire de la liste d'un ApplicationSet partagé le seul chemin d'une app supprimée. La liste est volontairement explicite
+// (seules les apps enregistrées par le portail se déploient) et ne fait que croître à l'enregistrement : sans ce retrait, le
+// chemin d'une app supprimée y restait (constaté le 07/11/2026). Les autres chemins ne sont jamais touchés ; UPDATE avec le
+// resourceVersion lu, comme applyApplicationSet (le rôle borné du portail n'a pas PATCH).
+async function removeApplicationSetPath(name, path) {
+  if (!/^crossplane-autodiscovery-(dev|prod)$/.test(name)) throw new Error(`ApplicationSet ${name} : retrait de chemin refusé.`);
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body: existing } = await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name);
+    const directories = existing.spec?.generators?.[0]?.git?.directories;
+    if (!Array.isArray(directories) || !directories.some(entry => entry.path === path && !entry.exclude)) return false;
+    const updated = JSON.parse(JSON.stringify(existing));
+    updated.spec.generators[0].git.directories = directories.filter(entry => entry.path !== path || entry.exclude);
+    await customApi.replaceNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name, updated);
+    return true;
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return false;
+    handleError(err, `removeApplicationSetPath(${name})`);
   }
 }
 
@@ -308,6 +341,14 @@ async function deleteArgocdApplication(name) {
 // Lit une Application Argo CD par l'API Kubernetes (le compte cnp-portal y a get/list dans le namespace argocd).
 // L'API Argo CD répond 403 « permission denied » à ce compte pour une application qui n'existe pas (il n'a pas le
 // droit de lecture sur toutes les applications), alors que Kubernetes répond proprement 404. Renvoie null si absente.
+// Demande à Argo CD de relire Git tout de suite (au lieu d'attendre sa lecture régulière, ~3 min).
+async function refreshArgocdApplication(name) {
+  const customApi = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  await customApi.patchNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+    { metadata: { annotations: { 'argocd.argoproj.io/refresh': 'normal' } } },
+    undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
+}
 async function getArgocdApplicationIfExists(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -611,10 +652,11 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
 }
 
 module.exports = {
+  refreshArgocdApplication,
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
-  applyApplicationSet, deleteApplicationSet,
+  applyApplicationSet, deleteApplicationSet, removeApplicationSetPath,
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
