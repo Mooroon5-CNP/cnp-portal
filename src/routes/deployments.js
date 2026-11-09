@@ -417,6 +417,36 @@ router.post('/:id/failover/confirm', requireAuth, requirePermission('k8s:manifes
 });
 
 // Retry only failed setup; never deploy, adopt or clean up resources via a GET.
+const pipelineRetries = new Set();
+router.post('/:id/retry-pipeline', requireAuth, requirePermission('cicd:trigger-pipeline'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable.');
+    if (!canViewDeployment(req.user, dep) || !(req.user.role === 'manager' || req.user.id === dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé.');
+    }
+    if (dep.onboardingStatus !== 'ready' || pipelineRetries.has(dep.id)) {
+        return res.status(409).send('La pipeline ne peut pas être relancée dans cet état.');
+    }
+    pipelineRetries.add(dep.id);
+    try {
+        const source = githubService.parseRepoUrl(dep.githubRepoUrl);
+        if (!source) return res.status(409).send('Repo GitHub invalide.');
+        const runs = await githubClient.getRuns(source.owner, source.repo, 20, sourceBranch(dep), workflowId(dep));
+        const run = selectWorkflowRun(runs || [], { branch: sourceBranch(dep), notBefore: dep.createdAt });
+        if (!run || String(run.id) !== String(req.body.runId) || run.status !== 'completed' || run.conclusion !== 'failure') {
+            return res.status(409).send('Seule la dernière pipeline en échec peut être relancée. Actualisez la page.');
+        }
+        await githubClient.dispatchWorkflow(source.owner, source.repo, workflowId(dep) || 'ci.yml', sourceBranch(dep), dep.appName);
+        req.flash('success', 'Nouvelle pipeline demandée sur la version actuelle de la branche. Le suivi se met à jour dès son démarrage sur GitHub.');
+        return res.redirect(`/deployments/${dep.id}`);
+    } catch (_) {
+        req.flash('error', 'Impossible de relancer la pipeline. Vérifiez les droits GitHub Actions et réessayez.');
+        return res.redirect(`/deployments/${dep.id}`);
+    } finally {
+        pipelineRetries.delete(dep.id);
+    }
+});
+
 router.post('/:id/retry-configuration', requireAuth, requirePermission('deployments:deploy'), (req, res) => {
     const dep = deploymentModel.get(req.params.id);
     if (!dep) return res.status(404).send('Déploiement introuvable.');
@@ -658,6 +688,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
+        canRetryPipeline: can(req.user, 'cicd:trigger-pipeline') && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
         environmentStatus: selectedStatus,
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title }) %>
+<body><div class="layout">
+<%- include('../partials/sidebar') %>
+<main class="main-content"><div class="content-wrapper">
+  <div class="page-header"><div><h1 class="page-title">Créer un repo</h1>
+    <p class="page-subtitle">Préparez votre application. Vous choisirez ensuite quand la déployer.</p></div>
+    <a class="btn btn-secondary" href="/deployments">Déployer une application existante</a>
+  </div>
+  <section class="card" style="padding:24px;margin-bottom:20px;">
+    <h2>Développer votre application</h2>
+    <p>Consultez le guide pour démarrer : structure des templates, lancement local et fichiers gérés par la plateforme. Le lien vers votre repo GitHub sera disponible après sa création.</p>
+    <p><a class="btn btn-secondary" href="/docs/APPLICATION_TEMPLATE_GUIDE.md">Aller voir la documentation</a></p>
+    <h2>Quel modèle choisir ?</h2>
+    <p>Les deux modèles utilisent Python et Flask, avec un exemple qui enregistre les visites dans la base.</p>
+    <p><strong>SQLite :</strong> une base dans un fichier, adaptée aux applications simples avec peu d’écritures simultanées. Déploiement GCP SQLite avec stockage persistant. Évitez plusieurs instances partageant le fichier.</p>
+    <p><strong>PostgreSQL :</strong> une base sur un serveur séparé, adaptée aux écritures concurrentes. Déploiement GCP Cloud SQL ou Azure PostgreSQL. Le secours PostgreSQL sur GCP en production se configure au déploiement.</p>
+    <details><summary>Aidez-moi à choisir</summary>
+      <div class="form-group"><label for="concurrency">Prévoyez-vous plusieurs utilisateurs écrivant en même temps ?</label>
+        <select id="concurrency"><option value="">Choisir</option><option value="no">Peu d’écritures simultanées</option><option value="yes">Oui, des écritures concurrentes</option></select></div>
+      <div class="form-group"><label for="availability">Avez-vous besoin du secours PostgreSQL en production ?</label>
+        <select id="availability"><option value="">Choisir</option><option value="no">Non</option><option value="yes">Oui</option></select></div>
+      <p id="recommendation" aria-live="polite">Répondez aux deux questions pour obtenir une recommandation. Vous gardez le choix du modèle.</p>
+    </details>
+  </section>
+  <form action="/repositories" method="POST" novalidate class="card" style="padding:24px;">
+    <input type="hidden" name="submissionToken" value="<%= submissionToken %>">
+    <div class="form-group"><label for="name">Nom du repo</label>
+      <input id="name" name="name" required minlength="2" maxlength="39" pattern="[a-z0-9][a-z0-9-]{0,37}[a-z0-9]" value="<%= values.name || '' %>">
+      <small>2 à 39 caractères : minuscules, chiffres et tirets.</small></div>
+    <div class="form-group"><label for="template">Modèle et base de données</label>
+      <select id="template" name="template" required><option value="">Choisissez votre modèle</option>
+        <% Object.entries(templates).forEach(([key, item]) => { %>
+          <option value="<%= key %>" <%= values.template === key ? 'selected' : '' %>><%= item.label %></option>
+        <% }) %>
+      </select></div>
+    <div class="form-group"><label for="port">Port de l’application</label>
+      <input type="number" id="port" name="port" min="1" max="65535" required value="<%= values.port || 8080 %>"></div>
+    <div class="form-group"><label for="description">Description (facultatif)</label>
+      <input id="description" name="description" maxlength="350" value="<%= values.description || '' %>"></div>
+    <div class="form-group"><label><input type="checkbox" name="publicAcknowledged" value="yes" required <%= values.publicAcknowledged === 'yes' ? 'checked' : '' %>> Je comprends que le repo créé sera public.</label></div>
+    <p>Cette action crée le code et les branches main et prod. Elle ne crée aucune ressource cloud et ne lance aucun déploiement.</p>
+    <p id="repositoryError" class="text-danger" role="alert" tabindex="-1" <%= error ? '' : 'hidden' %>><%= error || '' %></p>
+    <button class="btn btn-primary" type="submit">Créer le repo</button>
+    <a class="btn btn-secondary" href="/deployments">Annuler</a>
+  </form>
+</div></main></div><script src="/js/repository-create.js"></script></body></html>

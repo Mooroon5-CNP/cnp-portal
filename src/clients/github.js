@@ -142,6 +142,40 @@ async function getRuns(owner, repo, perPage = 5, branch = 'main', workflowId = n
   }
 }
 
+// Start a new run on the current branch head; never reuse an old run's SHA.
+async function dispatchWorkflow(owner, repo, workflowId, branch, appName) {
+  const octokit = await getInstallationOctokit();
+  const yaml = require('js-yaml');
+  const { data: repository } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
+  const path = `.github/workflows/${workflowId}`;
+  const updates = [];
+  // GitHub requires dispatch support on the default branch as well as the selected ref.
+  for (const ref of new Set([repository.default_branch || 'main', branch])) {
+    const { data: file } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path, ref });
+    const workflow = yaml.load(Buffer.from(file.content, 'base64').toString('utf8'));
+    const caller = workflow?.jobs?.pipeline;
+    if (!caller?.uses?.startsWith('Mooroon5-CNP/ci-templates/') || caller.with?.app_name !== appName) {
+      throw new Error('Ce workflow n’est pas un workflow CNP reconnu. Contactez l’équipe plateforme.');
+    }
+    let triggers = workflow.on;
+    if (typeof triggers === 'string') triggers = { [triggers]: null };
+    if (Array.isArray(triggers)) triggers = Object.fromEntries(triggers.map(trigger => [trigger, null]));
+    if (!triggers || typeof triggers !== 'object') throw new Error('Déclencheurs du workflow invalides.');
+    if (!Object.prototype.hasOwnProperty.call(triggers, 'workflow_dispatch')) {
+      workflow.on = { ...triggers, workflow_dispatch: {} };
+      updates.push({ branch: ref, sha: file.sha, content: Buffer.from(yaml.dump(workflow, { lineWidth: -1 })).toString('base64') });
+    }
+  }
+  for (const update of updates) {
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner, repo, path, ...update, message: `ci(${appName}): enable manual pipeline [skip ci]`,
+    });
+  }
+  await octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+    owner, repo, workflow_id: workflowId, ref: branch,
+  });
+}
+
 // Get jobs for a specific run via GitHub App auth.
 async function getRunJobs(owner, repo, runId) {
   const octokit = await getInstallationOctokit();
@@ -217,6 +251,88 @@ async function checkActionsEnabled(owner, repo) {
   }
 }
 
+// Get a repository, or null when it does not exist (or is invisible to the App).
+async function getRepoOrNull(owner, repo) {
+  const octokit = await getInstallationOctokit();
+  try {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
+    return data;
+  } catch (err) {
+    if (err.status === 404) return null;
+    if (err.status === 401) _octokit = null;
+    throw new Error(`Impossible de vérifier le repo ${owner}/${repo} : ${err.message}`);
+  }
+}
+
+// Create a repository in an organisation, with an initial commit on the default
+// branch (needed so the Git Data API can push on top of it).
+async function createOrgRepo(org, name, { description = '', isPrivate = false } = {}) {
+  const octokit = await getInstallationOctokit();
+  try {
+    const { data } = await octokit.request('POST /orgs/{org}/repos', {
+      org, name, description, private: isPrivate, auto_init: true,
+    });
+    return data;
+  } catch (err) {
+    if (err.status === 401) _octokit = null;
+    if (err.status === 422) throw new Error(`Le repo ${org}/${name} existe déjà ou son nom est refusé par GitHub.`);
+    if (err.status === 403 || err.status === 404) {
+      throw new Error(`La GitHub App ne peut pas créer de repos dans ${org} (permission Administration: write et accès de l’installation requis).`);
+    }
+    throw new Error(`Impossible de créer le repo ${org}/${name} : ${err.message}`);
+  }
+}
+
+// Used only when a newly created repository starts on another default branch.
+async function setDefaultBranch(owner, repo, branch) {
+  const octokit = await getInstallationOctokit();
+  await octokit.request('PATCH /repos/{owner}/{repo}', { owner, repo, default_branch: branch });
+}
+
+// List the blobs of a tree (recursive) at a ref, as [{ path, sha }].
+async function listBlobs(owner, repo, ref) {
+  const octokit = await getInstallationOctokit();
+  const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+    owner, repo, tree_sha: ref, recursive: '1',
+  });
+  if (data.truncated) throw new Error(`Tree of ${owner}/${repo}@${ref} is too large to be read in one call.`);
+  return data.tree.filter(entry => entry.type === 'blob').map(({ path, sha }) => ({ path, sha }));
+}
+
+// Read a blob as a Buffer.
+async function getBlob(owner, repo, sha) {
+  const octokit = await getInstallationOctokit();
+  const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', { owner, repo, file_sha: sha });
+  return Buffer.from(data.content, data.encoding === 'base64' ? 'base64' : 'utf8');
+}
+
+// Push several files as ONE commit on top of a branch (Git Data API).
+// files: [{ path, content: Buffer }]. Returns the new commit SHA.
+async function commitFiles(owner, repo, branch, files, message) {
+  const octokit = await getInstallationOctokit();
+  const parentSha = await getRef(owner, repo, branch);
+  const { data: parent } = await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
+    owner, repo, commit_sha: parentSha,
+  });
+  const tree = [];
+  for (const file of files) {
+    const { data: blob } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+      owner, repo, content: file.content.toString('base64'), encoding: 'base64',
+    });
+    tree.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
+  }
+  const { data: newTree } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
+    owner, repo, base_tree: parent.tree.sha, tree,
+  });
+  const { data: commit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
+    owner, repo, message, tree: newTree.sha, parents: [parentSha],
+  });
+  await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+    owner, repo, ref: `heads/${branch}`, sha: commit.sha, force: false,
+  });
+  return commit.sha;
+}
+
 async function checkConnectivity() {
   const octokit = await getInstallationOctokit();
   await octokit.request('GET /app');
@@ -232,9 +348,17 @@ module.exports = {
   getLatestRun,
   getRuns,
   getRunJobs,
+  dispatchWorkflow,
   deleteFile,
   setRepoVariable,
   deleteSecret,
   checkActionsEnabled,
+  setOctokitForTesting: octokit => { if (process.env.NODE_ENV !== 'test') throw new Error('Test only'); _octokit = octokit; },
+  getRepoOrNull,
+  createOrgRepo,
+  setDefaultBranch,
+  listBlobs,
+  getBlob,
+  commitFiles,
   checkConnectivity,
 };

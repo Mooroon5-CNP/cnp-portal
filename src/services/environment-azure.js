@@ -58,7 +58,7 @@ function workflow(dep, workflowRef) {
   const configRepo = config.github.configRepoName || 'Mooroon5-CNP/config-repo';
   return yaml.dump({
     name: `CNP — ${dep.appName}`,
-    on: { push: { branches: ['main', 'prod'] } },
+    on: { push: { branches: ['main', 'prod'] }, workflow_dispatch: {} },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${dep.appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
     jobs: {

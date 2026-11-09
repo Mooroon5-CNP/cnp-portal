@@ -77,7 +77,7 @@
                     <div style="display:flex;flex-direction:column;gap:8px;padding:8px 0;font-size:13px;color:var(--text-muted);">
                       <div>⏳ Création des manifests Kubernetes dans config-repo</div>
                       <div>⏳ Enregistrement dans le registre applicatif</div>
-                      <div>⏳ Création du pipeline CI/CD dans le dépôt</div>
+                      <div>⏳ Création du pipeline CI/CD dans le repo</div>
                       <div>⏳ Injection du secret <code>CONFIG_REPO_TOKEN</code></div>
                       <div>⏳ Création de la branche <code>prod</code></div>
                       <div>⏳ Déclenchement du premier pipeline</div>
@@ -230,6 +230,16 @@
                     <% } %>
                   </div>
                   <div class="card-body">
+                    <% if (latest && latest.status === 'completed' && latest.conclusion === 'failure' && canRetryPipeline) { %>
+                      <div class="flash flash-error" style="margin-bottom:16px;">
+                        <p>La pipeline a échoué. Consultez les erreurs et corrigez leur cause avant de relancer.</p>
+                        <form method="POST" action="/deployments/<%= deployment.id %>/retry-pipeline" onsubmit="this.querySelector('button').disabled=true;">
+                          <input type="hidden" name="runId" value="<%= latest.id %>">
+                          <button type="submit" class="btn btn-primary">Relancer la pipeline</button>
+                        </form>
+                        <p>Une nouvelle pipeline sera lancée sur la version actuellement présente dans <%= deployment.sourceBranch %>. Les validations de production restent appliquées.</p>
+                      </div>
+                    <% } %>
                     <% if (!latest) { %>
                       <div id="waiting-run" style="color:var(--text-muted);">
                         En attente du premier pipeline CI...
@@ -559,6 +569,11 @@
 
             // CI done — check for Cloud Run URL.
             if (data.phase === 'success' || data.phase === 'failed') {
+              if (data.phase === 'failed' && !terminal) {
+                clearInterval(timer);
+                window.location.reload();
+                return;
+              }
               if (cluster === 'gcp') {
                 if (data.cloudRunUrl) {
                   clearInterval(timer);

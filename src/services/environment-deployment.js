@@ -35,7 +35,7 @@ function workflowName(appName) { return `cnp-${appName}.yml`; }
 function image(dep, revision) { return `${config.github.registryUrl || config.gcp.imageRegistry}/${dep.appName}:${revision}`; }
 function workflow(appName, dep = {}) {
   if (azure.isAzure(dep)) return azure.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
-  const document = { name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] } },
+  const document = { name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] }, workflow_dispatch: {} },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
     jobs: { pipeline: {

@@ -1,7 +1,7 @@
 'use strict';
 
 jest.mock('../src/config/env', () => ({ config: { github: { configRepoName: 'team/config', configRepoToken: 'test-token' }, gcp: {} } }));
-jest.mock('../src/clients/github', () => ({ getLatestRun: jest.fn(), getRuns: jest.fn(), getRunJobs: jest.fn() }));
+jest.mock('../src/clients/github', () => ({ getLatestRun: jest.fn(), getRuns: jest.fn(), getRunJobs: jest.fn(), getRef: jest.fn(), dispatchWorkflow: jest.fn() }));
 jest.mock('../src/clients/kubernetes', () => ({ getV2ServiceUrl: jest.fn() }));
 jest.mock('../src/services/github', () => ({
     ...jest.requireActual('../src/services/github'), getFileContent: jest.fn(), getPullRequestStatus: jest.fn(),
@@ -58,8 +58,62 @@ beforeEach(() => {
     github.getRuns.mockResolvedValue([]);
     github.getLatestRun.mockResolvedValue(null);
     github.getRunJobs.mockResolvedValue([]);
+    github.getRef.mockResolvedValue(revision);
+    github.dispatchWorkflow.mockResolvedValue();
     repositories.getFileContent.mockResolvedValue(null);
     kubernetes.getV2ServiceUrl.mockResolvedValue(null);
+});
+
+function failedRun(branch = 'main') {
+    return { id: 123, status: 'completed', conclusion: 'failure', head_branch: branch, head_sha: revision, created_at: new Date(Date.now() + 1000).toISOString() };
+}
+
+test('a failed pipeline exposes rerun and starts a new workflow on the current branch without onboarding', async () => {
+    const dep = create('dev');
+    github.getRuns.mockResolvedValue([failedRun()]);
+    const page = await request(app).get(`/deployments/${dep.id}`);
+    expect(page.text).toContain('Relancer la pipeline');
+    expect(page.text).not.toContain('Développer votre application');
+    const response = await request(app).post(`/deployments/${dep.id}/retry-pipeline`).type('form').send({ runId: 123 });
+    expect(response.status).toBe(302);
+    expect(github.getRuns).toHaveBeenLastCalledWith('team', 'sample', 20, 'main', 'cnp-sample-app.yml');
+    expect(github.dispatchWorkflow).toHaveBeenCalledWith('team', 'sample', 'cnp-sample-app.yml', 'main', 'sample-app');
+    expect(service.onboard).not.toHaveBeenCalled();
+    expect(deployments.get(dep.id).onboardingStatus).toBe('ready');
+});
+
+test.each([
+    { status: 'in_progress', conclusion: null }, { conclusion: 'success' },
+    { head_branch: 'prod' }, { id: 456 }, { created_at: '2000-01-01T00:00:00Z' },
+])('refuses rerunning an ineligible run: %j', async override => {
+    const dep = create('dev');
+    github.getRuns.mockResolvedValue([{ ...failedRun(), ...override }]);
+    expect((await request(app).post(`/deployments/${dep.id}/retry-pipeline`).type('form').send({ runId: 123 })).status).toBe(409);
+    expect(github.dispatchWorkflow).not.toHaveBeenCalled();
+});
+
+test('accepts changed revisions and rejects readers; production dispatch targets prod', async () => {
+    const dep = create('prod');
+    github.getRuns.mockResolvedValue([failedRun('prod')]);
+    github.getRef.mockResolvedValue('b'.repeat(40));
+    expect((await request(app).post(`/deployments/${dep.id}/retry-pipeline`).type('form').send({ runId: 123 })).status).toBe(302);
+    expect(github.dispatchWorkflow).toHaveBeenCalledWith('team', 'sample', 'cnp-sample-app.yml', 'prod', 'sample-app');
+    github.dispatchWorkflow.mockClear();
+    expect(github.getRuns).toHaveBeenCalledWith('team', 'sample', 20, 'prod', 'cnp-sample-app.yml');
+    const visible = jest.spyOn(deployments, 'listForUser').mockReturnValue([dep]);
+    try {
+        expect((await request(app).post(`/deployments/${dep.id}/retry-pipeline`).set('X-role', 'dev').set('X-user-id', 'reader').type('form').send({ runId: 123 })).status).toBe(403);
+    } finally { visible.mockRestore(); }
+    expect(github.dispatchWorkflow).not.toHaveBeenCalled();
+});
+
+test('GitHub rerun errors remain visible and leave deployment state intact', async () => {
+    const dep = create('dev');
+    github.getRuns.mockResolvedValue([failedRun()]);
+    github.dispatchWorkflow.mockRejectedValue(new Error('Forbidden'));
+    expect((await request(app).post(`/deployments/${dep.id}/retry-pipeline`).type('form').send({ runId: 123 })).status).toBe(302);
+    expect(deployments.get(dep.id).onboardingStatus).toBe('ready');
+    expect(service.onboard).not.toHaveBeenCalled();
 });
 
 test('the form exposes dev/main and prod/approval choices', async () => {
@@ -85,6 +139,7 @@ test('environment addresses never advertise DNS readiness from runtime readiness
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
     expect(response.text).toContain('https://sample-app.apps.mooroon5.fr');
+    expect(response.text).not.toContain('Développer votre application');
     expect(response.text).not.toContain('href="https://sample-app-prod.run.app"');
     expect(response.text).toContain('href="https://sample-app.apps.mooroon5.fr"');
     service.reconcile.mockResolvedValue({ phase: 'deploying', revision, cloudRunUrl: 'https://sample-app-dev.run.app' });
