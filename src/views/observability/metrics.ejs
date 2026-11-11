@@ -11,38 +11,102 @@
       <div class="page-header">
         <div>
           <div class="page-title">Métriques</div>
-          <div class="page-subtitle">4 golden signals — via Datadog (lecture seule)</div>
+          <div class="page-subtitle">Santé des applications de votre équipe, lue dans Datadog. Survolez un titre de colonne pour savoir ce qu'il mesure.</div>
         </div>
       </div>
 
-      <div class="grid-2 mb-6">
-        <div class="metric-card card">
-          <div class="metric-name">Latence (p50 / p95 / p99)</div>
-          <div class="metric-value"><%= metrics.latency.p50 %></div>
-          <div class="metric-unit"><%= metrics.latency.unit %> · p95: <%= metrics.latency.p95 %><%= metrics.latency.unit %> · p99: <%= metrics.latency.p99 %><%= metrics.latency.unit %></div>
+      <%- include('../partials/observability-nav', { active: 'metrics' }) %>
+
+      <%
+        const show = v => (v === null || v === undefined ? '—' : v);
+        const pct = v => (v === null || v === undefined ? '—' : v + ' %');
+        const hot = v => (v !== null && v !== undefined && v > 80 ? 'color:var(--danger)' : '');
+        const th = (label, help) => `<th><span class="obs-th-help" title="${help}">${label}</span></th>`;
+        const logsLink = s => `/observability/logs?service=${encodeURIComponent(s)}&range=${window.range}` + (window.range === 'custom' ? `&from=${window.fromDay}&to=${window.toDay}` : '');
+      %>
+      <% if (services.length > 0) { %>
+      <% if (unavailable) { %>
+      <div class="card"><div class="card-body" style="text-align:center;color:var(--danger);padding:32px;">Datadog est indisponible pour le moment. Réessayez dans quelques instants.</div></div>
+      <% } else { %>
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title">Cloud Run (GCP) <span class="text-muted" style="font-weight:400;">— <%= window.label %></span></span>
         </div>
-        <div class="metric-card card">
-          <div class="metric-name">Taux d'erreur</div>
-          <div class="metric-value" style="color: <%= metrics.errorRate.value > 5 ? 'var(--danger)' : 'var(--success)' %>"><%= metrics.errorRate.value %></div>
-          <div class="metric-unit"><%= metrics.errorRate.unit %></div>
-        </div>
-        <div class="metric-card card">
-          <div class="metric-name">Saturation (CPU / Mémoire)</div>
-          <div class="metric-value" style="color: <%= metrics.saturation.cpu > 80 ? 'var(--danger)' : 'var(--text)' %>"><%= metrics.saturation.cpu %></div>
-          <div class="metric-unit"><%= metrics.saturation.unit %> CPU · <%= metrics.saturation.memory %><%= metrics.saturation.unit %> Mémoire</div>
-        </div>
-        <div class="metric-card card">
-          <div class="metric-name">Trafic</div>
-          <div class="metric-value"><%= metrics.traffic.rps %></div>
-          <div class="metric-unit"><%= metrics.traffic.unit %></div>
+        <div class="table-container">
+          <table>
+            <thead><tr>
+              <th>Application</th>
+              <%- th('Requêtes', 'Nombre de requêtes HTTP reçues sur la période. Indique si l’application est utilisée.') %>
+              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total. Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
+              <%- th('Latence p95', 'Temps de réponse sous lequel se trouvent 95 % des requêtes (pire valeur de la période). Ce que ressentent les utilisateurs les moins bien servis.') %>
+              <%- th('CPU moy. / pic', 'Part du processeur alloué réellement utilisée : moyenne de la période, puis pic (99e centile). Un pic proche de 100 % signifie que l’instance sature et ralentit.') %>
+              <%- th('Mémoire moy. / pic', 'Part de la mémoire allouée utilisée : moyenne, puis pic (99e centile). À 100 %, Cloud Run redémarre l’instance (plantage « out of memory »).') %>
+              <%- th('Instances moy. / max', 'Nombre de copies de l’application qui tournaient. Cloud Run en lance selon le trafic et peut descendre à zéro : 0,1 en moyenne veut dire qu’une instance a tourné environ 10 % du temps.') %>
+              <%- th('Taille', 'Ressources de chaque instance (vCPU et mémoire), déduites du temps alloué que GCP facture. Pour la changer, il faut modifier le déploiement.') %>
+            </tr></thead>
+            <tbody>
+              <% const run = metrics.filter(m => m.cloudRun); %>
+              <% run.forEach(m => { const c = m.cloudRun; %>
+              <tr>
+                <td><a href="<%= logsLink(m.service) %>" class="font-mono" title="Voir les logs de cette application"><%= m.service %></a></td>
+                <td><%= show(c.requests) %></td>
+                <td style="<%= c.errors > 0 ? 'color:var(--danger)' : '' %>"><%= show(c.errors) %><% if (c.errorRate !== null) { %> <span class="text-muted">(<%= c.errorRate %> %)</span><% } %></td>
+                <td><%= c.latencyP95 === null ? '—' : c.latencyP95 + ' ms' %></td>
+                <td><span style="<%= hot(c.cpu) %>"><%= pct(c.cpu) %></span> <span class="text-muted">/</span> <span style="<%= hot(c.cpuPeak) %>"><%= pct(c.cpuPeak) %></span></td>
+                <td><span style="<%= hot(c.memory) %>"><%= pct(c.memory) %></span> <span class="text-muted">/</span> <span style="<%= hot(c.memoryPeak) %>"><%= pct(c.memoryPeak) %></span></td>
+                <td><%= show(c.instances) %> <span class="text-muted">/</span> <%= show(c.instancesMax) %></td>
+                <td><%= c.size ? `${c.size.vcpu} vCPU · ${c.size.memoryMiB} Mio` : '—' %></td>
+              </tr>
+              <% }) %>
+              <% if (run.length === 0) { %>
+              <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px;">Aucune métrique Cloud Run sur cette période (une app sans trafic ne remonte rien).</td></tr>
+              <% } %>
+            </tbody>
+          </table>
         </div>
       </div>
 
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title" title="ECS est le service de conteneurs d’AWS. Une production avec failover y garde une copie prête à prendre le relais si GCP tombe.">ECS (AWS, secours) <span class="text-muted" style="font-weight:400;">— <%= window.label %></span></span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr>
+              <th>Application</th>
+              <%- th('CPU moy. / pic', 'Part du processeur réservé pour la tâche ECS : moyenne de la période, puis maximum.') %>
+              <%- th('Mémoire moy. / pic', 'Part de la mémoire réservée pour la tâche ECS : moyenne, puis maximum.') %>
+              <%- th('Tâches en cours', 'Nombre de copies de l’application qui tournent sur AWS (dernière valeur). 1 = la copie de secours est prête.') %>
+            </tr></thead>
+            <tbody>
+              <% const ecs = metrics.filter(m => m.ecs); %>
+              <% ecs.forEach(m => { const e = m.ecs; %>
+              <tr>
+                <td><a href="<%= logsLink(m.service) %>" class="font-mono" title="Voir les logs de cette application"><%= m.service %></a></td>
+                <td><%= pct(e.cpu) %> <span class="text-muted">/</span> <%= pct(e.cpuPeak) %></td>
+                <td><%= pct(e.memory) %> <span class="text-muted">/</span> <%= pct(e.memoryPeak) %></td>
+                <td><%= show(e.running) %></td>
+              </tr>
+              <% }) %>
+              <% if (ecs.length === 0) { %>
+              <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px;">Aucune application de votre équipe ne tourne sur ECS sur cette période.</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <% const silent = metrics.filter(m => !m.cloudRun && !m.ecs); %>
+      <% if (silent.length > 0) { %>
       <div class="card">
-        <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px;">
-          <strong>Note MVP :</strong> Les graphiques temps-réel seront disponibles en V2 via les dashboards Datadog embarqués (iframes ou Datadog Embed API).
+        <div class="card-body text-muted" style="font-size:13px;">
+          Sans métrique sur la période : <%= silent.map(m => m.service).join(', ') %>.
+          Les métriques Cloud Run arrivent avec quelques minutes de retard et seulement quand l'app reçoit du trafic.
         </div>
       </div>
+      <% } %>
+      <% } %>
+      <% } %>
 
     </div>
   </main>

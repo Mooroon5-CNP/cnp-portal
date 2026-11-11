@@ -17,8 +17,24 @@
           <% if (can('observability:access:request')) { %>
           <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès</button>
           <% } %>
-          <!-- TODO: replace with real DataDog URL -->
-          <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" class="btn btn-primary">Ouvrir DataDog ↗</a>
+          <a href="<%= datadogLogsUrl || datadogUrl %>" target="_blank" rel="noopener" class="btn btn-primary" title="Ouvre l'explorateur de logs Datadog filtré sur vos applications (24 dernières heures)">Ouvrir mes logs dans Datadog ↗</a>
+        </div>
+      </div>
+
+      <%- include('../partials/observability-nav', { active: 'datadog', services: locals.services || [], selectedService: '' }) %>
+
+      <div class="card mb-6">
+        <div class="card-header"><span class="card-title">Portail ou Datadog : que choisir ?</span></div>
+        <div class="card-body" style="line-height:1.7;font-size:14px;">
+          <p style="margin:0 0 10px;">Pour le suivi courant, les onglets <a href="/observability/metrics">Métriques</a> et <a href="/observability/logs">Logs</a> du portail suffisent :
+            ils ne montrent que les applications de votre équipe et ne demandent aucun compte Datadog.</p>
+          <p style="margin:0 0 10px;">Datadog sert à creuser un incident : graphiques dans le temps, recherche avancée dans les logs, création de tableaux de bord. Les pages les plus utiles :</p>
+          <ul style="margin:0 0 10px 20px;">
+            <li><strong>Logs → Explorer</strong> : le bouton ci-dessus l'ouvre déjà filtré sur vos applications.</li>
+            <li><strong>Dashboards → « Google Cloud Run »</strong> (tableau de bord d'intégration, à chercher dans la liste) : trafic, latence et ressources de chaque service Cloud Run.</li>
+            <li><strong>Dashboards → « Amazon ECS »</strong> : la même chose pour la copie de secours sur AWS.</li>
+          </ul>
+          <p style="margin:0;color:var(--text-muted);font-size:13px;">Attention : un compte Datadog voit toutes les applications de la plateforme. La règle « seulement mon équipe » ne s'applique que dans le portail.</p>
         </div>
       </div>
 
@@ -36,8 +52,7 @@
             </li>
             <li style="margin-bottom:12px;">
               <strong>Se connecter</strong> — Rendez-vous sur
-              <!-- TODO: replace with real DataDog URL -->
-              <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" style="color:var(--primary);">app.datadoghq.eu</a>
+                  <a href="<%= datadogUrl %>" target="_blank" rel="noopener" style="color:var(--primary);"><%= datadogUrl.replace('https://', '') %></a>
               et authentifiez-vous avec le compte créé lors de l'invitation.
             </li>
           </ol>
@@ -53,13 +68,13 @@
               Dans le menu de gauche, cliquez sur <strong>Infrastructure</strong> ou <strong>APM</strong> selon votre besoin.
             </li>
             <li style="margin-bottom:12px;">
-              Utilisez le filtre <code>env:prod service:cnp-portal</code> (ou <code>env:dev</code> pour l'environnement de dev) pour isoler les données du projet CNP.
+              Utilisez le filtre <code>service:&lt;app&gt;-prod</code> (ou <code>-dev</code> pour l'environnement de dev) pour isoler les données du projet CNP.
             </li>
             <li style="margin-bottom:12px;">
               Les dashboards CNP se trouvent dans <strong>Dashboards → Dashboard List</strong>, recherchez <code>CNP</code>.
             </li>
             <li style="margin-bottom:0;">
-              Pour les logs, allez dans <strong>Logs → Search</strong> et filtrez par <code>service:cnp-portal</code>.
+              Pour les logs, allez dans <strong>Logs → Search</strong> et filtrez par <code>service:&lt;app&gt;-&lt;env&gt;</code> (par exemple <code>service:app4-pixelcam-prod</code>). Dans le portail, les pages Logs et Métriques le font pour vous, limitées aux applications de votre équipe.
             </li>
           </ol>
         </div>
@@ -69,7 +84,7 @@
         <div class="card-body" style="color:var(--text-muted);font-size:13px;text-align:center;padding:20px;">
           <!-- TODO: update with real DataDog org URL once configured -->
           Lien direct vers l'organisation DataDog CNP :
-          <a href="https://app.datadoghq.eu/fake-cnp-org" target="_blank" rel="noopener" style="color:var(--primary);margin-left:6px;">https://app.datadoghq.eu/fake-cnp-org</a>
+          <a href="<%= datadogUrl %>" target="_blank" rel="noopener" style="color:var(--primary);margin-left:6px;"><%= datadogUrl %></a>
         </div>
       </div>
 

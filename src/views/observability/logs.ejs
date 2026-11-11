@@ -11,33 +11,57 @@
       <div class="page-header">
         <div>
           <div class="page-title">Logs</div>
-          <div class="page-subtitle">Logs applicatifs via Datadog</div>
+          <div class="page-subtitle">Logs des applications de votre équipe — Cloud Run (GCP) et ECS (AWS), via Datadog</div>
         </div>
         <% if (can('observability:access:request')) { %>
         <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès Datadog</button>
         <% } %>
       </div>
 
+      <%- include('../partials/observability-nav', { active: 'logs' }) %>
+
+      <% if (services.length > 0) { %>
       <div class="card">
-        <div class="card-header">
-          <span class="card-title">Flux de logs</span>
-          <span class="badge badge-gray"><%= logs.length %> entrées</span>
+        <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+          <span class="card-title">Flux de logs <span class="text-muted" style="font-weight:400;">— <%= window.label %>, les 100 plus récents<%= search ? ` contenant « ${search} »` : '' %></span></span>
+          <span style="display:flex;gap:8px;align-items:center;">
+            <span class="badge badge-gray"><%= logs.length %> entrées</span>
+            <% if (!unavailable && logs.length > 0) { %>
+            <a href="/observability/logs.csv<%= csvQuery ? '?' + csvQuery : '' %>" class="btn btn-ghost btn-sm" title="Télécharge la vue en cours (mêmes filtres), jusqu'à 1 000 lignes, au format CSV (Excel, LibreOffice)">Télécharger (CSV)</a>
+            <% } %>
+            <% if (datadogLogsUrl) { %>
+            <a href="<%= datadogLogsUrl %>" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" title="Ouvre l'explorateur de logs Datadog avec les mêmes applications et la même période (compte Datadog requis)">Ouvrir dans Datadog ↗</a>
+            <% } %>
+          </span>
         </div>
-        <div style="background:#1e2330; border-radius:0 0 8px 8px; overflow-x:auto;">
-          <% if (logs.length === 0) { %>
-            <div style="padding:32px;text-align:center;color:#9aa3b8;">Aucun log disponible</div>
+        <div style="overflow-x:auto;">
+          <% if (unavailable) { %>
+            <div style="padding:32px;text-align:center;color:var(--danger);">Datadog est indisponible pour le moment. Réessayez dans quelques instants.</div>
+          <% } else if (logs.length === 0) { %>
+            <div style="padding:32px;text-align:center;color:var(--text-muted);">Aucun log sur cette période<%= search ? ' pour cette recherche' : '' %>.</div>
           <% } else { %>
+            <div class="log-line obs-log-line obs-log-head">
+              <span>Date</span><span>Niveau</span><span>Application</span>
+              <span title="Où tournait l'application quand elle a écrit ce log : Cloud Run (GCP, normal) ou ECS (AWS, secours après une bascule)">Source ⓘ</span>
+              <span>Message</span>
+            </div>
             <% logs.forEach(log => { %>
-            <div class="log-line">
-              <span class="log-ts"><%= new Date(log.timestamp).toLocaleTimeString('fr-FR') %></span>
+            <div class="log-line obs-log-line">
+              <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
               <span class="log-level-<%= log.level %>"><%= log.level %></span>
               <span class="log-service"><%= log.service %></span>
-              <span style="color:#e2e8f0;"><%= log.message %></span>
+              <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : 'badge-info' %>"><%= log.source || '—' %></span></span>
+              <span class="obs-log-message"><%= log.message %></span>
             </div>
             <% }) %>
           <% } %>
         </div>
+        <div class="card-body text-muted" style="font-size:12px;border-top:1px solid var(--border);">
+          Datadog conserve les logs <%= retentionDays %> jours : au-delà, la recherche ne renvoie rien.
+          Les logs Cloud Run comprennent aussi les événements de la plateforme GCP (création, mise à jour ou suppression du service).
+        </div>
       </div>
+      <% } %>
 
       <!-- Access request modal -->
       <% if (can('observability:access:request')) { %>

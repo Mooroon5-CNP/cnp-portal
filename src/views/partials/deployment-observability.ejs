@@ -1,0 +1,54 @@
+<%# Carte « Observabilité » du détail d'un déploiement. Attend obs = { service, available, logs, metrics }. %>
+<% const q = encodeURIComponent(obs.service); %>
+<% const pct = v => (v === null || v === undefined ? '—' : v + ' %'); %>
+<div class="card" style="margin-top:20px;" id="observability-card">
+  <div class="card-header">
+    <span class="card-title">Observabilité <span class="text-muted font-mono" style="font-weight:400;"><%= obs.service %></span> <span class="text-muted" style="font-weight:400;">— 24 heures</span></span>
+    <span style="display:flex;gap:8px;">
+      <a href="/observability/logs?service=<%= q %>" class="btn btn-ghost btn-sm">Tous les logs</a>
+      <a href="/observability/metrics?service=<%= q %>" class="btn btn-ghost btn-sm">Métriques</a>
+    </span>
+  </div>
+  <div class="card-body">
+    <% if (!obs.available) { %>
+      <p style="color:var(--text-muted);font-size:13px;margin:0;">Datadog est indisponible pour le moment.</p>
+    <% } else { %>
+      <% const c = obs.metrics && obs.metrics.cloudRun; const e = obs.metrics && obs.metrics.ecs; %>
+      <% if (c || e) { %>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;margin-bottom:16px;">
+        <% if (c) { %>
+          <div><div class="text-muted">Requêtes (Cloud Run)</div><strong><%= c.requests === null ? '—' : c.requests %></strong></div>
+          <div><div class="text-muted">Erreurs 5xx</div><strong style="color:<%= c.errors > 0 ? 'var(--danger)' : 'inherit' %>"><%= c.errors === null ? '—' : c.errors %></strong></div>
+          <div><div class="text-muted">Latence p95 max</div><strong><%= c.latencyP95 === null ? '—' : c.latencyP95 + ' ms' %></strong></div>
+          <div><div class="text-muted">CPU moy. / pic</div><strong><%= pct(c.cpu) %> / <%= pct(c.cpuPeak) %></strong></div>
+          <div><div class="text-muted">Mémoire moy. / pic</div><strong><%= pct(c.memory) %> / <%= pct(c.memoryPeak) %></strong></div>
+          <div><div class="text-muted">Taille d'instance</div><strong><%= c.size ? `${c.size.vcpu} vCPU · ${c.size.memoryMiB} Mio` : '—' %></strong></div>
+        <% } %>
+        <% if (e) { %>
+          <div><div class="text-muted">CPU ECS</div><strong><%= pct(e.cpu) %></strong></div>
+          <div><div class="text-muted">Mémoire ECS</div><strong><%= pct(e.memory) %></strong></div>
+          <div><div class="text-muted">Tâches ECS</div><strong><%= e.running === null ? '—' : e.running %></strong></div>
+        <% } %>
+      </div>
+      <% } else { %>
+      <p style="color:var(--text-muted);font-size:13px;margin:0 0 12px;">Aucune métrique sur 24 heures (une app sans trafic ne remonte rien).</p>
+      <% } %>
+
+      <% if (obs.logs.length === 0) { %>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;">Aucun log sur 24 heures.</p>
+      <% } else { %>
+        <div style="border:1px solid var(--border);border-radius:6px;overflow-x:auto;">
+          <% obs.logs.forEach(log => { %>
+          <div class="log-line obs-log-line">
+            <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
+            <span class="log-level-<%= log.level %>"><%= log.level %></span>
+            <span class="log-service"><%= log.service %></span>
+            <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : 'badge-info' %>"><%= log.source || '—' %></span></span>
+            <span class="obs-log-message"><%= log.message %></span>
+          </div>
+          <% }) %>
+        </div>
+      <% } %>
+    <% } %>
+  </div>
+</div>

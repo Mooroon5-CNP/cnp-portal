@@ -297,6 +297,10 @@
                 </div>
               <% } %>
 
+              <% if (locals.observability) { %>
+                <%- include('../partials/deployment-observability', { obs: observability }) %>
+              <% } %>
+
               <!-- ── Team access panel (devops + manager) ─────────────────────── -->
               <% if (can('deployments:manage-team-access')) { %>
               <div class="card" style="margin-top:20px;">
