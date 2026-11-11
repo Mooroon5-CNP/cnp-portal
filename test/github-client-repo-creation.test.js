@@ -105,6 +105,18 @@ describe('dispatchWorkflow', () => {
         await expect(client.dispatchWorkflow('org', 'demo', 'cnp-demo.yml', 'main', 'demo')).rejects.toThrow('reconnu');
         expect(mockRequest.mock.calls.every(([route]) => route.startsWith('GET '))).toBe(true);
     });
+    test('dispatch permission errors explicitly request Actions write without exposing credentials', async () => {
+        respond(true);
+        const respondNormally = mockRequest.getMockImplementation();
+        mockRequest.mockImplementation((route, args) => {
+            if (route.endsWith('/dispatches')) throw Object.assign(new Error('sensitive upstream detail'), { status: 403 });
+            return respondNormally(route, args);
+        });
+        await expect(client.dispatchWorkflow('org', 'demo', 'cnp-demo.yml', 'main', 'demo')).rejects.toMatchObject({
+            userMessage: expect.stringContaining('Actions : lecture et écriture'),
+            message: expect.not.stringContaining('sensitive upstream detail'),
+        });
+    });
 });
 
 describe('listBlobs / getBlob', () => {

@@ -28,6 +28,8 @@
                       <form action="/deployments/<%= deployment.id %>/reject-delete" method="POST" class="inline-form">
                         <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
                       </form>
+                    <% } else if (deployment.onboardingStatus === 'deleting') { %>
+                      <span class="badge badge-warning">Suppression en cours</span>
                     <% } else { %>
                       <button class="btn btn-danger btn-sm" onclick="document.getElementById('deleteModal').style.display='flex'"><%= deployment.onboardingStatus === 'delete_failed' ? 'Réessayer la suppression' : 'Supprimer' %></button>
                     <% } %>
@@ -49,6 +51,8 @@
                     <code><%= applicationUrl %></code>
                     <% if (deployment.targetCluster === 'azure') { %>
                       <div class="form-hint">Adresse par défaut d’Azure (domaine de l’environnement Container Apps). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
+                    <% } else if (environmentStatus?.phase === 'success' && environmentStatus.applicationUrl === applicationUrl) { %>
+                      <div class="form-hint">Adresse HTTPS vérifiée pour la version déployée.</div>
                     <% } else { %>
                       <div class="form-hint">L’accès par cette adresse nécessite le routage DNS et HTTPS de l’environnement. Cette adresse prévue ne confirme pas qu’un déploiement est disponible.</div>
                     <% } %>
@@ -86,6 +90,14 @@
                 </div>
                 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 
+              <% } else if (deployment.onboardingStatus === 'deleting') { %>
+                <div class="card" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Suppression en cours</span></div>
+                  <div class="card-body">
+                    <p id="environment-status-message">Le nettoyage se poursuit automatiquement après chaque synchronisation ArgoCD/Crossplane.</p>
+                    <p>Cette page reviendra à la liste après vérification de la disparition des ressources.</p>
+                  </div>
+                </div>
               <% } else if (deployment.onboardingStatus === 'delete_failed') { %>
                 <div class="card" style="margin-bottom:16px;">
                   <div class="card-header"><span class="card-title">Suppression incomplète</span><span class="badge badge-danger">Action requise</span></div>
@@ -93,10 +105,12 @@
                     <p>Le nettoyage a échoué. Le déploiement reste enregistré pour permettre de reprendre l’opération.</p>
                     <div class="flash flash-error"><%= deployment.onboardingError %></div>
                     <% if (can('deployments:delete')) { %>
-                      <p>Utilisez « Réessayer la suppression » en haut de page, ou reprenez le déploiement si sa configuration est encore présente et qu’aucune suppression de ressource n’a commencé.</p>
+                      <p>Utilisez « Réessayer la suppression » en haut de page pour reprendre le nettoyage à l’étape enregistrée.</p>
+                      <% if (!locals.hasDeletionJob) { %>
                       <form action="/deployments/<%= deployment.id %>/resume-deployment" method="POST" style="margin-top:12px;">
                         <button type="submit" class="btn btn-secondary">Reprendre le suivi CI</button>
                       </form>
+                      <% } %>
                     <% } %>
                   </div>
                 </div>
@@ -139,18 +153,25 @@
                   <div class="card" style="margin-bottom:16px;" id="url-card">
                     <div class="card-header"><span class="card-title">Application</span></div>
                     <div class="card-body" id="url-card-body" style="display:flex;align-items:center;gap:12px;color:var(--text-muted);">
-                      <span id="url-card-spinner" style="font-size:18px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
-                      <span id="url-card-msg"><%= deployment.failoverRequested && environmentStatus && environmentStatus.phase !== 'success'
-                        ? 'L’application sera disponible à la fin de la mise en service du secours.'
-                        : environmentStatus?.phase === 'approval'
-                        ? 'L’application sera disponible après validation du manager.'
-                        : environmentStatus?.phase === 'rejected'
-                          ? 'La production a été refusée.'
-                          : environmentStatus?.phase === 'running'
-                            ? 'Le pipeline prépare l’application.'
-                            : environmentStatus?.phase === 'failed'
-                              ? 'La dernière version n’a pas été déployée.'
-                              : 'Provisionnement Cloud Run en cours...' %></span>
+                      <% const pipelineFailed = latest && latest.status === 'completed' && latest.conclusion !== 'success';
+                         const phase = environmentStatus?.phase;
+                         const pipelineSucceeded = latest && latest.status === 'completed' && latest.conclusion === 'success';
+                         const provisioning = pipelineSucceeded && (phase === 'deploying' || deployment.environment === 'legacy');
+                         const running = !pipelineFailed && (phase === 'running' || (latest && latest.status !== 'completed'));
+                         const progressing = running || provisioning || (pipelineSucceeded && deployment.failoverRequested && !['failed', 'rejected', 'approval', 'waiting'].includes(phase));
+                         let applicationMessage = 'En attente d’une pipeline réussie avant le déploiement.';
+                         if (pipelineFailed) applicationMessage = 'La pipeline a échoué ou a été interrompue. Aucun nouveau déploiement n’est lancé.';
+                         else if (phase === 'failed') applicationMessage = 'La dernière version n’a pas été déployée. Consultez le détail de l’erreur ci-dessous.';
+                         else if (phase === 'rejected') applicationMessage = 'La production a été refusée.';
+                         else if (phase === 'approval') applicationMessage = 'L’application sera disponible après validation du manager.';
+                         else if (running) applicationMessage = 'Pipeline en cours : le déploiement attend sa réussite.';
+                         else if (pipelineSucceeded && deployment.failoverRequested && phase !== 'waiting') applicationMessage = 'L’application sera disponible à la fin de la mise en service du secours.';
+                         else if (provisioning) applicationMessage = 'Pipeline réussie. Provisionnement Cloud Run en cours…';
+                      %>
+                      <% if (progressing && !['failed', 'rejected', 'approval'].includes(phase)) { %>
+                        <span id="url-card-spinner" style="font-size:18px;animation:spin 1.2s linear infinite;display:inline-block;">⟳</span>
+                      <% } %>
+                      <span id="url-card-msg" role="status"><%= applicationMessage %></span>
                     </div>
                   </div>
                 <% } %>
@@ -447,8 +468,9 @@
           <% } %>
         </div>
         <form action="/deployments/<%= deployment.id %>/delete" method="POST">
+          <%- include('../partials/deletion-confirmation', { prefix: 'delete', hasBucket: deployment.persistentStorage }) %>
           <div style="display:flex;gap:10px;">
-            <button type="submit" class="btn btn-danger">Confirmer la suppression</button>
+            <button type="submit" id="deleteConfirmBtn" class="btn btn-danger" disabled>Confirmer la suppression</button>
             <button type="button" class="btn btn-secondary" onclick="document.getElementById('deleteModal').style.display='none'">Annuler</button>
           </div>
         </form>
@@ -464,8 +486,9 @@
           <%= deployment.environment === 'legacy' ? 'Cela supprimera cette application et toutes ses ressources.' : 'Cela supprimera uniquement cet environnement. L’autre environnement et le pipeline partagé seront conservés.' %>
         </div>
         <form action="/deployments/<%= deployment.id %>/approve-delete" method="POST">
+          <%- include('../partials/deletion-confirmation', { prefix: 'approve', hasBucket: deployment.persistentStorage }) %>
           <div style="display:flex;gap:10px;">
-            <button type="submit" class="btn btn-danger">Confirmer et supprimer</button>
+            <button type="submit" id="approveConfirmBtn" class="btn btn-danger" disabled>Confirmer et supprimer</button>
             <button type="button" class="btn btn-secondary" onclick="document.getElementById('approveDeleteModal').style.display='none'">Annuler</button>
           </div>
         </form>
@@ -492,6 +515,9 @@
 
     <!-- ── Polling script ────────────────────────────────────────────────── -->
     <script>
+      <% if (locals.deletionDraft) { %>
+        document.getElementById('<%= deletionDraft.action === "approve" ? "approveDeleteModal" : "deleteModal" %>').style.display = 'flex';
+      <% } %>
       (function () {
         const selectedEnvironment = '<%= deployment.environment %>';
         if (selectedEnvironment !== 'legacy') {
@@ -501,6 +527,10 @@
           const pollEnvironment = async () => {
             try {
               const response = await fetch('/deployments/<%= deployment.id %>/status');
+              if (response.status === 404 && '<%= deployment.onboardingStatus %>' === 'deleting') {
+                window.location.replace('/deployments');
+                return;
+              }
               if (response.ok) {
                 const data = await response.json();
                 if (data.phase !== initialPhase || (data.revision || '') !== initialRevision || Boolean(data.cloudRunUrl) !== initialHasUrl) {
@@ -526,7 +556,7 @@
         // Nothing left to poll: URL shown and pipeline is done.
         if (hasUrl && terminal) return;
         // Nothing left to poll: non-GCP terminal failure.
-        if (terminal && concl0 !== 'success' && cluster !== 'gcp') return;
+        if (terminal && concl0 !== 'success') return;
 
         function showUrl(url) {
           const card = document.getElementById('url-card');
@@ -596,5 +626,6 @@
       })();
     </script>
 
+    <script src="/js/deletion-confirmation.js"></script>
   </body>
 </html>

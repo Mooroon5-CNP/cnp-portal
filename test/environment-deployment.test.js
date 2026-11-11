@@ -10,8 +10,10 @@ jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), 
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
-jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
+jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), hasOwnedRoute: jest.fn().mockResolvedValue(true), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 
+jest.mock('axios', () => ({ get: jest.fn() }));
+const axios = require('axios');
 const yaml = require('js-yaml');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
@@ -25,6 +27,7 @@ let api, run, sourceHead, trees, published, existing, dep, prHead, mergedBy;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  axios.get.mockResolvedValue({ status: 200 });
   db.prepare('DELETE FROM deployment_releases').run();
   db.prepare('DELETE FROM deployment_team_access').run();
   db.prepare('DELETE FROM deployments').run();
@@ -118,8 +121,8 @@ test('approval pins the PR head, records reviewer and waits for observed runtime
   expect(merge[1]).toMatchObject({ pull_number: 5, sha: 'commit-1', merge_method: 'squash' });
   expect(releases.get(dep.id, revision).reviewed_by).toBe('manager-id');
   expect((await service.reconcile(dep)).phase).toBe('deploying');
-  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://prod.test' });
-  expect(await service.reconcile(dep)).toMatchObject({ phase: 'success', cloudRunUrl: 'https://prod.test' });
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://pixelcam-prod.run.app' });
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'success', cloudRunUrl: 'https://pixelcam-prod.run.app' });
 });
 
 test('new prod source and modified candidate PR both invalidate approval', async () => {
@@ -335,7 +338,7 @@ test('an interrupted approval never trusts a merge performed by a human', async 
   expect(releases.get(dep.id, revision).state).toBe('approving');
 });
 
-test('setup reuses canonical environment scanners and creates a harmless legacy parent only when absent', async () => {
+test('setup keeps dev/prod scanners separate and never creates an empty legacy parent', async () => {
   await service.onboard(dep);
   expect(kubernetes.applyApplicationSet).toHaveBeenCalledWith(expect.objectContaining({ metadata: { name: 'crossplane-autodiscovery-dev', namespace: 'argocd' } }));
   const set = service.applicationSet('prod');
@@ -344,8 +347,17 @@ test('setup reuses canonical environment scanners and creates a harmless legacy 
   const applied = kubernetes.applyApplicationSet.mock.calls[0][0];
   expect(applied.spec.generators[0].git.directories).toEqual([{ path: 'apps/pixelcam/crossplane/dev' }]);
   expect(applied.spec.generators[0].git.directories.some(directory => directory.path.includes('*'))).toBe(false);
-  const root = trees.find(tree => tree.repo === 'config').tree.find(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml');
-  expect(yaml.load(root.content).resources).toEqual([]);
+  expect(trees.filter(tree => tree.repo === 'config').every(tree => !tree.tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml'))).toBe(true);
+});
+
+test('production setup also leaves the legacy parent absent and uses only its prod scanner', async () => {
+  production();
+  await service.onboard(dep);
+  const applied = kubernetes.applyApplicationSet.mock.calls[0][0];
+  expect(applied.metadata.name).toBe('crossplane-autodiscovery-prod');
+  expect(applied.spec.template.metadata.name).toBe('{{path[1]}}-prod');
+  expect(applied.spec.generators[0].git.directories).toEqual([{ path: 'apps/pixelcam/crossplane/prod' }]);
+  expect(trees.filter(tree => tree.repo === 'config').every(tree => !tree.tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml'))).toBe(true);
 });
 
 test('missing environment project or orphaned legacy application prevents setup before source writes', async () => {
@@ -424,6 +436,8 @@ test('persistent storage sync waits for bucket and IAM before starting the Cloud
 
 test('a ready runtime stays deploying while friendly routing is unavailable and production candidates publish no host', async () => {
   const routing = require('../src/services/application-routing');
+  db.prepare("UPDATE deployments SET database_engine = 'postgres' WHERE id = ?").run(dep.id);
+  dep = deployments.get(dep.id);
   kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://runtime.test' });
   routing.status.mockResolvedValueOnce(false);
   expect(await service.reconcile(dep)).toMatchObject({ phase: 'deploying', cloudRunUrl: null });
@@ -547,4 +561,78 @@ test('la facturation « à l’instance » garde une instance active et son CPU 
   const usage = run('usage');
   expect(usage.scaling).toBeUndefined();
   expect(usage.containers[0].resources).toBeUndefined();
+});
+
+
+test('simple GCP uses verified native HTTPS without publishing or waiting on shared routing', async () => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://pixelcam-dev.run.app' });
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'success', applicationUrl: 'https://pixelcam-dev.run.app' });
+  expect(require('../src/services/application-routing').sync).not.toHaveBeenCalled();
+  expect(axios.get).toHaveBeenCalledWith('https://pixelcam-dev.run.app', expect.objectContaining({ timeout: 10000, maxRedirects: 0 }));
+  expect(Object.keys(service.manifests(dep, revision)).some(path => path.endsWith('application-network.yaml'))).toBe(false);
+});
+
+test.each([403, 404, 500, 503])('native HTTP %s reports a diagnostic instead of deployment success', async status => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://pixelcam-dev.run.app' });
+  axios.get.mockResolvedValue({ status });
+  expect(await service.reconcile(dep)).toMatchObject({ phase: 'failed', cloudRunUrl: null, message: expect.stringContaining(`HTTP ${status}`) });
+});
+
+test.each([null, 'http://pixelcam.run.app', 'https://example.test', 'https://fake.run.app.evil.test'])('invalid observed native URL %s is never probed', async url => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url });
+  expect((await service.reconcile(dep)).phase).toBe('failed');
+  expect(axios.get).not.toHaveBeenCalled();
+});
+
+test('a native HTTPS timeout reports an access failure and a later check can recover', async () => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://pixelcam-dev.run.app' });
+  axios.get.mockRejectedValueOnce(new Error('timeout'));
+  expect((await service.reconcile(dep)).phase).toBe('failed');
+  expect((await service.reconcile(dep)).phase).toBe('success');
+});
+
+test('an old observed image cannot pass native availability', async () => {
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true, image: 'old-image', url: 'https://pixelcam-dev.run.app' });
+  expect((await service.reconcile(dep)).phase).toBe('deploying');
+  expect(axios.get).not.toHaveBeenCalled();
+});
+
+test('republishing an existing simple environment preserves its network references without rewriting resources', async () => {
+  existing.set('config/apps/pixelcam/crossplane/dev/application-network.yaml', 'existing-network');
+  await service.reconcile(dep);
+  const files = trees[0].tree;
+  const kustomization = yaml.load(files.find(file => file.path.endsWith('/kustomization.yaml')).content);
+  expect(kustomization.resources).toContain('application-network.yaml');
+  expect(files.some(file => file.path.endsWith('/application-network.yaml'))).toBe(false);
+});
+
+test('a new native deployment is removable without shared routing', async () => {
+  await service.reconcile(dep);
+  await service.remove(dep);
+  expect(require('../src/services/application-routing').sync).not.toHaveBeenCalled();
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-dev');
+});
+
+
+test.each([true, false])('an existing native environment detaches its shared route only when owned: %s', async owned => {
+  const routing = require('../src/services/application-routing');
+  existing.set('config/apps/pixelcam/crossplane/dev/application-network.yaml', 'existing-network');
+  routing.hasOwnedRoute.mockResolvedValueOnce(owned);
+  await service.remove(dep);
+  expect(routing.sync.mock.calls.length).toBe(owned ? 1 : 0);
+  if (owned) expect(routing.sync).toHaveBeenCalledWith(dep, expect.any(Object), true);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-dev');
+});
+
+
+test('route convergence is pending, and a retry still checks observed routing after Git ownership was removed', async () => {
+  const routing = require('../src/services/application-routing');
+  existing.set('config/apps/pixelcam/crossplane/dev/application-network.yaml', 'existing-network');
+  routing.hasOwnedRoute.mockResolvedValue(false);
+  routing.status.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  await expect(service.remove(dep)).rejects.toMatchObject({ code: 'CLEANUP_PENDING' });
+  expect(kubernetes.cascadeDeleteArgocdApplication).not.toHaveBeenCalled();
+  await expect(service.remove(dep)).resolves.toBeUndefined();
+  expect(routing.status).toHaveBeenCalledWith(dep, true);
+  expect(kubernetes.cascadeDeleteArgocdApplication).toHaveBeenCalledWith('pixelcam-dev');
 });

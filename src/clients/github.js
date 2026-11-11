@@ -171,9 +171,22 @@ async function dispatchWorkflow(owner, repo, workflowId, branch, appName) {
       owner, repo, path, ...update, message: `ci(${appName}): enable manual pipeline [skip ci]`,
     });
   }
-  await octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
-    owner, repo, workflow_id: workflowId, ref: branch,
-  });
+  try {
+    await octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+      owner, repo, workflow_id: workflowId, ref: branch,
+    });
+  } catch (error) {
+    let userMessage;
+    if (error.status === 403) {
+      userMessage = 'GitHub refuse le lancement de la pipeline : la GitHub App doit disposer de la permission Actions : lecture et écriture sur ce repo. Faites approuver cette permission dans l’installation de l’organisation, puis réessayez.';
+    } else if (error.status === 404) {
+      userMessage = 'GitHub ne trouve pas le workflow à lancer. Vérifiez sa présence sur la branche par défaut et l’accès de la GitHub App au repo.';
+    } else if (error.status === 422) {
+      userMessage = 'GitHub refuse le déclenchement : vérifiez que la branche existe et que le workflow autorise workflow_dispatch.';
+    }
+    if (userMessage) throw Object.assign(new Error(userMessage), { userMessage });
+    throw error;
+  }
 }
 
 // Get jobs for a specific run via GitHub App auth.

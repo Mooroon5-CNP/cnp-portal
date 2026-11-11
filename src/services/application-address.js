@@ -23,4 +23,10 @@ function url(dep) {
     return host ? `https://${host}` : null;
 }
 
-module.exports = { baseDomain, hostname, url };
+function usesNativeCloudRun(dep) {
+    return dep.targetCluster === 'gcp' && ['dev', 'prod'].includes(dep.environment)
+        && !dep.database && !dep.failoverRequested
+        && !require('./environment-failover').enabled(dep);
+}
+
+module.exports = { baseDomain, hostname, url, usesNativeCloudRun };

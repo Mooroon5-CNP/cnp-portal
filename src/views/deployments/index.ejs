@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<% const draft = locals.deploymentDraft || {};
+   const deletionRetry = locals.deletionDraft && deployments.find(dep => dep.id === deletionDraft.id); %>
 <html lang="fr">
 <%- include('../partials/head', { title: title }) %>
 
@@ -8,6 +10,11 @@
         <main class="main-content">
           <div class="content-wrapper">
             <%- include('../partials/flash') %>
+            <% if (deletionRetry) { %>
+              <div id="deletion-retry" hidden data-id="<%= deletionRetry.id %>" data-name="<%= deletionRetry.appName %>"
+                data-storage="<%= deletionRetry.persistentStorage ? 'true' : 'false' %>" data-environment="<%= deletionRetry.environment %>"
+                data-action="<%= deletionDraft.action %>"></div>
+            <% } %>
 
               <div class="page-header">
                 <div>
@@ -97,6 +104,8 @@
                                   <form action="/deployments/<%= dep.id %>/reject-delete" method="POST" class="inline-form">
                                     <button type="submit" class="btn btn-secondary btn-sm">Refuser</button>
                                   </form>
+                                <% } else if (dep.onboardingStatus === 'deleting') { %>
+                                  <span class="badge badge-warning">Suppression en cours</span>
                                 <% } else { %>
                                   <button class="btn btn-danger btn-sm" onclick="openDeleteModal('<%= dep.id %>', '<%= dep.appName %>', <%= dep.persistentStorage ? 'true' : 'false' %>, '<%= dep.environment %>')">Supprimer</button>
                                 <% } %>
@@ -138,9 +147,11 @@
                   </div>
 
                   <form action="/deployments" method="POST">
+                    <% if (draft.error) { %><div class="flash flash-error" role="alert"><%= draft.error %></div><% } %>
                     <div class="form-group">
                       <label for="githubRepoUrl">URL du repo GitHub</label>
                       <input type="url" name="githubRepoUrl" id="githubRepoUrl"
+                        value="<%= draft.githubRepoUrl || '' %>"
                         placeholder="https://github.com/org/mon-app" required
                         oninput="suggestAppName(this.value)">
                       <div class="form-hint">Le repo doit être accessible par la GitHub App CNP.</div>
@@ -149,6 +160,7 @@
                     <div class="form-group">
                       <label for="appName">Nom de l'application</label>
                       <input type="text" name="appName" id="appName"
+                        value="<%= draft.appName || '' %>"
                         placeholder="mon-app" required
                         pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
                         title="Minuscules, chiffres et tirets uniquement">
@@ -158,8 +170,8 @@
                     <div class="form-group">
                       <label for="environment">Environnement</label>
                       <select name="environment" id="environment" required>
-                        <option value="dev">Développement — automatique depuis main</option>
-                        <option value="prod">Production — depuis prod, après validation manager</option>
+                        <option value="dev" <%= draft.environment !== 'prod' ? 'selected' : '' %>>Développement — automatique depuis main</option>
+                        <option value="prod" <%= draft.environment === 'prod' ? 'selected' : '' %>>Production — depuis prod, après validation manager</option>
                       </select>
                       <div class="form-hint">Chaque environnement possède son service et ses données. La production attend l'approbation d'un manager dans le portail.</div>
                       <div class="form-hint">Adresse : &lt;application&gt;.dev.<%= applicationsBaseDomain %> en dev ; &lt;application&gt;.<%= applicationsBaseDomain %> en production.</div>
@@ -167,7 +179,7 @@
 
                     <div class="form-group">
                       <label for="appPort">Port applicatif</label>
-                      <input type="number" name="appPort" id="appPort" min="1" max="65535" value="8080" required>
+                      <input type="number" name="appPort" id="appPort" min="1" max="65535" value="<%= draft.appPort || 8080 %>" required>
                       <div class="form-hint">Le port que votre application écoute (doit correspondre à EXPOSE dans le Dockerfile).</div>
                     </div>
 
@@ -177,7 +189,7 @@
                       <select name="ownerTeamId" id="ownerTeamId">
                         <option value="">— Aucune équipe —</option>
                         <% userTeams.forEach(t => { %>
-                        <option value="<%= t.id %>" <%= userTeams.length === 1 ? 'selected' : '' %>><%= t.name %></option>
+                        <option value="<%= t.id %>" <%= draft.ownerTeamId ? (draft.ownerTeamId === t.id ? 'selected' : '') : (userTeams.length === 1 ? 'selected' : '') %>><%= t.name %></option>
                         <% }) %>
                       </select>
                       <div class="form-hint">L'équipe qui possède ce déploiement. Les membres de l'équipe pourront le voir.</div>
@@ -187,11 +199,12 @@
                     <div class="form-group">
                       <label for="stack">Hébergement et données</label>
                       <select name="stack" id="stack" onchange="onStackChange()" required>
-                        <option value="gcp-postgres" selected>GCP Cloud SQL (PostgreSQL)</option>
-                        <option value="gcp-sqlite">GCP GCS (SQLite)</option>
-                        <option value="azure-postgres">Azure souveraineté (PostgreSQL)</option>
+                        <option value="gcp-postgres" <%= !draft.stack || draft.stack === 'gcp-postgres' ? 'selected' : '' %>>GCP Cloud SQL (PostgreSQL)</option>
+                        <option value="gcp-sqlite" <%= draft.stack === 'gcp-sqlite' ? 'selected' : '' %>>GCP GCS (SQLite)</option>
+                        <option value="azure-postgres" <%= draft.stack === 'azure-postgres' ? 'selected' : '' %>>Azure souveraineté (PostgreSQL)</option>
                       </select>
                       <div class="form-hint" id="stackHint"></div>
+                      <div class="form-hint">Au clic sur Déployer, le portail vérifie les indices SQLite/PostgreSQL du dépôt avant toute création.</div>
                     </div>
 
                     <div class="form-group" id="billingGroup">
@@ -204,8 +217,8 @@
                         </span>
                       </label>
                       <select name="billing" id="billing">
-                        <option value="usage" selected>À l’usage</option>
-                        <option value="instance">À l’instance</option>
+                        <option value="usage" <%= draft.billing !== 'instance' ? 'selected' : '' %>>À l’usage</option>
+                        <option value="instance" <%= draft.billing === 'instance' ? 'selected' : '' %>>À l’instance</option>
                       </select>
                       <div class="form-hint">Réglé au déploiement ; pour en changer, redéployer l’application.</div>
                     </div>
@@ -227,24 +240,10 @@
                     <span id="deleteCleanupDescription">Cette action supprime les ressources de la cible sélectionnée.</span>
                   </div>
                   <div id="deleteBucketWarning" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--text-primary);">
-                    <strong style="color:#ca8a04;">⚠ Bucket GCS avec données potentielles</strong><br>
-                    Le stockage persistant de ce déploiement utilise <code style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;">forceDestroy: false</code>.<br>
-                    S'il contient des données, GCP refusera la suppression et Crossplane remontera une erreur — le bucket restera dans GCP.<br>
-                    <strong>Videz le bucket manuellement avant de continuer.</strong>
+                    <strong>Suppression définitive des données persistantes.</strong><br>Le nettoyage est suivi automatiquement jusqu’à la disparition des ressources.
                   </div>
                   <form id="deleteForm" method="POST">
-                    <div style="margin-bottom:14px;">
-                      <label style="font-size:13px;display:block;margin-bottom:6px;">Pour confirmer, saisissez <strong style="font-family:monospace;color:var(--danger,#ef4444);">DELETE</strong> :</label>
-                      <input type="text" id="deleteConfirmText" autocomplete="off" placeholder="DELETE"
-                        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:14px;background:var(--surface);color:var(--text);"
-                        oninput="checkDeleteInput()">
-                    </div>
-                    <div id="deleteBucketAck" style="display:none;margin-bottom:14px;">
-                      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
-                        <input type="checkbox" id="deleteBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
-                        J'ai compris — le bucket est vide ou je suis prêt à le gérer manuellement.
-                      </label>
-                    </div>
+                    <%- include('../partials/deletion-confirmation', { prefix: 'delete', hasBucket: false, returnTo: 'list' }) %>
                     <div style="display:flex;gap:10px;">
                       <button type="submit" id="deleteConfirmBtn" class="btn btn-danger" disabled>Confirmer la suppression</button>
                       <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Annuler</button>
@@ -262,24 +261,10 @@
                     <span id="approveCleanupDescription">Cela supprimera les ressources de la cible sélectionnée.</span>
                   </div>
                   <div id="approveBucketWarning" style="display:none;background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.4);border-radius:6px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--text-primary);">
-                    <strong style="color:#ca8a04;">⚠ Bucket GCS avec données potentielles</strong><br>
-                    Le stockage persistant de ce déploiement utilise <code style="font-family:monospace;background:rgba(0,0,0,.15);padding:1px 4px;border-radius:3px;">forceDestroy: false</code>.<br>
-                    S'il contient des données, GCP refusera la suppression et Crossplane remontera une erreur — le bucket restera dans GCP.<br>
-                    <strong>Videz le bucket manuellement avant de continuer.</strong>
+                    <strong>Suppression définitive des données persistantes.</strong><br>Le nettoyage est suivi automatiquement jusqu’à la disparition des ressources.
                   </div>
                   <form id="approveForm" method="POST">
-                    <div style="margin-bottom:14px;">
-                      <label style="font-size:13px;display:block;margin-bottom:6px;">Pour confirmer, saisissez <strong style="font-family:monospace;color:var(--danger,#ef4444);">DELETE</strong> :</label>
-                      <input type="text" id="approveConfirmText" autocomplete="off" placeholder="DELETE"
-                        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:14px;background:var(--surface);color:var(--text);"
-                        oninput="checkApproveInput()">
-                    </div>
-                    <div id="approveBucketAck" style="display:none;margin-bottom:14px;">
-                      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;">
-                        <input type="checkbox" id="approveBucketAckCheck" style="margin-top:2px;accent-color:var(--danger);">
-                        J'ai compris — le bucket est vide ou je suis prêt à le gérer manuellement.
-                      </label>
-                    </div>
+                    <%- include('../partials/deletion-confirmation', { prefix: 'approve', hasBucket: false, returnTo: 'list' }) %>
                     <div style="display:flex;gap:10px;">
                       <button type="submit" id="approveConfirmBtn" class="btn btn-danger" disabled>Confirmer et supprimer</button>
                       <button type="button" class="btn btn-secondary" onclick="closeApproveModal()">Annuler</button>
@@ -313,6 +298,7 @@
                 const cancelBtn = document.getElementById('cancelNewDeployment');
                 function showModal() { modal.style.display = 'flex'; }
                 function hideModal() { modal.style.display = 'none'; }
+                <% if (locals.deploymentDraft) { %>showModal();<% } %>
                 if (openBtn) openBtn.addEventListener('click', showModal);
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
                 if (cancelBtn) cancelBtn.addEventListener('click', hideModal);
@@ -358,7 +344,7 @@
                   const chk = document.getElementById('deleteBucketAckCheck');
                   const hasBucket = document.getElementById('deleteBucketAck').style.display !== 'none';
                   const bucketOk = !hasBucket || chk.checked;
-                  document.getElementById('deleteConfirmBtn').disabled = !(txt === 'DELETE' && bucketOk);
+                  document.getElementById('deleteConfirmBtn').disabled = !(txt.trim().toLowerCase() === 'delete' && bucketOk);
                 }
                 function openDeleteModal(id, name, hasBucket, environment = 'legacy') {
                   document.getElementById('deleteModalText').textContent = environment === 'legacy'
@@ -375,6 +361,9 @@
                   const inp  = document.getElementById('deleteConfirmText');
                   inp.value = '';
                   btn.disabled = true;
+                  chk.disabled = !hasBucket;
+                  chk.required = hasBucket;
+                  chk.checked = false;
                   if (hasBucket) {
                     warn.style.display = 'block';
                     ack.style.display  = 'block';
@@ -395,7 +384,7 @@
                   const chk = document.getElementById('approveBucketAckCheck');
                   const hasBucket = document.getElementById('approveBucketAck').style.display !== 'none';
                   const bucketOk = !hasBucket || chk.checked;
-                  document.getElementById('approveConfirmBtn').disabled = !(txt === 'DELETE' && bucketOk);
+                  document.getElementById('approveConfirmBtn').disabled = !(txt.trim().toLowerCase() === 'delete' && bucketOk);
                 }
                 function openApproveModal(id, name, hasBucket, environment = 'legacy') {
                   document.getElementById('approveModalText').textContent = environment === 'legacy'
@@ -412,6 +401,9 @@
                   const inp  = document.getElementById('approveConfirmText');
                   inp.value = '';
                   btn.disabled = true;
+                  chk.disabled = !hasBucket;
+                  chk.required = hasBucket;
+                  chk.checked = false;
                   if (hasBucket) {
                     warn.style.display = 'block';
                     ack.style.display  = 'block';
@@ -434,12 +426,18 @@
                   document.getElementById('requestModal').style.display = 'flex';
                 }
                 function closeRequestModal() { document.getElementById('requestModal').style.display = 'none'; }
+                <% if (deletionRetry) { %>
+                  const retryData = document.getElementById('deletion-retry');
+                  const openRetry = retryData.dataset.action === 'approve' ? openApproveModal : openDeleteModal;
+                  openRetry(retryData.dataset.id, retryData.dataset.name, retryData.dataset.storage === 'true', retryData.dataset.environment);
+                <% } %>
               </script>
 
           </div>
         </main>
     </div>
   <script src="/js/repository-deploy-link.js"></script>
+    <script src="/js/deletion-confirmation.js"></script>
   </body>
 
 </html>

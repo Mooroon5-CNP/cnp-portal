@@ -13,6 +13,8 @@ jest.mock('../src/services/environment-deployment', () => ({
   validate: jest.fn(), workflowName: appName => `cnp-${appName}.yml`,
   onboard: jest.fn().mockResolvedValue(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
 }));
+jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest.fn().mockResolvedValue({ engine: 'unknown' }) }));
+
 jest.mock('../src/services/onboarding', () => ({ onboardApp: jest.fn().mockResolvedValue(), offboardApp: jest.fn() }));
 
 const request = require('supertest');

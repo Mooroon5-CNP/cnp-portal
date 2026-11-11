@@ -12,6 +12,10 @@ jest.mock('../src/services/environment-deployment', () => ({
     onboard: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
 }));
 
+jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest.fn().mockResolvedValue({ engine: 'unknown' }) }));
+
+jest.mock('../src/services/environment-deletion', () => ({ start: jest.fn(), get: jest.fn() }));
+
 jest.mock('../src/services/failover-operations', () => ({ createProfile: jest.fn() }));
 jest.mock('../src/services/failover-provisioning', () => ({ start: jest.fn() }));
 
@@ -21,6 +25,7 @@ const path = require('path');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
 const service = require('../src/services/environment-deployment');
+const deletion = require('../src/services/environment-deletion');
 const github = require('../src/clients/github');
 const repositories = require('../src/services/github');
 const kubernetes = require('../src/clients/kubernetes');
@@ -54,6 +59,7 @@ beforeEach(() => {
     service.onboard.mockResolvedValue();
     service.review.mockResolvedValue();
     service.remove.mockResolvedValue();
+    deletion.start.mockImplementation(dep => deployments.updateOnboardingStatus(dep.id, 'deleting'));
     service.reconcile.mockResolvedValue({ phase: 'approval', message: 'Validation manager requise.', revision, prUrl: 'https://example.test/pr' });
     github.getRuns.mockResolvedValue([]);
     github.getLatestRun.mockResolvedValue(null);
@@ -73,6 +79,9 @@ test('a failed pipeline exposes rerun and starts a new workflow on the current b
     github.getRuns.mockResolvedValue([failedRun()]);
     const page = await request(app).get(`/deployments/${dep.id}`);
     expect(page.text).toContain('Relancer la pipeline');
+    expect(page.text).toContain('Aucun nouveau déploiement n’est lancé.');
+    expect(page.text).not.toContain('Provisionnement Cloud Run en cours');
+    expect(page.text).not.toContain('id="url-card-spinner"');
     expect(page.text).not.toContain('Développer votre application');
     const response = await request(app).post(`/deployments/${dep.id}/retry-pipeline`).type('form').send({ runId: 123 });
     expect(response.status).toBe(302);
@@ -80,6 +89,19 @@ test('a failed pipeline exposes rerun and starts a new workflow on the current b
     expect(github.dispatchWorkflow).toHaveBeenCalledWith('team', 'sample', 'cnp-sample-app.yml', 'main', 'sample-app');
     expect(service.onboard).not.toHaveBeenCalled();
     expect(deployments.get(dep.id).onboardingStatus).toBe('ready');
+});
+
+test.each([
+    ['waiting', null, false], ['running', null, false], ['failed', 'failure', false],
+    ['approval', 'success', false], ['deploying', 'success', true],
+])('Cloud Run provisioning is shown only after successful CI and publication: %s', async (phase, conclusion, provisioning) => {
+    const dep = create('dev');
+    service.reconcile.mockResolvedValue({ phase, message: 'État du déploiement' });
+    github.getRuns.mockResolvedValue(conclusion ? [{ ...failedRun(), conclusion }] : []);
+    const response = await request(app).get(`/deployments/${dep.id}`);
+    expect(response.status).toBe(200);
+    expect(response.text.includes('Provisionnement Cloud Run en cours')).toBe(provisioning);
+    if (phase === 'failed' || phase === 'approval' || phase === 'waiting') expect(response.text).not.toContain('id="url-card-spinner"');
 });
 
 test.each([
@@ -145,7 +167,7 @@ test('environment addresses never advertise DNS readiness from runtime readiness
     service.reconcile.mockResolvedValue({ phase: 'deploying', revision, cloudRunUrl: 'https://sample-app-dev.run.app' });
     const dev = create('dev');
     const devResponse = await request(app).get(`/deployments/${dev.id}`);
-    expect(devResponse.text).toContain('https://sample-app.dev.apps.mooroon5.fr');
+    expect(devResponse.text).not.toContain('https://sample-app.dev.apps.mooroon5.fr');
     expect(devResponse.text).not.toContain('href="https://sample-app.dev.apps.mooroon5.fr"');
 });
 
@@ -254,16 +276,16 @@ test('environment polling tracks revision changes and does not stop after CI suc
 test('deletion only cleans the selected environment and keeps its sibling record', async () => {
     const dev = create('dev');
     const prod = create('prod');
-    await request(app).post(`/deployments/${dev.id}/delete`);
-    expect(service.remove).toHaveBeenCalledWith(expect.objectContaining({ id: dev.id, environment: 'dev' }));
-    expect(deployments.get(dev.id)).toBeNull();
+    await request(app).post(`/deployments/${dev.id}/delete`).type('form').send({ confirmation: 'delete' });
+    expect(deletion.start).toHaveBeenCalledWith(expect.objectContaining({ id: dev.id, environment: 'dev' }), expect.any(Object), { destroyData: false });
+    expect(deployments.get(dev.id).onboardingStatus).toBe('deleting');
     expect(deployments.get(prod.id)).toEqual(expect.objectContaining({ environment: 'prod' }));
 });
 
 test('failed cleanup retains the record so deletion can be retried', async () => {
     const dep = create('dev');
-    service.remove.mockRejectedValueOnce(new Error('Provider unavailable'));
-    await request(app).post(`/deployments/${dep.id}/delete`);
+    deletion.start.mockImplementationOnce(() => { throw new Error('Provider unavailable'); });
+    await request(app).post(`/deployments/${dep.id}/delete`).type('form').send({ confirmation: 'delete' });
     expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed' });
 });
 
@@ -276,23 +298,12 @@ test.each(['success', 'failure'])('late setup %s cannot overwrite an in-progress
     }));
     const created = await request(app).post('/deployments').type('form').send({ ...input, environment: 'dev' });
     const id = created.headers.location.split('/').pop();
-    let beginRemoval;
-    let finishRemoval;
-    const removalStarted = new Promise(resolve => { beginRemoval = resolve; });
-    const removalFinished = new Promise(resolve => { finishRemoval = resolve; });
-    service.remove.mockImplementationOnce(async () => {
-        beginRemoval();
-        await removalFinished;
-    });
-    const deleting = request(app).post(`/deployments/${id}/delete`).then(response => response);
-    await removalStarted;
+    const response = await request(app).post(`/deployments/${id}/delete`).type('form').send({ confirmation: 'delete' });
+    expect(response.status).toBe(302);
     if (outcome === 'success') finishSetup();
     else failSetup(new Error('Setup finished with an error'));
     await new Promise(resolve => setImmediate(resolve));
     expect(deployments.get(id).onboardingStatus).toBe('deleting');
-    finishRemoval();
-    expect((await deleting).status).toBe(302);
-    expect(deployments.get(id)).toBeNull();
 });
 
 test('legacy records retain their original service and branch identity', () => {
@@ -382,4 +393,16 @@ describe('choix « hébergement et données »', () => {
         expect(deployments.listForUser(null)).toHaveLength(0);
         expect(service.onboard).not.toHaveBeenCalled();
     });
+});
+
+
+test('a verified native URL is displayed without a custom DNS warning', async () => {
+    const dep = create('dev');
+    service.reconcile.mockResolvedValue({ phase: 'success', revision, applicationUrl: 'https://sample-app-dev.run.app', cloudRunUrl: 'https://sample-app-dev.run.app' });
+    const response = await request(app).get(`/deployments/${dep.id}`);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('href="https://sample-app-dev.run.app"');
+    expect(response.text).toContain('Adresse HTTPS vérifiée');
+    expect(response.text).not.toContain('nécessite le routage DNS');
+    expect(response.text).not.toContain('sample-app.dev.apps.mooroon5.fr');
 });

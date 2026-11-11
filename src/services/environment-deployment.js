@@ -1,6 +1,7 @@
 'use strict';
 
 const yaml = require('js-yaml');
+const axios = require('axios');
 const { selectWorkflowRun } = require('./workflow-runs');
 const { createHash } = require('crypto');
 const { config } = require('../config/env');
@@ -147,8 +148,11 @@ function manifests(dep, revision) {
   const iam = resource('cloudrun.gcp.upbound.io/v1beta2', 'ServiceIAMMember', `${name}-public`,
     { project: config.gcp.project, location: config.gcp.region, service: name, role: 'roles/run.invoker', member: 'allUsers' });
   const files = { [`${path}/cloudrun-claim.yaml`]: yaml.dump(claim), [`${path}/cloudrun-iam.yaml`]: yaml.dump(iam) };
-  files[`${path}/application-network.yaml`] = routing.network(dep);
-  const resources = ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'application-network.yaml'];
+  const resources = ['cloudrun-claim.yaml', 'cloudrun-iam.yaml'];
+  if (!addresses.usesNativeCloudRun(dep)) {
+    files[`${path}/application-network.yaml`] = routing.network(dep);
+    resources.push('application-network.yaml');
+  }
   if (dep.persistentStorage) {
     const storage = resource('storage.gcp.upbound.io/v1beta1', 'Bucket', bucket,
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
@@ -312,9 +316,8 @@ async function prepareOnboarding(dep) {
     const files = { 'apps/registry.yaml': yaml.dump(doc) };
     if (!(await readFile(api, destination, rootPath, head))) {
       await ensureEmptyRootAllowed(head);
-      // Le scanner historique peut voir ce parent, mais il ne gère aucune ressource.
-      // Ne jamais remplacer un vrai manifeste historique : cela en déclencherait le prune.
-      files[rootPath] = yaml.dump({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: [] });
+      // Le scanner historique découvre uniquement les manifests racine existants.
+      // Ne pas créer de parent vide : seuls les scanners dev/prod possèdent cet environnement.
     }
     return files;
   }, `chore(${dep.appName}): register ${dep.environment}`);
@@ -348,6 +351,25 @@ async function readiness(dep, revision) {
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
   if (observed.ready && observed.image === image(dep, revision)) {
+    if (addresses.usesNativeCloudRun(dep)) {
+      // Only probe the provider's HTTPS endpoint, never an arbitrary URL or redirect.
+      let endpoint;
+      try { endpoint = new URL(observed.url); } catch (_) { /* No observed URI yet. */ }
+      if (!endpoint || endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.run.app')
+        || endpoint.port || endpoint.username || endpoint.password) {
+        return { phase: 'failed', message: 'Cloud Run prêt, mais aucune adresse HTTPS native valide observée.', cloudRunUrl: null };
+      }
+      try {
+        const response = await axios.get(endpoint.origin, { timeout: 10000, maxRedirects: 0,
+          validateStatus: () => true });
+        if (response.status < 200 || response.status >= 400) {
+          return { phase: 'failed', message: `Cloud Run prêt, mais l’application répond HTTP ${response.status}. Vérifiez l’application, l’ingress et les droits d’accès.`, cloudRunUrl: null };
+        }
+      } catch (_) {
+        return { phase: 'failed', message: 'Cloud Run prêt, mais son adresse HTTPS ne répond pas. Vérifiez la connectivité et les journaux Cloud Run.', cloudRunUrl: null };
+      }
+      return { phase: 'success', message: 'Application accessible sur Cloud Run.', cloudRunUrl: endpoint.origin, applicationUrl: endpoint.origin };
+    }
     const api = await github.getInstallationOctokit();
     await routing.sync(dep, { api, repo: target(), commitFiles, beforePublish: async () => {
       if (!current(dep)) throw new Error('Le déploiement a changé pendant la préparation du routage.');
@@ -425,6 +447,17 @@ async function reconcile(dep) {
           || !item?.valueSource?.secretKeyRef?.secret || !item?.valueSource?.secretKeyRef?.version
           || Object.keys(item).some(key => !['name', 'valueSource'].includes(key)))) throw new Error('Invalid runtime secret references.');
         const claimPath = `${identity(dep).path}/cloudrun-claim.yaml`;
+        // Keep existing network resources referenced: changing the access link must
+        // not prune a backend that a previously published custom route still uses.
+        if (addresses.usesNativeCloudRun(dep)) {
+          const networkPath = `${identity(dep).path}/application-network.yaml`;
+          if (await readFile(api, target(), networkPath)) {
+            const kustomizationPath = `${identity(dep).path}/kustomization.yaml`;
+            const kustomization = yaml.load(files[kustomizationPath]);
+            kustomization.resources.push('application-network.yaml');
+            files[kustomizationPath] = yaml.dump(kustomization);
+          }
+        }
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
         container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
@@ -491,7 +524,7 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   } finally { releases.release(dep.id, revision, token); }
 }
 
-async function remove(dep, { afterFailoverTeardown = false } = {}) {
+async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } = {}) {
   // Une app failover se supprime par failover-teardown (bases, secours, secrets), qui termine en appelant cette fonction.
   if (failover.enabled(dep) && !afterFailoverTeardown) throw new Error('Suppression complète du failover requise d’abord.');
   if (onboardingLocks.has(dep.id)) await onboardingLocks.get(dep.id).catch(() => {});
@@ -509,6 +542,10 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
   const onAzure = azure.isAzure(dep);
   const files = {};
   const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  for (const file of cleanupFiles) {
+    if (!/^[a-zA-Z0-9_.-]+\.ya?ml$/.test(file)) throw new Error('Fichier de nettoyage hors du dossier de l’environnement.');
+    if (!claimFiles.includes(file)) claimFiles.push(file);
+  }
   for (const file of claimFiles) {
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
@@ -519,9 +556,16 @@ async function remove(dep, { afterFailoverTeardown = false } = {}) {
       || releases.list(dep.id).some(release => release.state === 'published');
     // A failed CI may never have published any resource or route. In that case
     // remove only its registration; do not wait on a route that was never created.
-    if (hasRuntime) {
-      await routing.sync(dep, { api, repo: target(), commitFiles }, true);
-      if (!(await routing.status(dep, true))) throw new Error('Retrait du routage en cours. Réessayez la suppression après synchronisation Argo CD.');
+    const hasNetwork = Object.hasOwn(files, `${path}/application-network.yaml`);
+    if (hasRuntime && (!addresses.usesNativeCloudRun(dep) || hasNetwork)) {
+      // An earlier attempt may already have removed the Git ownership annotation.
+      // Still wait for the observed route to disappear before deleting its backend.
+      if (await routing.hasOwnedRoute(dep, api, target())) {
+        await routing.sync(dep, { api, repo: target(), commitFiles }, true);
+      }
+      if (!(await routing.status(dep, true))) {
+        throw Object.assign(new Error('Retrait du routage en cours ; la suppression reprendra automatiquement après synchronisation Argo CD.'), { code: 'CLEANUP_PENDING' });
+      }
       // L'Application n'est plus supprimée ici, avant le retrait du dossier : voir plus bas (GCP, comme Azure et le failover).
     }
   }
@@ -601,6 +645,7 @@ function startReconciler() {
     if (running) return;
     running = true;
     try {
+      await require('./environment-deletion').tick();
       for (const row of deployments.listForUser(null)) {
         const dep = deployments.get(row.id);
         if (!dep || dep.environment === 'legacy') continue;

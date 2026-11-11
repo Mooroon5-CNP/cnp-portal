@@ -78,6 +78,10 @@ async function sync(dep, { api, repo, commitFiles, beforePublish }, remove = fal
     return files;
   }, `route(${dep.appName}): ${remove ? 'detach' : 'publish'} ${dep.environment}`, 'main', beforePublish);
 }
+async function hasOwnedRoute(dep, api, repo) {
+  const map = await read(api, repo, ROUTING_PATH, 'main');
+  return Boolean(map?.metadata?.annotations?.[`cnp.io/route-${names(dep).service}`]);
+}
 function managedReady(body) {
   return ['Ready', 'Synced'].every(type => body?.status?.conditions?.some(item => item.type === type && item.status === 'True'));
 }
@@ -85,11 +89,18 @@ async function status(dep, remove = false) {
   const n = names(dep);
   const map = await kubernetes.getComputeResource('urlmaps', MAP_NAME);
   const observed = map?.status?.atProvider;
-  if (!managedReady(map) || !observed) return false;
+  if (remove && !map) return true;
+  if (!observed) return false;
   const host = addresses.hostname(dep);
   const hostRule = observed.hostRule?.find(rule => rule.hosts?.includes(host));
   const matcher = observed.pathMatcher?.find(rule => rule.name === n.matcher);
-  if (remove) return !hostRule && !matcher;
+  // Deletion only depends on this route disappearing, not the health of other routes.
+  if (remove) return !hostRule && !matcher
+    && !(map.spec?.forProvider?.hostRule || []).some(rule => rule.hosts?.includes(host) || rule.pathMatcher === n.matcher)
+    && !(map.spec?.forProvider?.pathMatcher || []).some(rule => rule.name === n.matcher || rule.defaultService === backendUrl(dep))
+    && !(observed.pathMatcher || []).some(rule => rule.defaultService === backendUrl(dep))
+    && !(observed.hostRule || []).some(rule => rule.pathMatcher === n.matcher);
+  if (!managedReady(map)) return false;
   if (hostRule?.pathMatcher !== n.matcher || matcher?.defaultService !== backendUrl(dep)) return false;
   const [neg, backend] = await Promise.all([
     kubernetes.getComputeResource('regionnetworkendpointgroups', n.neg), kubernetes.getComputeResource('backendservices', n.backend),
@@ -102,4 +113,4 @@ async function status(dep, remove = false) {
     return response.status >= 200 && response.status < 400;
   } catch (_) { return false; }
 }
-module.exports = { names, network, updateMap, sync, status, managedReady, ROUTING_PATH, MAP_NAME };
+module.exports = { names, network, updateMap, sync, status, hasOwnedRoute, managedReady, ROUTING_PATH, MAP_NAME };

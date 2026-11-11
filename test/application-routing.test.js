@@ -84,3 +84,31 @@ test('shared routing accepts only the supported Observe/Update import policy', (
   }
   expect(routing.updateMap(baseline(), dep).spec.managementPolicies).toEqual(['Observe', 'Update']);
 });
+
+
+test('native teardown detects only an owned legacy route, and tolerates an absent shared map', async () => {
+  const api = { request: jest.fn().mockRejectedValue(Object.assign(new Error('not found'), { status: 404 })) };
+  const repo = { owner: 'team', repo: 'config' };
+  expect(await routing.hasOwnedRoute(dep, api, repo)).toBe(false);
+  api.request.mockResolvedValue({ data: { content: Buffer.from(yaml.dump(baseline())).toString('base64') } });
+  expect(await routing.hasOwnedRoute(dep, api, repo)).toBe(false);
+  api.request.mockResolvedValue({ data: { content: Buffer.from(yaml.dump(routing.updateMap(baseline(), dep))).toString('base64') } });
+  expect(await routing.hasOwnedRoute(dep, api, repo)).toBe(true);
+  api.request.mockRejectedValue(Object.assign(new Error('Forbidden'), { status: 403 }));
+  await expect(routing.hasOwnedRoute(dep, api, repo)).rejects.toThrow('Forbidden');
+});
+
+
+test('route removal is independent of unrelated map health but requires both desired and observed detachment', async () => {
+  const empty = baseline();
+  const body = { spec: empty.spec, status: { conditions: [{ type: 'Ready', status: 'False' }], atProvider: empty.spec.forProvider } };
+  k8s.getComputeResource.mockResolvedValue(body);
+  expect(await routing.status(dep, true)).toBe(true);
+  body.spec = routing.updateMap(baseline(), dep).spec;
+  expect(await routing.status(dep, true)).toBe(false);
+  body.spec = baseline().spec;
+  body.status.atProvider = routing.updateMap(baseline(), dep).spec.forProvider;
+  expect(await routing.status(dep, true)).toBe(false);
+  k8s.getComputeResource.mockResolvedValue(null);
+  expect(await routing.status(dep, true)).toBe(true);
+});

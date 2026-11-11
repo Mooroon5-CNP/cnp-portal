@@ -8,6 +8,8 @@ const githubService = require('../services/github');
 const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
 const environmentService = require('../services/environment-deployment');
+const environmentDeletion = require('../services/environment-deletion');
+const repositoryDatabase = require('../services/repository-database');
 const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
@@ -234,6 +236,10 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
     }));
 
     const userTeams = teamService.getTeamsForUser(req.user.id);
+    const deploymentDraft = req.session.deploymentDraft || null;
+    delete req.session.deploymentDraft;
+    const deletionDraft = req.session.deletionDraft || null;
+    delete req.session.deletionDraft;
 
     res.render('deployments/index', {
         title: 'Déploiements — CNP Portal',
@@ -243,6 +249,8 @@ router.get('/', requireAuth, requirePermission('deployments:deploy'), async (req
         allTeams,
         userTeams,
         applicationsBaseDomain: applicationAddress.baseDomain(),
+        deploymentDraft,
+        deletionDraft,
         filterTeam,
         user: req.user,
         can: (p) => can(req.user, p),
@@ -337,7 +345,21 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     // Validate ownerTeamId if provided.
     const resolvedTeamId = ownerTeamId && teamService.getTeam(ownerTeamId) ? ownerTeamId : null;
 
-    // Create the deployment record immediately with status 'configuring'.
+    // Reject a known database mismatch BEFORE recording or provisioning anything.
+    try {
+        const selected = hasPersistentStorage ? 'sqlite'
+            : (database || failoverRequested || targetCluster === 'azure') ? 'postgres' : null;
+        await repositoryDatabase.assertCompatible(parsed, { environment,
+            selected });
+    } catch (error) {
+        req.session.deploymentDraft = { appName, githubRepoUrl, appPort: port, environment,
+            stack: req.body.stack || (hasPersistentStorage ? 'gcp-sqlite' : targetCluster === 'azure' ? 'azure-postgres' : 'gcp-postgres'),
+            ownerTeamId: resolvedTeamId, billing, error: error.message };
+        req.flash('error', error.message);
+        return res.redirect('/deployments');
+    }
+
+    // Only record the deployment after the read-only compatibility check succeeds.
     let dep;
     try {
         dep = deploymentModel.create({
@@ -371,6 +393,7 @@ router.post('/:id/resume-deployment', requireAuth, requirePermission('deployment
     if (!dep) return res.status(404).send('Déploiement introuvable.');
     if (!canViewDeployment(req.user, dep)) return res.status(403).send('Accès refusé.');
     try {
+        if (environmentDeletion.get(dep.id)) throw new Error('Une suppression définitive a été confirmée. Reprenez son nettoyage avant de redéployer.');
         await environmentService.resumeAfterCleanupFailure(dep);
         req.flash('success', 'Suivi CI repris. La prochaine CI valide sera prise en compte ; la production reste soumise à approbation.');
     } catch (error) { req.flash('error', error.message); }
@@ -439,8 +462,8 @@ router.post('/:id/retry-pipeline', requireAuth, requirePermission('cicd:trigger-
         await githubClient.dispatchWorkflow(source.owner, source.repo, workflowId(dep) || 'ci.yml', sourceBranch(dep), dep.appName);
         req.flash('success', 'Nouvelle pipeline demandée sur la version actuelle de la branche. Le suivi se met à jour dès son démarrage sur GitHub.');
         return res.redirect(`/deployments/${dep.id}`);
-    } catch (_) {
-        req.flash('error', 'Impossible de relancer la pipeline. Vérifiez les droits GitHub Actions et réessayez.');
+    } catch (error) {
+        req.flash('error', error.userMessage || 'Impossible de relancer la pipeline. Vérifiez les droits GitHub Actions et réessayez.');
         return res.redirect(`/deployments/${dep.id}`);
     } finally {
         pipelineRetries.delete(dep.id);
@@ -471,7 +494,7 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
     }
 
     if (dep.onboardingStatus === 'deleting') {
-        return res.json({ phase: 'deleting', message: 'Suppression de cet environnement en cours...' });
+        return res.json({ phase: 'deleting', message: environmentDeletion.get(dep.id)?.message || 'Suppression de cet environnement en cours ; reprise automatique.' });
     }
 
     if (dep.onboardingStatus === 'delete_failed') {
@@ -644,6 +667,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         onboardingStatus: dep.onboardingStatus,
         onboardingError: dep.onboardingError,
         ownerUserId: dep.ownerUserId,
+        persistentStorage: dep.persistentStorage,
         targetCluster: dep.targetCluster || 'gcp',
         environment: dep.environment || 'legacy',
         sourceBranch: sourceBranch(dep),
@@ -683,18 +707,24 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
+    const deletionDraft = req.session.deletionDraft?.id === dep.id ? req.session.deletionDraft : null;
+    if (deletionDraft) delete req.session.deletionDraft;
+
     res.render('deployments/detail', {
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        deletionDraft,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
         canRetryPipeline: can(req.user, 'cicd:trigger-pipeline') && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
         environmentStatus: selectedStatus,
+        hasDeletionJob: Boolean(environmentDeletion.get(dep.id)),
         // Azure n'a pas le routage GCP (<app>.apps.mooroon5.fr passe par le load balancer GCP) : son adresse est le
         // domaine par défaut de l'environnement Container Apps.
         applicationUrl: dep.targetCluster === 'azure' && usesEnvironment(dep)
             ? azureAppUrl(dep.appName, config.azure, dep.environment)
-            : applicationAddress.url(dep),
+            : applicationAddress.usesNativeCloudRun(dep)
+                ? selectedStatus?.applicationUrl || null : applicationAddress.url(dep),
         runs,
         latest,
         jobs,
@@ -729,49 +759,51 @@ for (const action of ['approve', 'reject']) {
 // POST /deployments/:id/delete — manager only, triggers full cleanup
 // ---------------------------------------------------------------------------
 
-router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'), async (req, res) => {
+async function deleteDeployment(req, res, approveRequest = false) {
     const dep = deploymentModel.get(req.params.id);
     if (!dep) {
         req.flash('error', 'Déploiement introuvable.');
         return res.redirect('/deployments');
     }
-
-    if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
-
-    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
-    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
-    if (require('../services/environment-failover').enabled(dep)) {
-        try {
-            require('../services/failover-teardown').start(dep, req.user);
-            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
-            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
-        } catch (e) {
-            req.flash('error', `Suppression impossible : ${e.message}`);
-        }
+    if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') {
+        req.flash('info', 'Suppression déjà en cours ; elle se poursuit automatiquement.');
         return res.redirect(`/deployments/${dep.id}`);
     }
-
+    const validationError = String(req.body.confirmation || '').trim().toLowerCase() !== 'delete'
+        ? 'Saisissez delete pour confirmer la suppression.'
+        : dep.persistentStorage && req.body.destroyData !== 'yes'
+            ? 'Confirmez la suppression définitive des données de cet environnement.' : null;
+    if (validationError) {
+        req.session.deletionDraft = { id: dep.id, action: approveRequest ? 'approve' : 'delete', error: validationError };
+        req.flash('error', validationError);
+        return res.redirect(req.body.returnTo === 'list' ? '/deployments' : `/deployments/${dep.id}`);
+    }
     try {
-        if (usesEnvironment(dep)) {
+        if (approveRequest) {
+            const pending = deletionRequestModel.listForDeployment(dep.id).find(row => row.status === 'pending');
+            if (pending) deletionRequestModel.approve(pending.id, req.user.id);
+        }
+        if (require('../services/environment-failover').enabled(dep)) {
+            require('../services/failover-teardown').start(dep, req.user);
             deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
-            await environmentService.remove(dep);
+        } else if (usesEnvironment(dep)) {
+            environmentDeletion.start(dep, req.user, { destroyData: req.body.destroyData === 'yes' });
         } else {
             await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
+            deletionRequestModel.deleteByDeployment(dep.id);
+            deploymentModel.delete(dep.id);
+            req.flash('success', `Application "${dep.appName}" supprimée.`);
+            return res.redirect('/deployments');
         }
-    } catch (e) {
-        // Log partial-cleanup warnings but don't block the deletion.
-        req.flash('error', `Nettoyage partiel : ${e.message}`);
-        if (usesEnvironment(dep)) {
-            deploymentModel.updateOnboardingStatus(dep.id, 'delete_failed', `Nettoyage partiel : ${e.message}`);
-            return res.redirect(`/deployments/${dep.id}`);
-        }
+        req.flash('success', `Suppression de "${dep.appName}" lancée. Le nettoyage se poursuit automatiquement ; le déploiement disparaîtra après vérification.`);
+    } catch (error) {
+        deploymentModel.updateOnboardingStatus(dep.id, 'delete_failed', error.message);
+        req.flash('error', `Suppression à reprendre : ${error.message}`);
     }
+    return res.redirect(`/deployments/${dep.id}`);
+}
 
-    deletionRequestModel.deleteByDeployment(dep.id);
-    deploymentModel.delete(dep.id);
-    req.flash('success', `Application "${dep.appName}" supprimée et ressources nettoyées.`);
-    return res.redirect('/deployments');
-});
+router.post('/:id/delete', requireAuth, requirePermission('deployments:delete'), (req, res) => deleteDeployment(req, res));
 
 // ---------------------------------------------------------------------------
 // POST /deployments/:id/request-delete — dev/devops requests deletion
@@ -804,51 +836,7 @@ router.post('/:id/request-delete', requireAuth, requirePermission('deployments:d
 // POST /deployments/:id/approve-delete — manager approves a pending request
 // ---------------------------------------------------------------------------
 
-router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:delete'), async (req, res) => {
-    const dep = deploymentModel.get(req.params.id);
-    if (!dep) {
-        req.flash('error', 'Déploiement introuvable.');
-        return res.redirect('/deployments');
-    }
-
-    const request = deletionRequestModel.listForDeployment(dep.id).find(r => r.status === 'pending');
-    if (request) deletionRequestModel.approve(request.id, req.user.id);
-
-    if (usesEnvironment(dep) && dep.onboardingStatus === 'deleting') return res.status(409).send('Suppression déjà en cours.');
-
-    // Application failover : suppression complète en tâche de fond (les bases mettent plusieurs minutes à disparaître) ;
-    // le déploiement disparaît du portail à la fin, une fois tout supprimé.
-    if (require('../services/environment-failover').enabled(dep)) {
-        try {
-            require('../services/failover-teardown').start(dep, req.user);
-            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
-            req.flash('success', `Suppression de "${dep.appName}" lancée : bases, secours et secrets disparaissent en quelques minutes.`);
-        } catch (e) {
-            req.flash('error', `Suppression impossible : ${e.message}`);
-        }
-        return res.redirect(`/deployments/${dep.id}`);
-    }
-
-    try {
-        if (usesEnvironment(dep)) {
-            deploymentModel.updateOnboardingStatus(dep.id, 'deleting');
-            await environmentService.remove(dep);
-        } else {
-            await onboardingService.offboardApp({ appName: dep.appName, githubRepoUrl: dep.githubRepoUrl, targetCluster: dep.targetCluster });
-        }
-    } catch (e) {
-        req.flash('error', `Nettoyage partiel : ${e.message}`);
-        if (usesEnvironment(dep)) {
-            deploymentModel.updateOnboardingStatus(dep.id, 'delete_failed', `Nettoyage partiel : ${e.message}`);
-            return res.redirect(`/deployments/${dep.id}`);
-        }
-    }
-
-    deletionRequestModel.deleteByDeployment(dep.id);
-    deploymentModel.delete(dep.id);
-    req.flash('success', `Application "${dep.appName}" supprimée et ressources nettoyées.`);
-    return res.redirect('/deployments');
-});
+router.post('/:id/approve-delete', requireAuth, requirePermission('deployments:delete'), (req, res) => deleteDeployment(req, res, true));
 
 // ---------------------------------------------------------------------------
 // POST /deployments/:id/reject-delete — manager rejects a pending request
