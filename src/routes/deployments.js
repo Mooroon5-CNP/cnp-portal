@@ -12,6 +12,8 @@ const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
 const deletionRequestModel = require('../models/deletion_request');
 const teamService = require('../services/teams');
+const datadogService = require('../services/datadog');
+const { readDashboardSources } = require('../services/dashboard-sources');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
 const { selectWorkflowRun } = require('../services/workflow-runs');
@@ -653,6 +655,24 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
+    // Observabilité de CETTE app (l'accès vient d'être vérifié par canViewDeployment) : bornée dans le
+    // temps pour que Datadog ne ralentisse jamais la page, et jamais bloquante.
+    let observability = null;
+    if (can(req.user, 'observability:metrics:view')) {
+        const service = dep.resourceName;
+        const window = datadogService.resolveWindow({ range: '24h' });
+        const sources = await readDashboardSources({
+            logs: () => datadogService.getLogs([service], { window, limit: 10 }),
+            metrics: () => datadogService.getMetrics([service], window),
+        }, 3000);
+        observability = {
+            service,
+            available: sources.logs.available || sources.metrics.available,
+            logs: sources.logs.data,
+            metrics: sources.metrics.data[0] || null,
+        };
+    }
+
     res.render('deployments/detail', {
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
@@ -676,6 +696,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         otherTeams,
         pendingMrs,
         mrUsers,
+        observability,
         user: req.user,
         can: (p) => can(req.user, p),
     });

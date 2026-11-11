@@ -11,12 +11,14 @@
       <div class="page-header">
         <div>
           <div class="page-title">Alertes Datadog</div>
-          <div class="page-subtitle">Gestion des moniteurs et alertes</div>
+          <div class="page-subtitle">Moniteurs Datadog des applications de votre équipe</div>
         </div>
-        <% if (can('observability:alerts:create')) { %>
+        <% if (can('observability:alerts:create') && services.length > 0) { %>
         <button onclick="document.getElementById('create-modal').style.display='flex'" class="btn btn-primary">+ Créer une alerte</button>
         <% } %>
       </div>
+
+      <%- include('../partials/observability-nav', { active: 'alerts' }) %>
 
       <div class="card mb-6">
         <div class="table-container">
@@ -86,7 +88,7 @@
       <% } %>
 
       <!-- Create alert modal -->
-      <% if (can('observability:alerts:create')) { %>
+      <% if (can('observability:alerts:create') && services.length > 0) { %>
       <div id="create-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
         <div class="card" style="width:500px;">
           <div class="card-header">
@@ -101,11 +103,16 @@
               </div>
               <div class="form-group">
                 <label>Query Datadog</label>
-                <input type="text" name="query" placeholder="avg(last_5m):sum:trace.web.request.errors{env:prod} > 5" required>
+                <input type="text" name="query" placeholder="sum(last_15m):sum:gcp.run.request_count{service_name:mon-app-prod,response_code_class:5xx}.as_count() > 10" required>
+                <div class="text-muted" style="font-size:12px;margin-top:4px;">La requête doit filtrer sur l'application choisie uniquement (<code>service_name:</code>, <code>servicename:</code> ou <code>service:</code>).</div>
               </div>
               <div class="form-group">
-                <label>Service cible</label>
-                <input type="text" name="app" placeholder="ex: cnp-portal">
+                <label>Application</label>
+                <select name="app" required>
+                  <% services.forEach(s => { %>
+                  <option value="<%= s.service %>" <%= s.service === selectedService ? 'selected' : '' %>><%= s.service %></option>
+                  <% }) %>
+                </select>
               </div>
               <div style="display:flex;gap:10px;">
                 <button type="submit" class="btn btn-primary">Créer</button>

@@ -5,6 +5,7 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const k8sService = require('../services/k8s');
 const datadogService = require('../services/datadog');
+const observabilityScope = require('../services/observability-scope');
 const argocdService = require('../services/argocd');
 const deploymentModel = require('../models/deployment');
 const teamService = require('../services/teams');
@@ -15,7 +16,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const sources = await readDashboardSources({
       Kubernetes: () => k8sService.listPods(),
-      Datadog: () => datadogService.getAlerts(),
+      Datadog: () => datadogService.getAlerts(observabilityScope.listObservableServices(req.user).map(s => s.service)),
       'Argo CD': () => argocdService.listApps(),
     });
     const pods = sources.Kubernetes.data;

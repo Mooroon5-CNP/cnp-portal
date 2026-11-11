@@ -1,0 +1,87 @@
+<%#
+  Onglets + filtres communs aux pages d'observabilité.
+  Attend : active ('logs'|'metrics'|'alerts'|'datadog'), services, selectedService,
+  et selon la page : window, ranges, level, levels, search.
+  Le sélecteur ne propose que les apps de l'équipe : la liste vient du serveur (observability-scope).
+%>
+<%
+  const keep = {};
+  if (selectedService) keep.service = selectedService;
+  if (locals.window) {
+    keep.range = window.range;
+    if (window.range === 'custom') { keep.from = window.fromDay; keep.to = window.toDay; }
+  }
+  const qs = '?' + new URLSearchParams(keep).toString();
+  const where = s => {
+    if (s.cloud === 'aws') return 'AWS (ECS)';
+    if (s.cloud === 'azure') return 'Azure';
+    return s.failover ? 'GCP, secours AWS' : 'GCP (Cloud Run)';
+  };
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+%>
+<div class="obs-tabs">
+  <a href="/observability/metrics<%= qs.length > 1 ? qs : '' %>" class="obs-tab <%= active === 'metrics' ? 'active' : '' %>">Métriques</a>
+  <a href="/observability/logs<%= qs.length > 1 ? qs : '' %>" class="obs-tab <%= active === 'logs' ? 'active' : '' %>">Logs</a>
+  <a href="/observability/alerts<%= selectedService ? '?service=' + encodeURIComponent(selectedService) : '' %>" class="obs-tab <%= active === 'alerts' ? 'active' : '' %>">Alertes</a>
+  <a href="/observability/datadog" class="obs-tab <%= active === 'datadog' ? 'active' : '' %>">Accès Datadog</a>
+</div>
+
+<% if (active !== 'datadog') { %>
+
+<form method="GET" action="/observability/<%= active %>" class="obs-filters card" id="obs-filters">
+  <label>
+    <span>Application</span>
+    <select name="service" onchange="this.form.submit()">
+      <option value="">Toutes mes applications (<%= services.length %>)</option>
+      <% services.forEach(s => { %>
+      <option value="<%= s.service %>" <%= s.service === selectedService ? 'selected' : '' %>><%= s.service %> — <%= where(s) %></option>
+      <% }) %>
+    </select>
+  </label>
+  <% if (locals.window && active !== 'alerts') { %>
+  <label>
+    <span>Période</span>
+    <select name="range" onchange="if (this.value !== 'custom') this.form.submit(); else document.getElementById('obs-custom').style.display = 'flex';">
+      <% Object.entries(ranges).forEach(([key, r]) => { %>
+      <option value="<%= key %>" <%= key === window.range ? 'selected' : '' %>><%= r.label %></option>
+      <% }) %>
+    </select>
+  </label>
+  <span id="obs-custom" class="obs-custom" style="display:<%= window.range === 'custom' ? 'flex' : 'none' %>;">
+    <label><span>Du</span><input type="date" name="from" value="<%= window.fromDay %>" max="<%= today %>"></label>
+    <label><span>Au</span><input type="date" name="to" value="<%= window.toDay %>" max="<%= today %>"></label>
+    <button type="submit" class="btn btn-secondary btn-sm">Appliquer</button>
+  </span>
+  <% } %>
+  <% if (locals.levels) { %>
+  <label>
+    <span>Niveau</span>
+    <select name="level" onchange="this.form.submit()">
+      <option value="">Tous</option>
+      <% levels.forEach(l => { %>
+      <option value="<%= l %>" <%= l === level ? 'selected' : '' %>><%= l.toUpperCase() %></option>
+      <% }) %>
+    </select>
+  </label>
+  <label class="obs-search">
+    <span>Rechercher dans les messages</span>
+    <input type="search" name="q" value="<%= search %>" maxlength="100" placeholder="ex : timeout, /api/login, 500">
+  </label>
+  <button type="submit" class="btn btn-secondary btn-sm">Rechercher</button>
+  <% } %>
+  <noscript><button type="submit" class="btn btn-secondary btn-sm">Filtrer</button></noscript>
+</form>
+
+<% if (locals.window && window.error) { %>
+<div class="flash flash-error" style="margin-bottom:16px;"><%= window.error %> Affichage des 24 dernières heures.</div>
+<% } %>
+
+<% if (services.length === 0) { %>
+<div class="card mb-6">
+  <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px;">
+    Aucune application visible : vous ne voyez que les applications de votre équipe.
+    Demandez à un manager de vous ajouter à une équipe ou de donner accès à une application.
+  </div>
+</div>
+<% } %>
+<% } %>
