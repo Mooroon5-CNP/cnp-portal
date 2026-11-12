@@ -9,7 +9,7 @@ jest.mock('../src/services/github', () => ({
 jest.mock('../src/services/environment-deployment', () => ({
     validate: jest.fn((environment) => { if (!['dev', 'prod'].includes(environment)) throw new Error('Environnement invalide'); }),
     workflowName: appName => `cnp-${appName}.yml`,
-    onboard: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
+    onboard: jest.fn(), observe: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
 }));
 
 jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest.fn().mockResolvedValue({ engine: 'unknown' }) }));
@@ -61,6 +61,7 @@ beforeEach(() => {
     service.remove.mockResolvedValue();
     deletion.start.mockImplementation(dep => deployments.updateOnboardingStatus(dep.id, 'deleting'));
     service.reconcile.mockResolvedValue({ phase: 'approval', message: 'Validation manager requise.', revision, prUrl: 'https://example.test/pr' });
+    service.observe.mockResolvedValue({ phase: 'approval', message: 'Validation manager requise.', revision, prUrl: 'https://example.test/pr', observedAt: new Date().toISOString(), freshness: 'live' });
     github.getRuns.mockResolvedValue([]);
     github.getLatestRun.mockResolvedValue(null);
     github.getRunJobs.mockResolvedValue([]);
@@ -96,7 +97,7 @@ test.each([
     ['approval', 'success', false], ['deploying', 'success', true],
 ])('Cloud Run provisioning is shown only after successful CI and publication: %s', async (phase, conclusion, provisioning) => {
     const dep = create('dev');
-    service.reconcile.mockResolvedValue({ phase, message: 'État du déploiement' });
+    service.observe.mockResolvedValue({ phase, message: 'État du déploiement' });
     github.getRuns.mockResolvedValue(conclusion ? [{ ...failedRun(), conclusion }] : []);
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
@@ -157,14 +158,14 @@ test('MCP links retain the selected deployment environment', async () => {
 
 test('environment addresses never advertise DNS readiness from runtime readiness alone', async () => {
     const dep = create('prod');
-    service.reconcile.mockResolvedValue({ phase: 'success', revision, cloudRunUrl: 'https://sample-app-prod.run.app', applicationUrl: 'https://sample-app.apps.mooroon5.fr' });
+    service.observe.mockResolvedValue({ phase: 'success', revision, cloudRunUrl: 'https://sample-app-prod.run.app', applicationUrl: 'https://sample-app.apps.mooroon5.fr' });
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
     expect(response.text).toContain('https://sample-app.apps.mooroon5.fr');
     expect(response.text).not.toContain('Développer votre application');
     expect(response.text).not.toContain('href="https://sample-app-prod.run.app"');
     expect(response.text).toContain('href="https://sample-app.apps.mooroon5.fr"');
-    service.reconcile.mockResolvedValue({ phase: 'deploying', revision, cloudRunUrl: 'https://sample-app-dev.run.app' });
+    service.observe.mockResolvedValue({ phase: 'deploying', revision, cloudRunUrl: 'https://sample-app-dev.run.app' });
     const dev = create('dev');
     const devResponse = await request(app).get(`/deployments/${dev.id}`);
     expect(devResponse.text).not.toContain('https://sample-app.dev.apps.mooroon5.fr');
@@ -208,6 +209,8 @@ test('status reports approval instead of interpreting CI success as deployment s
     expect(response.status).toBe(200);
     expect(response.body.phase).toBe('approval');
     expect(response.body.cloudRunUrl).toBeUndefined();
+    expect(service.observe).toHaveBeenCalledWith(expect.objectContaining({ id: dep.id }));
+    expect(service.reconcile).not.toHaveBeenCalled();
 });
 
 test('production detail only renders manager approval controls for managers', async () => {
@@ -257,7 +260,7 @@ test('another user cannot read or attach an environment to an inaccessible app',
 test('an old cached URL is not presented as a ready new environment revision', async () => {
     const dep = create('dev');
     deployments.updateCloudRunUrl(dep.id, 'https://old-revision.test');
-    service.reconcile.mockResolvedValue({ phase: 'deploying', message: 'Attente de Cloud Run.', revision, cloudRunUrl: 'https://old-revision.test' });
+    service.observe.mockResolvedValue({ phase: 'deploying', message: 'Attente de Cloud Run.', revision, cloudRunUrl: 'https://old-revision.test' });
     const detail = await request(app).get(`/deployments/${dep.id}`);
     expect(detail.status).toBe(200);
     expect(detail.text).not.toContain('Ouvrir l\'application ↗');
@@ -315,7 +318,7 @@ test('legacy records retain their original service and branch identity', () => {
 
 test('la mise en service du secours s’affiche comme un état, sans bouton ni approbation vide', async () => {
     const dep = create('prod');
-    service.reconcile.mockResolvedValue({ phase: 'deploying', message: 'Mise en service du secours (étape 3/17) : observe vérifié.' });
+    service.observe.mockResolvedValue({ phase: 'deploying', message: 'Mise en service du secours (étape 3/17) : observe vérifié.' });
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
     expect(response.text).toContain('Mise en service du secours (étape 3/17) : observe vérifié.');
@@ -335,7 +338,7 @@ describe('confirmation d’une production avec failover', () => {
         return deployments.get(dep.id);
     };
     beforeEach(() => {
-        service.reconcile.mockResolvedValue({ phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true });
+        service.observe.mockResolvedValue({ phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true });
         operations.createProfile.mockResolvedValue({ app: 'sample-app' });
     });
     test('seul un manager voit le bouton, et rien d’autre à remplir ni d’autre page', async () => {
@@ -398,7 +401,7 @@ describe('choix « hébergement et données »', () => {
 
 test('a verified native URL is displayed without a custom DNS warning', async () => {
     const dep = create('dev');
-    service.reconcile.mockResolvedValue({ phase: 'success', revision, applicationUrl: 'https://sample-app-dev.run.app', cloudRunUrl: 'https://sample-app-dev.run.app' });
+    service.observe.mockResolvedValue({ phase: 'success', revision, applicationUrl: 'https://sample-app-dev.run.app', cloudRunUrl: 'https://sample-app-dev.run.app' });
     const response = await request(app).get(`/deployments/${dep.id}`);
     expect(response.status).toBe(200);
     expect(response.text).toContain('href="https://sample-app-dev.run.app"');

@@ -346,7 +346,7 @@ async function sourceIsCurrent(dep, revision) {
   return await github.getRef(source.owner, source.repo, branches[dep.environment]) === revision;
 }
 
-async function readiness(dep, revision) {
+async function readiness(dep, revision, { allowMutation = true } = {}) {
   if (azure.isAzure(dep)) return azure.readiness(dep, revision);
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
@@ -370,10 +370,12 @@ async function readiness(dep, revision) {
       }
       return { phase: 'success', message: 'Application accessible sur Cloud Run.', cloudRunUrl: endpoint.origin, applicationUrl: endpoint.origin };
     }
-    const api = await github.getInstallationOctokit();
-    await routing.sync(dep, { api, repo: target(), commitFiles, beforePublish: async () => {
-      if (!current(dep)) throw new Error('Le déploiement a changé pendant la préparation du routage.');
-    } });
+    if (allowMutation) {
+      const api = await github.getInstallationOctokit();
+      await routing.sync(dep, { api, repo: target(), commitFiles, beforePublish: async () => {
+        if (!current(dep)) throw new Error('Le déploiement a changé pendant la préparation du routage.');
+      } });
+    }
     if (!(await routing.status(dep))) return { phase: 'deploying', message: 'Cloud Run disponible ; attente du routage HTTPS.', cloudRunUrl: null };
     return { phase: 'success', message: 'Application déployée.', cloudRunUrl: observed.url, applicationUrl: addresses.url(dep) };
   }
@@ -382,6 +384,42 @@ async function readiness(dep, revision) {
   }
   if (observed.failure) return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
   return { phase: 'deploying', message: 'CI terminée ; attente de Cloud Run.', cloudRunUrl: null };
+}
+
+// Read-only deployment snapshot for browser views and polling. Publication,
+// release creation and route convergence remain owned by startReconciler().
+async function observe(dep) {
+  const observedAt = new Date().toISOString();
+  const result = await (async () => {
+    if (dep.failoverRequested && !failover.enabled(dep)) {
+      return { phase: 'approval', message: 'Production avec failover : en attente de la confirmation d’un manager.', failoverConfirm: true };
+    }
+    if (failover.enabled(dep) && dep.onboardingStatus === 'ready' && current(dep)) return failover.deploymentStatus(dep);
+    if (!current(dep)) return { phase: 'configuring', message: 'Déploiement non disponible pour publication.' };
+
+    const api = await github.getInstallationOctokit();
+    const run = await latest(api, dep);
+    if (!run) return { phase: 'waiting', message: 'En attente du pipeline.' };
+    const snapshot = { runId: run.id, runUrl: run.html_url, revision: run.head_sha, environment: dep.environment };
+    if (run.status !== 'completed') return { ...snapshot, phase: 'running', message: 'Pipeline en cours.' };
+    if (run.conclusion !== 'success') return { ...snapshot, phase: 'failed', message: 'Le pipeline a échoué ; aucun déploiement publié.' };
+    if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
+
+    const release = releases.get(dep.id, run.head_sha);
+    if (release?.state === 'rejected') return { ...snapshot, phase: 'rejected', message: 'Production refusée.' };
+    if (release?.state === 'published') {
+      return { ...snapshot, ...await readiness(dep, run.head_sha, { allowMutation: false }) };
+    }
+    if (['pending', 'approving'].includes(release?.state)) {
+      return { ...snapshot, phase: 'approval', message: release.state === 'approving'
+        ? 'Validation manager en cours de finalisation.' : 'Validation manager requise.', prUrl: release.pr_url };
+    }
+    if (!(await sourceIsCurrent(dep, run.head_sha))) {
+      return { ...snapshot, phase: 'waiting', message: 'La branche a changé ; attente du nouveau pipeline.' };
+    }
+    return { ...snapshot, phase: 'deploying', message: 'Pipeline validé ; la publication automatique va reprendre.' };
+  })();
+  return { ...result, observedAt, freshness: 'live' };
 }
 
 async function interruptedApproval(api, dep, release) {
@@ -689,4 +727,4 @@ async function removeOrphanProduction(appName, user) {
   return { removed: paths.length };
 }
 
-module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles, removeOrphanProduction };
+module.exports = { configureFailoverBuild, validate, identity, workflow, workflowName, manifests, applicationSet, onboard, observe, reconcile, review, remove, resumeAfterCleanupFailure, startReconciler, commitFiles, removeOrphanProduction };

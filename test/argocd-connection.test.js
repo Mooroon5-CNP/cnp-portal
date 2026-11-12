@@ -1,7 +1,7 @@
 'use strict';
 
 jest.mock('../src/config/env', () => ({ config: { argocd: {
-  serverUrl: 'https://argocd.example.test', token: '', username: 'cnp-portal', password: 'test-password', insecure: false,
+  serverUrl: 'https://argocd.example.test', token: '', username: 'cnp-portal', password: 'test-password', insecure: false, caCert: null,
 } } }));
 
 let client;
@@ -31,6 +31,26 @@ test('existing API token is still used without a password login', async () => {
   await client.listApplications();
   expect(adapter).toHaveBeenCalledTimes(1);
   expect(adapter.mock.calls[0][0].headers.Authorization).toBe('Bearer legacy-token');
+});
+
+test('explicit Argo trust keeps certificate and hostname verification enabled', async () => {
+  config.argocd.caCert = '-----BEGIN CERTIFICATE-----\ntest-public-certificate\n-----END CERTIFICATE-----';
+  await client.listApplications();
+  const request = adapter.mock.calls.find(([value]) => value.url === '/applications')[0];
+  expect(request.httpsAgent.options).toMatchObject({ rejectUnauthorized: true, ca: config.argocd.caCert });
+});
+
+test('production still refuses the insecure TLS bypass', async () => {
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  config.argocd.insecure = true;
+  try {
+    await expect(client.listApplications()).rejects.toThrow('TLS verification is required');
+    expect(adapter).not.toHaveBeenCalled();
+  } finally {
+    config.argocd.insecure = false;
+    process.env.NODE_ENV = previous;
+  }
 });
 
 test('MCP reads deployment details through the authenticated asynchronous client', async () => {

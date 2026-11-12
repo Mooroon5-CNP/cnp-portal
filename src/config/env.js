@@ -46,6 +46,17 @@ function normalizePrivateKey(raw) {
   return key;
 }
 
+function normalizePublicCertificate(raw) {
+  if (!raw) return null;
+  let certificate;
+  try { certificate = Buffer.from(raw.trim(), 'base64').toString('utf8').trim(); }
+  catch (_) { throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.'); }
+  if (!certificate.startsWith('-----BEGIN CERTIFICATE-----') || !certificate.endsWith('-----END CERTIFICATE-----')) {
+    throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.');
+  }
+  return certificate;
+}
+
 const config = {
   github: {
     appId: process.env.GITHUB_APP_ID,
@@ -66,6 +77,7 @@ const config = {
     username: process.env.ARGOCD_USERNAME,
     password: process.env.ARGOCD_PASSWORD,
     insecure: process.env.ARGOCD_INSECURE === 'true',
+    caCert: normalizePublicCertificate(process.env.ARGOCD_CA_CERT_BASE64),
     // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
     // Falls back to serverUrl if not set.
     uiUrl: process.env.ARGOCD_UI_URL || process.env.ARGOCD_SERVER_URL || null,

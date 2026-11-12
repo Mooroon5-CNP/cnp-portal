@@ -19,7 +19,7 @@ async function makeClient() {
     timeout: 10000,
     httpsAgent: config.argocd.insecure
       ? new https.Agent({ rejectUnauthorized: false })
-      : undefined,
+      : (config.argocd.caCert ? new https.Agent({ rejectUnauthorized: true, ca: config.argocd.caCert }) : undefined),
   };
   const client = axios.create(transport);
   async function authenticate() {

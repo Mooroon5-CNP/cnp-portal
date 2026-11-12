@@ -11,6 +11,7 @@
     "cloud:check": "node scripts/cloud/check-connection.js",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "dev:postgres": "bash scripts/start-postgres-local.sh",
     "lint": "eslint src test apps packages public/js --ext .js",
     "test": "jest --forceExit",
     "test:integration": "node scripts/test-mcp-integration.mjs",

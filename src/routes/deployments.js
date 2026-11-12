@@ -84,9 +84,10 @@ function canRetryConfiguration(user, dep) {
 
 async function environmentStatus(dep) {
     try {
-        return await environmentService.reconcile(dep);
+        return await environmentService.observe(dep);
     } catch (_) {
-        return { phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.' };
+        return { phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.',
+            observedAt: new Date().toISOString(), freshness: 'unavailable' };
     }
 }
 
@@ -490,15 +491,18 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
     if (!canViewDeployment(req.user, dep)) return res.status(403).json({ error: 'Accès refusé' });
 
     if (dep.onboardingStatus === 'configuring') {
-        return res.json({ phase: 'configuring', message: 'Configuration de la plateforme en cours...' });
+        return res.json({ phase: 'configuring', message: 'Configuration de la plateforme en cours...',
+            observedAt: new Date().toISOString(), freshness: 'stored' });
     }
 
     if (dep.onboardingStatus === 'deleting') {
-        return res.json({ phase: 'deleting', message: environmentDeletion.get(dep.id)?.message || 'Suppression de cet environnement en cours ; reprise automatique.' });
+        return res.json({ phase: 'deleting', message: environmentDeletion.get(dep.id)?.message || 'Suppression de cet environnement en cours ; reprise automatique.',
+            observedAt: new Date().toISOString(), freshness: 'stored' });
     }
 
     if (dep.onboardingStatus === 'delete_failed') {
-        return res.json({ phase: 'delete_failed', message: 'Suppression incomplète : réessayez la suppression ou reprenez explicitement le suivi CI.', detail: dep.onboardingError });
+        return res.json({ phase: 'delete_failed', message: 'Suppression incomplète : réessayez la suppression ou reprenez explicitement le suivi CI.', detail: dep.onboardingError,
+            observedAt: new Date().toISOString(), freshness: 'stored' });
     }
 
     if (dep.onboardingStatus === 'failed') {
@@ -506,12 +510,15 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
             phase: 'failed',
             message: 'La configuration de la plateforme a échoué. Consultez le détail avant de la relancer.',
             detail: dep.onboardingError,
+            observedAt: new Date().toISOString(),
+            freshness: 'stored',
         });
     }
 
     if (usesEnvironment(dep)) {
-        try { return res.json(await environmentService.reconcile(dep)); }
-        catch (_) { return res.status(503).json({ phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.' }); }
+        try { return res.json(await environmentService.observe(dep)); }
+        catch (_) { return res.status(503).json({ phase: 'waiting', message: 'Vérification du déploiement indisponible. Réessayez.',
+            observedAt: new Date().toISOString(), freshness: 'unavailable' }); }
     }
 
     // Onboarding done — check actual CI run status.

@@ -11,7 +11,7 @@ jest.mock('../src/services/github', () => ({
 }));
 jest.mock('../src/services/environment-deployment', () => ({
   validate: jest.fn(), workflowName: appName => `cnp-${appName}.yml`,
-  onboard: jest.fn().mockResolvedValue(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
+  onboard: jest.fn().mockResolvedValue(), observe: jest.fn(), reconcile: jest.fn(), review: jest.fn(), remove: jest.fn(),
 }));
 jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest.fn().mockResolvedValue({ engine: 'unknown' }) }));
 
@@ -186,7 +186,7 @@ describe('page de détail d\'un déploiement Azure dev/prod', () => {
   });
 
   test('le lien de l\'application n\'apparaît PAS tant que les ressources Azure ne sont pas prêtes', async () => {
-    environmentService.reconcile.mockResolvedValue({ phase: 'deploying', message: 'Création du serveur PostgreSQL privé en cours' });
+    environmentService.observe.mockResolvedValue({ phase: 'deploying', message: 'Création du serveur PostgreSQL privé en cours' });
     const res = await detail(envDeployment().id);
     expect(res.status).toBe(200);
     expect(res.text).not.toContain('id="url-card"');
@@ -194,7 +194,7 @@ describe('page de détail d\'un déploiement Azure dev/prod', () => {
   });
 
   test('l\'adresse affichée est celle d\'Azure, jamais l\'adresse GCP <app>.dev.apps.mooroon5.fr', async () => {
-    environmentService.reconcile.mockResolvedValue({ phase: 'running', message: 'Pipeline en cours.' });
+    environmentService.observe.mockResolvedValue({ phase: 'running', message: 'Pipeline en cours.' });
     const res = await detail(envDeployment().id);
     expect(res.text).toContain('id="application-address"');
     expect(res.text).toContain('todo-az-dev.env.example.io');
@@ -203,7 +203,7 @@ describe('page de détail d\'un déploiement Azure dev/prod', () => {
   });
 
   test('le lien apparaît une fois le statut « success »', async () => {
-    environmentService.reconcile.mockResolvedValue({ phase: 'success', applicationUrl: 'https://todo-az-dev.env.example.io' });
+    environmentService.observe.mockResolvedValue({ phase: 'success', applicationUrl: 'https://todo-az-dev.env.example.io' });
     const res = await detail(envDeployment().id);
     expect(res.text).toContain('id="url-card"');
     expect(res.text).toContain('https://todo-az-dev.env.example.io');

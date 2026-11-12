@@ -603,14 +603,30 @@ def execute(request):
     raise ValueError('Opération inconnue')
 
 
+def public_failure(error):
+    """Expose known setup failures without printing exception text or credentials."""
+    kind = type(error)
+    if kind.__module__ == 'google.auth.exceptions' and kind.__name__ in {'DefaultCredentialsError', 'RefreshError'}:
+        return {'error': 'Authentification Google du Python opérateur absente ou invalide (Application Default Credentials). '
+                'Sur le poste local, exécutez gcloud auth application-default login dans le terminal qui lance le portail, '
+                'puis réessayez la configuration. Dans un conteneur, configurez une identité Google adaptée. Aucun secret affiché.',
+                'action_required': True}
+    if isinstance(error, ModuleNotFoundError) and error.name in {
+            'kubernetes', 'google', 'google.auth', 'google.cloud', 'google.cloud.secretmanager', 'boto3', 'psycopg', 'yaml', 'requests'}:
+        return {'error': 'Dépendances Python de l’opérateur incomplètes. Lancez le portail avec npm run dev:postgres '
+                'ou configurez CNP_FAILOVER_OPERATOR_PYTHON avec requirements.platform.txt installé. Aucun secret affiché.',
+                'action_required': True}
+    return {'error': 'Opération interrompue ; vérifier les prérequis et la dernière étape confirmée. Aucun secret affiché.'}
+
+
 def main():
     os.umask(0o077)
     try: print(json.dumps(execute(json.load(sys.stdin))))
     except UserAction as error:
         print(json.dumps({'error': str(error), 'action_required': True}))
         raise SystemExit(1)
-    except Exception:
-        print(json.dumps({'error': 'Opération interrompue ; vérifier les prérequis et la dernière étape confirmée. Aucun secret affiché.'}))
+    except Exception as error:
+        print(json.dumps(public_failure(error)))
         raise SystemExit(1)
 
 

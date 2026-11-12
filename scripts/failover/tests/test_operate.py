@@ -307,6 +307,30 @@ class EntryPointTests(unittest.TestCase):
         self.assertNotIn('hunter2', json.dumps(shown))
         self.assertNotIn('action_required', shown)
 
+    def test_missing_google_application_credentials_have_a_safe_actionable_message(self):
+        error_type = type('DefaultCredentialsError', (Exception,), {'__module__': 'google.auth.exceptions'})
+        shown = self.run_main(error_type('PRIVATE_TOKEN password=hunter2'))
+        self.assertIn('gcloud auth application-default login', shown['error'])
+        self.assertTrue(shown['action_required'])
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(shown))
+        self.assertNotIn('hunter2', json.dumps(shown))
+
+    def test_expired_google_credentials_do_not_expose_refresh_details(self):
+        error_type = type('RefreshError', (Exception,), {'__module__': 'google.auth.exceptions'})
+        shown = self.run_main(error_type('refresh_token=PRIVATE_TOKEN'))
+        self.assertTrue(shown['action_required'])
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(shown))
+
+    def test_known_missing_dependency_is_explained_without_printing_the_exception(self):
+        shown = self.run_main(ModuleNotFoundError('PRIVATE_TOKEN', name='kubernetes'))
+        self.assertIn('npm run dev:postgres', shown['error'])
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(shown))
+
+    def test_unknown_import_names_are_not_echoed(self):
+        shown = self.run_main(ModuleNotFoundError('PRIVATE_TOKEN', name='PRIVATE_TOKEN'))
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(shown))
+        self.assertNotIn('action_required', shown)
+
 
 class EngineRootTests(unittest.TestCase):
     """Le moteur est dans engine/ à côté de l'opérateur, sans PYTHONPATH ni dépôt voisin."""

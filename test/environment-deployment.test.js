@@ -94,6 +94,24 @@ test('failed CI cannot publish any resources', async () => {
   expect((await service.reconcile(dep)).phase).toBe('failed'); expect(published).toEqual([]);
 });
 
+test('read-only observation never publishes a successful run', async () => {
+  const result = await service.observe(dep);
+  expect(result).toMatchObject({ phase: 'deploying', revision, freshness: 'live' });
+  expect(result.observedAt).toBeTruthy();
+  expect(published).toEqual([]);
+  expect(releases.get(dep.id, revision)).toBeUndefined();
+});
+
+test('read-only observation checks runtime readiness without converging routes', async () => {
+  await service.reconcile(dep);
+  kubernetes.getV2ServiceStatus.mockResolvedValue({ ready: true,
+    image: `registry.test/project/apps/pixelcam:${revision}`, url: 'https://pixelcam-dev.run.app' });
+  const routing = require('../src/services/application-routing');
+  routing.sync.mockClear();
+  expect(await service.observe(dep)).toMatchObject({ phase: 'success', revision });
+  expect(routing.sync).not.toHaveBeenCalled();
+});
+
 test('main CI publishes dev once and concurrent polls share the same work', async () => {
   const results = await Promise.all([service.reconcile(dep), service.reconcile(dep)]);
   expect(results.every(result => result.phase === 'deploying')).toBe(true);
