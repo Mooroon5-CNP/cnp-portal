@@ -13,7 +13,7 @@
 #   5. à la fin : relit les tâches (toutes celles écrites sur AWS doivent être sur GCP) et vérifie que l'écriture marche.
 #
 # Le retour lui-même n'est fait QUE par le portail (même chemin qu'en production) : ce script ne touche aucune base.
-# Prérequis : kubectl (contexte du cluster GKE), gcloud, aws (compte 804210702561), curl, dig, python3.
+# Prérequis : kubectl (contexte du cluster GKE), gcloud, aws (compte 626278345026), curl, dig, python3.
 set -euo pipefail
 
 APP=${1:-cnp-test-azure}
@@ -30,7 +30,7 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 titles() { curl -s --max-time 15 "$URL/api/todos" | python3 -c 'import json,sys; print("\n".join(sorted(t["title"] for t in json.load(sys.stdin))))'; }
 
 step "Contrôles avant le retour ($APP)"
-[ "$(aws sts get-caller-identity --query Account --output text)" = 804210702561 ] || { echo "Mauvais compte AWS."; exit 1; }
+[ "$(aws sts get-caller-identity --query Account --output text)" = 626278345026 ] || { echo "Mauvais compte AWS."; exit 1; }
 [ "$(field state)" = AWS_ACTIVE ] || { echo "L'app n'est pas servie par AWS (worker : $(field state)). Rien n'a été touché."; exit 1; }
 INSTANCE=$(kubectl --context "$CONTEXT" get databaseinstances.sql.gcp.upbound.io "$CR" \
   -o jsonpath='{.metadata.annotations.crossplane\.io/external-name}')

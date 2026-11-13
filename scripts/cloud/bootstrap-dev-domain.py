@@ -180,7 +180,7 @@ def main():
     parser.add_argument('--apply', action='store_true', help='Create missing dev resources; default is read-only inspection')
     parser.add_argument('--project', default='cnp-terraform-512313')
     parser.add_argument('--base-domain', default='apps.mooroon5.fr')
-    parser.add_argument('--zone', default='Z03070463OHUIPXFTWDYQ')
+    parser.add_argument('--zone', default='Z0043335ESJGO8F4BE96')
     parser.add_argument('--lb-ip', default='34.54.71.90')
     parser.add_argument('--aws-region', default='eu-west-3')
     parser.add_argument('--certificate-map', default='cnp-apps-certmap')

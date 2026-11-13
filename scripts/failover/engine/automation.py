@@ -20,7 +20,7 @@ import tempfile
 import time
 from uuid import uuid4
 
-ACCOUNT = "804210702561"
+ACCOUNT = "626278345026"
 REGION = "eu-west-3"
 LEASE_SECONDS = 120
 # Durée d'alarme exigée avant de basculer. 90 s à l'origine ; 30 s depuis le 06/11/2026 (choix de Gabriel) : la sonde

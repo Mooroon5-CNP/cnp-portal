@@ -11,7 +11,7 @@ import re
 import sys
 import ssl
 
-ACCOUNT = "804210702561"
+ACCOUNT = "626278345026"
 REGION = "eu-west-3"
 ALLOWED_KEYS = {
     "app_name", "environment", "image", "database_security_group_id", "runtime_secret_arn",
@@ -19,10 +19,10 @@ ALLOWED_KEYS = {
     "master_password_secret",
 }
 PLATFORM = {
-    "vpc": "vpc-097b5310024a545ad",
-    "subnets": ["subnet-001fd05e8fb4849d8", "subnet-00e02640fc38e3209"],
-    "ecs_security_group": "sg-06c537372132d775f",
-    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/c3325dca9a0b8685/32e36432fd043dce",
+    "vpc": "vpc-0a99bd6da5b289db4",
+    "subnets": ["subnet-069399247ab10b23e", "subnet-0259a6e88f0558ab0"],
+    "ecs_security_group": "sg-0c8e2003de9c975ef",
+    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/722456f0108435d7/fd877dabbaff37b7",
 }
 
 

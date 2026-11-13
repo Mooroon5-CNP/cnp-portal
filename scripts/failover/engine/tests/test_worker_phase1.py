@@ -36,7 +36,7 @@ def platform_profile():
 def platform_outputs():
     value = outputs()
     app = profile()["gcp"]["app_name"]
-    value["aws_secret_arns"]["value"]["target-admin"] = f"arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/{app}/target-admin-AbCd12"
+    value["aws_secret_arns"]["value"]["target-admin"] = f"arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/{app}/target-admin-AbCd12"
     return value
 
 

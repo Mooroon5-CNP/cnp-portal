@@ -14,7 +14,7 @@
 #
 # ÉTAT LAISSÉ : l'app vit sur AWS, Cloud SQL est arrêtée et sa ressource Crossplane en pause. Retour vers GCP :
 # ./demo-retour.sh (redémarre la base, puis le manager clique « Revenir sur GCP » dans le portail).
-# Prérequis : gcloud, kubectl (contexte du cluster GKE), aws (compte 804210702561), curl, dig, python3.
+# Prérequis : gcloud, kubectl (contexte du cluster GKE), aws (compte 626278345026), curl, dig, python3.
 set -euo pipefail
 
 APP=${1:-cnp-test-azure}
@@ -31,7 +31,7 @@ todos() { curl -s --max-time 15 "$URL/api/todos"; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 step "Contrôles avant la panne ($APP)"
-[ "$(aws sts get-caller-identity --query Account --output text)" = 804210702561 ] || { echo "Mauvais compte AWS."; exit 1; }
+[ "$(aws sts get-caller-identity --query Account --output text)" = 626278345026 ] || { echo "Mauvais compte AWS."; exit 1; }
 # Nom réel de l'instance chez Google (suffixe de génération depuis le 06/11) : celui que Crossplane gère.
 INSTANCE=$(kubectl --context "$CONTEXT" get databaseinstances.sql.gcp.upbound.io "$CR" \
   -o jsonpath='{.metadata.annotations.crossplane\.io/external-name}')
