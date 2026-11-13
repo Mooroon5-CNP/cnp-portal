@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomUUID } = require('crypto');
 const client = require('../clients/datadog');
 
 // Toutes les lectures prennent une liste de services DÉJÀ autorisés pour l'utilisateur
@@ -253,7 +254,7 @@ async function createAlert({ name, query, app }) {
 }
 
 async function requestAccess(userId, reason) {
-  accessRequests.push({ userId, reason, requestedAt: new Date().toISOString(), approved: false });
+  accessRequests.push({ id: randomUUID(), userId, reason, requestedAt: new Date().toISOString(), approved: false });
   return { requested: true };
 }
 
@@ -261,16 +262,22 @@ async function getAccessRequests() {
   return accessRequests;
 }
 
-async function approveAccess(requestIndex) {
-  if (!accessRequests[requestIndex]) throw new Error('Request not found');
-  accessRequests[requestIndex].approved = true;
-  return accessRequests[requestIndex];
+async function getAccessRequest(id) {
+  return accessRequests.find(r => r.id === id) || null;
+}
+
+// Par identifiant, jamais par position : les pages n'affichent qu'une partie de la liste.
+async function approveAccess(id) {
+  const request = await getAccessRequest(id);
+  if (!request) throw new Error('Demande introuvable.');
+  request.approved = true;
+  return request;
 }
 
 module.exports = {
   RANGES, DEFAULT_RANGE, LEVELS, LOGS_RETENTION_DAYS, normalizeRange, normalizeLevel, normalizeSearch, resolveWindow,
   logsToCsv, logsExplorerUrl, getLogs, getMetrics, getAlerts, silenceAlert, createAlert,
-  requestAccess, getAccessRequests, approveAccess,
+  requestAccess, getAccessRequests, getAccessRequest, approveAccess,
   // exportés pour les tests
   messageOf, levelOf, serviceOf,
 };

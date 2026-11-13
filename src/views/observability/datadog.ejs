@@ -96,7 +96,7 @@
           <table>
             <thead><tr><th>Utilisateur</th><th>Raison</th><th>Date</th><th>Statut</th><th>Action</th></tr></thead>
             <tbody>
-              <% accessRequests.forEach((r, idx) => { %>
+              <% accessRequests.forEach(r => { %>
               <tr>
                 <td class="font-mono"><%= r.userId %></td>
                 <td><%= r.reason %></td>
@@ -104,7 +104,7 @@
                 <td><% if (r.approved) { %><span class="badge badge-success">Approuvé</span><% } else { %><span class="badge badge-warning">En attente</span><% } %></td>
                 <td>
                   <% if (!r.approved) { %>
-                  <form action="/observability/access-request/<%= idx %>/approve" method="POST" class="inline-form">
+                  <form action="/observability/access-request/<%= r.id %>/approve" method="POST" class="inline-form">
                     <button type="submit" class="btn btn-primary btn-sm">Approuver</button>
                   </form>
                   <% } %>

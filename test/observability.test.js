@@ -258,4 +258,47 @@ describe('pages', () => {
     expect(res.status).toBe(302);
     expect(create).not.toHaveBeenCalled();
   });
+
+  test('un refus de périmètre affiche la page d\'erreur du portail, sauf pour l\'export CSV', async () => {
+    const headers = { cookie: await login('obs-alice') };
+    const page = await request(app, { url: '/observability/logs?service=obs-beta-dev', headers });
+    expect(page.status).toBe(403);
+    expect(page.text).toContain('Retour au dashboard');
+    expect(page.text).toContain('appartient pas à votre équipe'); // l'apostrophe est échappée en HTML
+    const csv = await request(app, { url: '/observability/logs.csv?service=obs-beta-dev', headers });
+    expect(csv.status).toBe(403);
+    expect(csv.text).not.toContain('<html');
+  });
+
+  test('une demande d\'accès n\'est visible et approuvable que par un manager de la même équipe', async () => {
+    // La demande de bob (équipe B) est créée en premier : avec l'ancienne approbation par position,
+    // le manager de l'équipe A aurait approuvé celle-ci en cliquant sur la seule ligne qu'il voit.
+    await datadogService.requestAccess(bob.id, 'demande équipe B');
+    await datadogService.requestAccess(alice.id, 'demande équipe A');
+    const all = await datadogService.getAccessRequests();
+    const ofBob = all.find(r => r.userId === bob.id), ofAlice = all.find(r => r.userId === alice.id);
+    const headers = { cookie: await login('obs-boss'), 'content-type': 'application/x-www-form-urlencoded', origin: 'http://localhost:3001' };
+    const approve = id => request(app, { method: 'POST', url: `/observability/access-request/${id}/approve`, headers, body: '' });
+
+    // Le manager ne partage encore aucune équipe avec les demandeurs.
+    await approve(ofAlice.id);
+    expect(ofAlice.approved).toBe(false);
+
+    teamService.addMember(teamA.id, boss.id);
+    try {
+      for (const url of ['/observability/datadog', '/observability/alerts']) {
+        jest.spyOn(datadogClient, 'listMonitors').mockResolvedValue([]);
+        const page = await request(app, { url, headers: { cookie: headers.cookie } });
+        expect(page.text).toContain(`/observability/access-request/${ofAlice.id}/approve`);
+        expect(page.text).not.toContain(ofBob.id);
+      }
+      await approve(ofBob.id);
+      await approve('0');
+      expect(ofBob.approved).toBe(false);
+      await approve(ofAlice.id);
+      expect(ofAlice.approved).toBe(true);
+    } finally {
+      teamService.removeMember(teamA.id, boss.id);
+    }
+  });
 });
