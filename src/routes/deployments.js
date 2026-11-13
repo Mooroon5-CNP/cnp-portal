@@ -19,6 +19,7 @@ const yaml = require('js-yaml');
 const { selectWorkflowRun } = require('../services/workflow-runs');
 const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
+const datadogService = require('../services/datadog');
 const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
 const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
@@ -714,6 +715,15 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         }
     }
 
+    // Fetch Datadog data for this specific app — non-blocking: page renders even if Datadog is down.
+    let ddLogs = [], ddMetrics = null, ddAlerts = [];
+    if (dep.onboardingStatus === 'ready' && can(req.user, 'observability:metrics:view')) {
+        [ddLogs, ddMetrics, ddAlerts] = await Promise.all([
+            datadogService.getLogs(dep.appName).catch(() => []),
+            datadogService.getMetrics(dep.appName).catch(() => null),
+            datadogService.getAlerts(dep.appName).catch(() => []),
+        ]);
+    }
     const deletionDraft = req.session.deletionDraft?.id === dep.id ? req.session.deletionDraft : null;
     if (deletionDraft) delete req.session.deletionDraft;
 
@@ -744,6 +754,9 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         otherTeams,
         pendingMrs,
         mrUsers,
+        ddLogs,
+        ddMetrics,
+        ddAlerts,
         user: req.user,
         can: (p) => can(req.user, p),
     });

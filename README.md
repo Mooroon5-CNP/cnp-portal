@@ -98,6 +98,13 @@ Logs need Datadog credentials; FinOps recommendations need metrics. Optional
 See the [MCP integration guide](documentation/MCP_INTEGRATION.md) for configuration,
 source requirements and troubleshooting.
 
+## Per-application observability
+
+The deployment detail page has an Observabilité tab with application-scoped Datadog
+logs, metrics, Kubernetes usage by environment, and alerts. Users with the relevant
+permissions can silence or reactivate alerts. The page still renders when Datadog
+is unavailable; missing metrics appear as unavailable values.
+
 ## Configuration and persistence
 
 | Setting | Purpose |

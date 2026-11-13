@@ -23,17 +23,33 @@ async function getLogs(serviceFilter = null) {
   }
 }
 
-async function getMetrics() {
+const KUBE_ENVS = ['dev', 'prod'];
+const NO_KUBE_USAGE = { pods: '—', cpu: '—', memory: '—', restarts: '—' };
+
+// Onboarded apps run in `{app}-dev` and `{app}-prod` namespaces (see tplOverlayKustomization).
+async function getKubernetesByEnv(appName) {
+  const namespaces = KUBE_ENVS.map(env => `${appName}-${env}`);
+  const usage = await client.getKubernetesUsage(namespaces);
+  return Object.fromEntries(KUBE_ENVS.map(env => [env, usage[`${appName}-${env}`] || NO_KUBE_USAGE]));
+}
+
+// Without appName: portal-level golden signals. With appName: golden signals scoped to that
+// app plus its Kubernetes usage per environment.
+async function getMetrics(appName = null) {
   try {
-    return await client.getGoldenSignals(SERVICE_NAME);
+    const service = appName || SERVICE_NAME;
+    const signals = await client.getGoldenSignals(service);
+    if (!appName) return signals;
+    return { ...signals, kubernetes: await getKubernetesByEnv(appName) };
   } catch (err) {
     console.error('[datadog] getMetrics error:', err.message);
-    // Return a shape with '—' values so the view doesn't crash
     return {
       latency:    { p50: '—', p95: '—', p99: '—', unit: 'ms' },
       errorRate:  { value: '—', unit: '%' },
       saturation: { cpu: '—', memory: '—', unit: '%' },
       traffic:    { rps: '—', unit: 'req/s' },
+      cloudRun:   { requests: '—', cpu: '—', memory: '—' },
+      kubernetes: Object.fromEntries(KUBE_ENVS.map(env => [env, NO_KUBE_USAGE])),
     };
   }
 }
@@ -70,6 +86,10 @@ async function silenceAlert(monitorId) {
   return client.silenceMonitor(Number(monitorId));
 }
 
+async function unsilenceAlert(monitorId) {
+  return client.unsilenceMonitor(Number(monitorId));
+}
+
 async function createAlert({ name, query, app }) {
   const tags = app ? [`service:${app}`] : [`service:${SERVICE_NAME}`];
   return client.createMonitor({ name, query, tags });
@@ -90,4 +110,4 @@ async function approveAccess(requestIndex) {
   return accessRequests[requestIndex];
 }
 
-module.exports = { getLogs, getMetrics, getAlerts, silenceAlert, createAlert, requestAccess, getAccessRequests, approveAccess };
+module.exports = { getLogs, getMetrics, getAlerts, silenceAlert, unsilenceAlert, createAlert, requestAccess, getAccessRequests, approveAccess };
