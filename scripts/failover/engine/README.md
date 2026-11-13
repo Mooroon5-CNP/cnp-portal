@@ -25,9 +25,19 @@ Construites depuis ce dossier, qui est le contexte de build :
 
 ```sh
 cd cnp-portal/scripts/failover/engine
-docker build -f Dockerfile.automation -t <ecr>/cnp-failover-apps:platform-worker-<sha> .
-docker build -f Dockerfile.bootstrap  -t <ecr>/cnp-failover-apps:platform-bootstrap-<sha> .
+aws ecr get-login-password --region eu-west-3 | docker login --username AWS --password-stdin <ecr>
+for k in worker:Dockerfile.automation bootstrap:Dockerfile.bootstrap; do
+  docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    --output type=registry,oci-mediatypes=false \
+    -f "${k#*:}" -t "<ecr>/cnp-failover-apps:platform-${k%%:*}-<sha>" .
+done
 ```
+
+`--provenance=false --sbom=false` est **obligatoire** : sans eux, Docker pousse un index avec attestations et, les
+tags d'ECR étant immuables, le tag ne garde que le manifeste d'attestation (`in-toto`, ~1,5 Ko) au lieu de l'image ;
+ECS ne peut pas la lancer. Constaté le 13/11/2026. Après le push, vérifier
+`aws ecr describe-images --repository-name cnp-failover-apps` : `manifest.v2+json` et plusieurs dizaines de Mo.
+`linux/amd64` : les tâches déclarent `X86_64`, le poste de build est souvent ARM.
 
 Un seul dépôt ECR, `cnp-failover-apps` ; la pile `platform/` référence les images par digest (`terraform.tfvars`). Toute
 nouvelle image passe par l'accord de Gabriel pour le push, puis par un plan de la pile relu avant apply.
