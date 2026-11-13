@@ -4,7 +4,7 @@ Préparation de phase 0 du plan v4, 26 octobre 2026. Les anciens manifestes AWS 
 
 ## Périmètre
 
-- Compte `804210702561`, région `eu-west-3` ; image ECR identifiée par digest.
+- Compte `626278345026`, région `eu-west-3` ; image ECR identifiée par digest.
 - Cible GitOps après validation : `apps/<app>/crossplane/prod/`.
 - Dev GCP et flux bucket inchangés ; pas de secours AWS dev.
 - ECS Fargate, RDS privée, ParameterGroup PostgreSQL 15, target group et règle **HTTPS**.
@@ -19,7 +19,7 @@ Copier `config.example.json` hors des chemins surveillés et renseigner les vale
 | Entrée | Vérification nécessaire avant le futur déploiement |
 | --- | --- |
 | `database_security_group_id` | SG privé autorisant TCP 5432 depuis les tâches ECS ; ne pas reprendre un SG App Runner sans vérifier ses règles |
-| `image` | Image existante, format `804210702561.dkr.ecr.eu-west-3.amazonaws.com/<depot>@sha256:<digest>` |
+| `image` | Image existante, format `626278345026.dkr.ecr.eu-west-3.amazonaws.com/<depot>@sha256:<digest>` |
 | `runtime_user` / `runtime_secret_arn` | Compte SQL limité déjà préparé et secret JSON contenant `password` ; accès autorisé pour le rôle d'exécution ECS |
 | `listener_priority` | Priorité libre sur le listener HTTPS ; la valeur d'exemple ne réserve rien |
 | `log_group_name` | Facultatif : groupe déjà existant, géré et accessible ; aucun groupe de logs n'est créé implicitement par ECS |

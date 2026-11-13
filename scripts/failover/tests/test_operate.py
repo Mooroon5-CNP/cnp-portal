@@ -45,7 +45,7 @@ class OperatorTests(unittest.TestCase):
         app = {'app': 'weather-api'}
         control = {'state': 'DISABLED', 'paused': paused, 'config_hash': config_hash}
         sts, ecs, logs = Mock(), Mock(), Mock()
-        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
         ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-worker',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'worker', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
@@ -69,7 +69,7 @@ class OperatorTests(unittest.TestCase):
 
     def test_runtime_does_not_accept_the_previous_ready_revision(self):
         sts, ecs, elb = Mock(), Mock(), Mock()
-        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
         ecs.describe_services.return_value = {'services': [{'runningCount': 1, 'pendingCount': 0, 'taskDefinition': 'new-task',
             'deployments': [{'status': 'PRIMARY', 'rolloutState': 'COMPLETED', 'taskDefinition': 'new-task'}],
             'loadBalancers': [{'targetGroupArn': 'group'}]}]}
@@ -128,7 +128,7 @@ class BootstrapOrchestrationTests(unittest.TestCase):
     def run_action(self, action, outputs, profile=INTROSPECTED):
         """Exécute l'action avec de faux ECS et journaux ; chaque tâche lit la sortie suivante de `outputs`."""
         sts, ecs, logs = Mock(), Mock(), Mock()
-        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
         ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'test-group', 'awslogs-stream-prefix': 'test'}}}]}}
@@ -152,7 +152,7 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         work = Path(self.directory.name)
         (work / 'task-requests.json').write_text(json.dumps({'prepare-target': 'task/failed'}))
         sts, ecs, logs = Mock(), Mock(), Mock()
-        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
         ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'g', 'awslogs-stream-prefix': 'p'}}}]}}
@@ -176,7 +176,7 @@ class BootstrapOrchestrationTests(unittest.TestCase):
         work = Path(self.directory.name)
         (work / 'task-requests.json').write_text(json.dumps({'prepare-source': 'task/forgotten'}))
         sts, ecs, logs = Mock(), Mock(), Mock()
-        sts.get_caller_identity.return_value = {'Account': '804210702561'}
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
         ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
             'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
                 {'options': {'awslogs-group': 'g', 'awslogs-stream-prefix': 'p'}}}]}}
@@ -596,12 +596,12 @@ class HealthNamesTests(unittest.TestCase):
     def health(self, profile):
         app = profile['gcp']['app_name']
         clients = {name: Mock() for name in ('sts', 'ecs', 'route53', 'dynamodb', 'events')}
-        clients['sts'].get_caller_identity.return_value = {'Account': '804210702561'}
+        clients['sts'].get_caller_identity.return_value = {'Account': '626278345026'}
         clients['ecs'].describe_services.return_value = {'services': []}
         clients['route53'].list_resource_record_sets.return_value = {'ResourceRecordSets': []}
         clients['dynamodb'].get_item.return_value = {}
         clients['events'].describe_rule.return_value = {'State': 'ENABLED'}
-        arn = 'arn:aws:ecs:eu-west-3:804210702561:task-definition/cnp-failover-platform-worker:2'
+        arn = 'arn:aws:ecs:eu-west-3:626278345026:task-definition/cnp-failover-platform-worker:2'
         clients['ecs'].describe_task_definition.return_value = {'taskDefinition': {'taskDefinitionArn': arn}}
         clients['events'].list_targets_by_rule.return_value = {'Targets': [{'EcsParameters': {'TaskDefinitionArn': arn}}]}
         fake_boto = types.SimpleNamespace(client=lambda name, **kwargs: clients[name])
@@ -728,9 +728,9 @@ class TeardownTests(unittest.TestCase):
         self.assertEqual(self.custom.patch_cluster_custom_object.call_args.args[3:], ('app-db', {'metadata': {'finalizers': None}}))
 
     def test_an_update_points_the_ecs_service_to_the_new_task_revision_by_full_arn(self):
-        image = '804210702561.dkr.ecr.eu-west-3.amazonaws.com/weather-api@sha256:' + 'b' * 64
+        image = '626278345026.dkr.ecr.eu-west-3.amazonaws.com/weather-api@sha256:' + 'b' * 64
         ok = [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]
-        arn = 'arn:aws:ecs:eu-west-3:804210702561:task-definition/weather-api-prod:7'
+        arn = 'arn:aws:ecs:eu-west-3:626278345026:task-definition/weather-api-prod:7'
         service = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'Service', 'metadata': {'name': 'weather-api-prod'},
                    'spec': {'forProvider': {'taskDefinition': 'weather-api-prod:6', 'taskDefinitionRef': {'name': 'weather-api-prod-td'}}}}
         task = {'apiVersion': 'ecs.aws.upbound.io/v1beta1', 'kind': 'TaskDefinition', 'metadata': {'name': 'weather-api-prod-td'},
@@ -777,7 +777,7 @@ class AwsLeftoversTests(unittest.TestCase):
         return ecs, ecr, (lambda name: {'ecs': ecs, 'ecr': ecr}[name])
 
     def test_only_the_app_revisions_and_its_own_repository_are_removed(self):
-        arn = lambda name: f'arn:aws:ecs:eu-west-3:804210702561:task-definition/{name}'
+        arn = lambda name: f'arn:aws:ecs:eu-west-3:626278345026:task-definition/{name}'
         ecs, ecr, client = self.clients([arn('weather-api-prod:7'), arn('weather-api-prod-extra:1')], [arn('weather-api-prod:6')])
         result = operator.remove_aws_leftovers('weather-api', client)
         self.assertEqual(result, {'task_definitions_removed': 2, 'image_repository_removed': True})

@@ -21,9 +21,9 @@ def profile():
         "routing_latch_id": "12345678-1234-1234-1234-123456789abd",
         "primary_health_check_id": "12345678-1234-1234-1234-123456789abe",
         "source": {"host": "10.189.0.3", "ca_pem": "TEST-CA",
-            "secret_arn": "arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/app4-pixelcam/source-AbCd12"},
+            "secret_arn": "arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/app4-pixelcam/source-AbCd12"},
         "target": {"host": "app4-pixelcam-prod-db.abcdef.eu-west-3.rds.amazonaws.com", "ca_pem": "TEST-CA",
-            "secret_arn": "arn:aws:secretsmanager:eu-west-3:804210702561:secret:rds!db-test-AbCd12"}}
+            "secret_arn": "arn:aws:secretsmanager:eu-west-3:626278345026:secret:rds!db-test-AbCd12"}}
 
 
 class MemoryStore:
@@ -223,7 +223,7 @@ class SignalsTests(unittest.TestCase):
     def setUp(self):
         self.app, self.cloudwatch = profile(), Mock()
         self.now = 2000000000
-        self.alarm = {"AlarmArn": "arn:aws:cloudwatch:us-east-1:804210702561:alarm:" + self.app["alarm_name"],
+        self.alarm = {"AlarmArn": "arn:aws:cloudwatch:us-east-1:626278345026:alarm:" + self.app["alarm_name"],
             "Namespace": "AWS/Route53", "MetricName": "HealthCheckStatus",
             "Dimensions": [{"Name": "HealthCheckId", "Value": self.app["health_check_id"]}],
             "StateValue": "ALARM", "StateTransitionedTimestamp": self.at(-120)}

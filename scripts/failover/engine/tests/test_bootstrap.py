@@ -17,7 +17,7 @@ import postgres_contract
 
 
 def profile():
-    prefix = "arn:aws:secretsmanager:eu-west-3:804210702561:secret:"
+    prefix = "arn:aws:secretsmanager:eu-west-3:626278345026:secret:"
     return {"app": "fixture-app", "profile": postgres_contract.encode({"database": "pixelcalm"}),
         "source": {"host": "10.189.0.3", "secret_arn": prefix + "cnp/failover/fixture-app/source-admin-AbCd12", "ca_pem": "TEST-CA"},
         "target": {"host": "fixture.abcdef.eu-west-3.rds.amazonaws.com", "secret_arn": prefix + "rds!db-fixture-AbCd12", "ca_pem": "TEST-CA"},

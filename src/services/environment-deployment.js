@@ -58,7 +58,7 @@ assert re.fullmatch(r'sha256:[a-f0-9]{64}', os.environ['CNP_DIGEST'])
 app, digest = os.environ['CNP_APP'], os.environ['CNP_DIGEST']
 record = {'app': app, 'revision': os.environ['CNP_REVISION'], 'digest': digest,
     'gcp': os.environ['CNP_GCP_REGISTRY'] + '/' + app + '@' + digest,
-    'aws': '804210702561.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
+    'aws': '626278345026.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
 with open('cnp-images.json', 'w') as file: json.dump(record, file)
 PY` }, { uses: 'actions/upload-artifact@v4', with: {
         name: 'cnp-failover-images-${{ github.sha }}', path: 'cnp-images.json', 'if-no-files-found': 'error', 'retention-days': 30,
