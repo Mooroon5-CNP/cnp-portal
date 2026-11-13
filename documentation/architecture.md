@@ -1,5 +1,17 @@
 # Architecture CNP Platform — MVP
 
+## Accès applicatif — mise à jour du 11 novembre 2026
+
+Une vérification SQLite/PostgreSQL du dépôt précède désormais la création du déploiement. Une incompatibilité détectée bloque la soumission sans inscription ni provisioning et conserve le formulaire pour correction.
+
+Le correctif sépare la publication GitOps de l’accès utilisateur. GitHub Actions → portail → config-repo → ArgoCD → Crossplane → Cloud Run reste le parcours de publication. Pour une application GCP simple en dev/prod, sans PostgreSQL ni failover, le navigateur utilise désormais l’URI HTTPS native Cloud Run observée et vérifiée. Le domaine personnalisé n’est plus une condition de disponibilité de cette offre.
+
+Les parcours PostgreSQL, failover, Azure et historiques conservent leurs adresses et contrôles. Les anciennes ressources réseau sont préservées lors des mises à jour ; les nouvelles applications simples ne créent plus de NEG/backend dédié au routage partagé. Les buckets et données ne sont pas migrés par ce changement.
+
+Voir [Accès applicatif et approbations ArgoCD](../../documentation/architecture/acces-applicatif.md) pour la matrice des offres, les contrôles HTTPS, le cycle de vie et la règle d’approbation par le compte local `admin`. Cette référence décrit les sources locales ; elle ne certifie pas l’état de tous les déploiements live. Les sections MVP ci-dessous constituent un contexte historique et ne remplacent pas cette mise à jour.
+
+La [suppression applicative](../../documentation/architecture/suppression-applicative.md) utilise désormais une tâche durable : inventaire, autorisation explicite de détruire les données GCS, retrait GitOps, vérification de disparition, puis nettoyage des artefacts CI générés si aucun environnement ne les utilise encore. Les attentes normales ArgoCD sont reprises automatiquement.
+
 ## Vue d'ensemble
 
 La CNP Platform gère des déploiements sur **3 clouds** :
@@ -12,10 +24,10 @@ La CNP Platform gère des déploiements sur **3 clouds** :
 ```
 CNP Portal (Node.js 20 + Express + EJS)
     │
-    ├── Auth: GitLab OAuth 2.0 (gitlab.com)
+    ├── Auth: GitHub OAuth 2.0 (github.com) + compte local admin
     ├── Sessions: express-session (in-memory — Redis post-MVP)
     ├── Logs: Winston JSON → Datadog
-    └── Deploy: API GitLab CI/CD
+    └── Deploy: GitHub App → config-repo (GitOps) → ArgoCD → Crossplane / Cloud Run
 ```
 
 ## Kubernetes
@@ -28,14 +40,14 @@ CNP Portal (Node.js 20 + Express + EJS)
 
 ## CI/CD
 
-Pipeline GitLab CI :
+Pipeline GitHub Actions (workflow réutilisable `Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml`) :
 ```
-lint → test → scan-secu (Trivy) → build → push
+lint → test → scan-secu (Trivy) → build → push → update config-repo
 ```
 
 - CRITICAL CVEs : bloquant
 - HIGH/MEDIUM CVEs : warning (non bloquant au MVP)
-- Registry : GitLab Container Registry
+- Registry : GCP Artifact Registry (`europe-west9-docker.pkg.dev/<projet-gcp>/cnp-registry/<app>`)
 
 ## Observabilité
 
@@ -53,7 +65,7 @@ Logs en format JSON structuré, niveau INFO en production.
 Convention de nommage : `{app}-{env}-{type}`
 
 Exemples :
-- `cnp-portal-prod-gitlab-oauth`
+- `cnp-portal-prod-github-oauth`
 - `cnp-portal-prod-session-secret`
 - `cnp-portal-prod-datadog-api-key`
 

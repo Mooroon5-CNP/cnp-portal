@@ -1,0 +1,39 @@
+name: Portal validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feat/deployment-environment-selection, feat/failover-phase1]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cnp-portal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cnp-portal
+      - uses: actions/checkout@v4
+        with:
+          repository: Mooroon5-CNP/config-repo
+          ref: 48d77dbee4a6cba059dbfa41700d07d45ea5afc5
+          token: ${{ secrets.CONFIG_REPO_TOKEN }}
+          path: config-repo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cnp-portal/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r ../config-repo/scripts/requirements.phase1.txt
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test -- --runInBand

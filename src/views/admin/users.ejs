@@ -76,10 +76,8 @@
                     <% } %>
                     <strong><%= u.username %></strong>
                     <% if (u.id === user.id) { %><span class="badge badge-gray">vous</span><% } %>
-                    <% if (u.githubId && !u.gitlabId) { %>
+                    <% if (u.githubId) { %>
                       <span class="badge badge-gray" style="font-size:10px;">GitHub</span>
-                    <% } else if (u.gitlabId) { %>
-                      <span class="badge badge-gray" style="font-size:10px;">GitLab</span>
                     <% } %>
                   </div>
                 </td>
@@ -181,7 +179,7 @@
     const avatar = u.avatarUrl
       ? `<img src="${u.avatarUrl}" width="28" height="28" style="border-radius:50%;object-fit:cover;">`
       : `<div style="width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0;">${initial}</div>`;
-    const provider = u.githubId && !u.gitlabId ? 'GitHub' : u.gitlabId ? 'GitLab' : 'Local';
+    const provider = u.githubId ? 'GitHub' : 'Local';
     const date = new Date(u.createdAt).toLocaleDateString('fr-FR');
     return `<tr id="pending-row-${u.id}">
       <td><div class="flex-center">${avatar}<strong>${u.username}</strong></div></td>

@@ -1,14 +1,17 @@
 'use strict';
 
 require('dotenv').config();
-require('./models/db'); // initialize SQLite and seed admin
+const { sessionSecret } = require('./config/session');
+require('./models/db'); // initialize SQLite and bootstrap admin
 const express = require('express');
 const session = require('express-session');
 const flash = require('connect-flash');
 const path = require('path');
 const { createLogger, requestMiddleware } = require('./middleware/logger');
-const { populateUser, requirePending } = require('./middleware/auth');
+const { populateUser, requireAuth, requirePending } = require('./middleware/auth');
 const { can } = require('./middleware/rbac');
+const { browserWriteGuard } = require('./middleware/browser-write-guard');
+const { buildOrchestratorRouter } = require('../apps/orchestrator/src');
 
 const app = express();
 const logger = createLogger();
@@ -22,19 +25,28 @@ app.use(express.urlencoded({ extended: true }));
 
 // Trust the first proxy (Cloud Run / load balancer) so req.secure reflects
 // the original HTTPS connection, which is required for secure session cookies.
-app.set('trust proxy', 1);
+app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
 
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
+    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000,
   },
 }));
 
+app.use(browserWriteGuard);
 app.use(flash());
 app.use(requestMiddleware(logger));
 app.use(populateUser);
@@ -71,12 +83,14 @@ app.get('/pending', requirePending, (req, res) => {
 app.use('/profile',      require('./routes/profile'));
 app.use('/',             require('./routes/dashboard'));
 app.use('/deployments',  require('./routes/deployments'));
+app.use('/repositories', require('./routes/repositories'));
 app.use('/k8s',          require('./routes/k8s'));
 app.use('/observability',require('./routes/observability'));
 app.use('/argocd',       require('./routes/argocd'));
 app.use('/docs',         require('./routes/documentation'));
 app.use('/admin',        require('./routes/admin'));
 app.use('/admin/teams',  require('./routes/teams'));
+app.use(buildOrchestratorRouter({ requireAuth }));
 
 app.use((req, res) => {
   res.status(404).render('error', { title: 'Page introuvable', message: 'Cette page n\'existe pas.', code: 404, user: req.user || null });
@@ -93,8 +107,11 @@ app.use((err, req, res, _next) => {
 });
 
 if (require.main === module) {
+  require('./services/environment-deployment').startReconciler();
+  require('./services/failover-provisioning').startReconciler();
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
+  const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+  app.listen(PORT, HOST, () => {
     logger.info({ message: `CNP Portal started on port ${PORT}`, env: process.env.NODE_ENV || 'development' });
   });
 }

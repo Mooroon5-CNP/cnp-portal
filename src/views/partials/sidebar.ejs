@@ -20,6 +20,11 @@
           <% } %>
         </a>
       </li>
+      <% if (locals.user && ['manager', 'devops', 'dev'].includes(user.role)) { %>
+      <li class="<%= locals.currentPage === 'repositories' ? 'active' : '' %>">
+        <a href="/repositories/new"><span class="nav-icon">＋</span> Créer un repo</a>
+      </li>
+      <% } %>
       <% if (locals.user && user.role === 'devops') { %>
       <li class="<%= locals.currentPage === 'k8s' ? 'active' : '' %>">
         <a href="/k8s/pods"><span class="nav-icon">☸</span> Ressources K8s</a>
@@ -48,6 +53,9 @@
   <div class="nav-section">
     <div class="nav-section-label">Outils</div>
     <ul class="nav-menu">
+      <li class="<%= locals.currentPage === 'mcp-chat' ? 'active' : '' %>">
+        <a href="/mcp-chat"><span class="nav-icon">◇</span> Assistant MCP</a>
+      </li>
       <li class="<%= locals.currentPage === 'argocd' ? 'active' : '' %>">
         <a href="/argocd"><span class="nav-icon">⟳</span> ArgoCD</a>
       </li>

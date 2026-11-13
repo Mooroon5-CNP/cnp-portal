@@ -6,11 +6,13 @@ const client     = require('../clients/argocd');
 const k8sClient  = require('../clients/kubernetes');
 const accessReqModel = require('../models/argocd_access_request');
 const userModel  = require('../models/user');
+const deploymentModel = require('../models/deployment');
+const { canReviewAccess, assertCanReviewAccess } = require('./argocd-access-policy');
 
 // AES-256-GCM encryption for ArgoCD passwords stored in DB.
 // Key derived from SESSION_SECRET so no extra env var is needed.
 const _encKey = crypto.createHash('sha256')
-  .update(process.env.SESSION_SECRET || 'dev-fallback-key-change-in-prod')
+  .update(require('../config/session').sessionSecret)
   .digest();
 
 function _encrypt(plain) {
@@ -55,7 +57,17 @@ async function listApps() {
   }
 }
 
+// Only Applications created for a registered deployment can be synced from the portal:
+// platform Applications (Crossplane, routing, ingress) stay out of reach.
+function isPortalManagedApp(appName) {
+  return deploymentModel.listForUser(null)
+    .some(row => ['cloudrun', 'dev', 'prod'].some(suffix => appName === `${row.app_name}-${suffix}`));
+}
+
 async function syncApp(appName) {
+  if (!isPortalManagedApp(appName)) {
+    throw new Error(`Application ${appName} non gérée par le portail : synchronisation refusée.`);
+  }
   return client.syncApplication(appName);
 }
 
@@ -75,8 +87,9 @@ function requestAccess(userId, appName, reason) {
   return accessReqModel.create({ userId, appName, reason });
 }
 
-function getAccessRequests() {
-  return accessReqModel.listPending();
+function getAccessRequests(reviewerId) {
+  const reviewer = userModel.findById(reviewerId);
+  return accessReqModel.listPending().filter(request => canReviewAccess(reviewer, userModel.findById(request.userId)));
 }
 
 function getUserAccessRequest(userId) {
@@ -99,6 +112,7 @@ async function approveAccess(requestId, reviewerId) {
 
   const user = userModel.findById(req.userId);
   if (!user) throw new Error('Utilisateur introuvable.');
+  assertCanReviewAccess(userModel.findById(reviewerId), user);
 
   // If the user already has an approved account, reuse its credentials.
   const existing = accessReqModel.getApprovedForUser(req.userId);
@@ -126,13 +140,8 @@ async function approveAccess(requestId, reviewerId) {
 
   const bcryptHash = bcrypt.hashSync(password, 10);
 
-  // Provision the account in the cluster (best-effort — log on failure but don't abort).
-  try {
-    await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
-  } catch (err) {
-    console.error('[argocd] provisionArgoCDLocalUser failed:', err.message);
-    // Still save the request as approved so the manager can communicate credentials manually.
-  }
+  // Persist approval only after the account exists in the target cluster.
+  await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
 
   return accessReqModel.approve(requestId, {
     argoCDUsername,
@@ -145,6 +154,7 @@ function rejectAccess(requestId, reviewerId) {
   const req = accessReqModel.getById(requestId);
   if (!req) throw new Error('Demande introuvable.');
   if (req.status !== 'pending') throw new Error('Cette demande a déjà été traitée.');
+  assertCanReviewAccess(userModel.findById(reviewerId), userModel.findById(req.userId));
   return accessReqModel.reject(requestId, reviewerId);
 }
 
@@ -165,11 +175,7 @@ async function regenerateCredentials(userId) {
 
   const bcryptHash = bcrypt.hashSync(password, 10);
 
-  try {
-    await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
-  } catch (err) {
-    console.error('[argocd] regenerateCredentials provisionArgoCDLocalUser failed:', err.message);
-  }
+  await k8sClient.provisionArgoCDLocalUser(argoCDUsername, bcryptHash);
 
   return accessReqModel.updateCredentials(existing.id, {
     argoCDPassword: _encrypt(password),

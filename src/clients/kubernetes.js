@@ -29,6 +29,9 @@ function getKubeConfig() {
 }
 
 function handleError(err, context) {
+  if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(err.code)) {
+    throw new Error(`API Kubernetes injoignable (${context}) : délai réseau dépassé. Vérifiez KUBE_API_URL, le VPN/réseau et les IP autorisées du cluster. Le résultat de cette opération n’est pas confirmé.`);
+  }
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     throw new Error(`Kubernetes API unreachable at ${config.kubernetes.apiUrl}: ${err.message}`);
   }
@@ -99,7 +102,7 @@ async function scaleDeployment(namespace, deploymentName, replicas) {
       deploymentName,
       namespace,
       { spec: { replicas } },
-      undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
       { headers: { 'Content-Type': 'application/strategic-merge-patch+json' } },
     );
     return { deployment: deploymentName, namespace, replicas };
@@ -232,6 +235,17 @@ async function applyApplicationSet(manifest) {
     // Try to update first; if 404, create instead.
     try {
       const { body: existing } = await customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+      if (/^crossplane-autodiscovery-(dev|prod)$/.test(name)) {
+        const paths = manifest.spec.generators[0].git.directories.map(entry => entry.path);
+        const patch = require('../services/application-set-preservation').additivePatch(existing, paths);
+        // Le rôle borné du portail autorise UPDATE, pas PATCH. Conserver
+        // l'objet complet et son resourceVersion garde le contrôle de concurrence.
+        const updated = JSON.parse(JSON.stringify(existing));
+        updated.spec.generators[0].git.directories = patch[1].value;
+        updated.spec.syncPolicy = patch[2].value;
+        await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, updated);
+        return;
+      }
       manifest.metadata.resourceVersion = existing.metadata.resourceVersion;
       await customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, manifest);
     } catch (e) {
@@ -246,8 +260,35 @@ async function applyApplicationSet(manifest) {
   }
 }
 
+// Retire de la liste d'un ApplicationSet partagé le seul chemin d'une app supprimée. La liste est volontairement explicite
+// (seules les apps enregistrées par le portail se déploient) et ne fait que croître à l'enregistrement : sans ce retrait, le
+// chemin d'une app supprimée y restait (constaté le 07/11/2026). Les autres chemins ne sont jamais touchés ; UPDATE avec le
+// resourceVersion lu, comme applyApplicationSet (le rôle borné du portail n'a pas PATCH).
+async function removeApplicationSetPath(name, path) {
+  if (!/^crossplane-autodiscovery-(dev|prod)$/.test(name)) throw new Error(`ApplicationSet ${name} : retrait de chemin refusé.`);
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body: existing } = await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name);
+    const directories = existing.spec?.generators?.[0]?.git?.directories;
+    if (!Array.isArray(directories) || !directories.some(entry => entry.path === path && !entry.exclude)) return false;
+    const updated = JSON.parse(JSON.stringify(existing));
+    updated.spec.generators[0].git.directories = directories.filter(entry => entry.path !== path || entry.exclude);
+    await customApi.replaceNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applicationsets', name, updated);
+    return true;
+  } catch (err) {
+    if (err.response && (err.response.statusCode === 404 || err.statusCode === 404)) return false;
+    handleError(err, `removeApplicationSetPath(${name})`);
+  }
+}
+
+// ApplicationSets shared by every app: an offboarding must never delete them,
+// whatever app name it was given.
+const SHARED_APPLICATIONSETS = new Set(['cloudrun-autodiscovery', 'crossplane-autodiscovery-dev', 'crossplane-autodiscovery-prod']);
+
 // Delete an ArgoCD ApplicationSet from the argocd namespace (idempotent).
 async function deleteApplicationSet(name) {
+  if (SHARED_APPLICATIONSETS.has(name)) throw new Error(`ApplicationSet partagé ${name} : suppression refusée.`);
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
   try {
@@ -297,6 +338,65 @@ async function deleteArgocdApplication(name) {
   }
 }
 
+// Lit une Application Argo CD par l'API Kubernetes (le compte cnp-portal y a get/list dans le namespace argocd).
+// L'API Argo CD répond 403 « permission denied » à ce compte pour une application qui n'existe pas (il n'a pas le
+// droit de lecture sur toutes les applications), alors que Kubernetes répond proprement 404. Renvoie null si absente.
+// Demande à Argo CD de relire Git tout de suite (au lieu d'attendre sa lecture régulière, ~3 min).
+async function refreshArgocdApplication(name) {
+  const customApi = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  await customApi.patchNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+    { metadata: { annotations: { 'argocd.argoproj.io/refresh': 'normal' } } },
+    undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
+}
+async function getArgocdApplicationIfExists(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  try {
+    return (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+  } catch (err) {
+    if (err.response?.statusCode === 404 || err.statusCode === 404) return null;
+    handleError(err, `getArgocdApplicationIfExists(${name})`);
+  }
+}
+
+// Supprime une Application Argo CD EN CASCADE : on pose d'abord le finalizer, puis on supprime ; Argo supprime alors
+// les ressources de l'Application (donc, pour Azure, les objets Crossplane et leurs ressources dans Azure) avant de
+// retirer l'Application. Passe par l'API Kubernetes (le compte cnp-portal y a le droit de supprimer dans le namespace
+// argocd), pas par l'API Argo CD, où ce compte est en lecture seule (403). Renvoie false si elle n'existe pas.
+const ARGO_RESOURCES_FINALIZER = 'resources-finalizer.argocd.argoproj.io';
+async function cascadeDeleteArgocdApplication(name) {
+  const kc = getKubeConfig();
+  const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  const is404 = err => err.response?.statusCode === 404 || err.statusCode === 404;
+  try {
+    let current;
+    try {
+      current = (await customApi.getNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name)).body;
+    } catch (err) {
+      if (is404(err)) return false;
+      throw err;
+    }
+    const finalizers = current.metadata?.finalizers || [];
+    if (!finalizers.includes(ARGO_RESOURCES_FINALIZER)) {
+      await customApi.patchNamespacedCustomObject(
+        'argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+        { metadata: { finalizers: [...finalizers, ARGO_RESOURCES_FINALIZER],
+          ...(current.metadata?.resourceVersion ? { resourceVersion: current.metadata.resourceVersion } : {}) } },
+        undefined, undefined, undefined,
+        { headers: { 'Content-Type': 'application/merge-patch+json' } },
+      );
+    }
+    await customApi.deleteNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name);
+    return true;
+  } catch (err) {
+    if (is404(err)) return false;
+    handleError(err, `cascadeDeleteArgocdApplication(${name})`);
+  }
+}
+
 // Delete a K8s namespace (and all resources inside it). Idempotent.
 async function deleteNamespace(name) {
   const kc = getKubeConfig();
@@ -320,6 +420,141 @@ async function getV2ServiceUrl(appName) {
     return body.status?.atProvider?.uri || null;
   } catch (_) {
     return null;
+  }
+}
+
+// L'état observé de GCP évite de confondre une nouvelle spec avec une révision prête.
+function observedServiceStatus(body) {
+  const observed = body.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const terminal = Array.isArray(observed.terminalCondition) ? observed.terminalCondition : [observed.terminalCondition].filter(Boolean);
+  const readyCondition = terminal.find(item => item.type === 'Ready');
+  const succeeded = condition => condition && (condition.state === 'CONDITION_SUCCEEDED' || condition.status === 'True');
+  const managed = body.status?.conditions || [];
+  const providerReady = ['Ready', 'Synced'].every(type => managed.some(item => item.type === type && item.status === 'True'));
+  let generationObserved = false;
+  try {
+    generationObserved = observed.generation != null && observed.observedGeneration != null
+      && BigInt(observed.observedGeneration) >= BigInt(observed.generation);
+  } catch (_) { /* Une génération mal formée ne prouve pas la disponibilité. */ }
+  const ready = providerReady && succeeded(readyCondition) && generationObserved && observed.reconciling === false
+    && Boolean(observed.latestCreatedRevision) && observed.latestCreatedRevision === observed.latestReadyRevision;
+  return {
+    ready,
+    url: observed.uri || null,
+    image: template?.containers?.[0]?.image || null,
+    failure: readyCondition?.state === 'CONDITION_FAILED' ? readyCondition.message || 'Révision Cloud Run en échec.' : null,
+  };
+}
+
+async function getComputeResource(plural, name) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  api.addInterceptor(options => { options.timeout = 10000; });
+  try { return (await api.getClusterCustomObject('compute.gcp.upbound.io', 'v1beta1', plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    handleError(err, `getComputeResource(${plural}/${name})`);
+  }
+}
+
+// Explicit allowlist for the deletion inventory; callers cannot read arbitrary CRDs.
+const CLEANUP_KINDS = {
+  'cloudrun.gcp.upbound.io/v1beta2/V2Service': 'v2services',
+  'cloudrun.gcp.upbound.io/v1beta2/ServiceIAMMember': 'serviceiammembers',
+  'storage.gcp.upbound.io/v1beta1/Bucket': 'buckets',
+  'storage.gcp.upbound.io/v1beta1/BucketIAMMember': 'bucketiammembers',
+  'compute.gcp.upbound.io/v1beta1/RegionNetworkEndpointGroup': 'regionnetworkendpointgroups',
+  'compute.gcp.upbound.io/v1beta1/BackendService': 'backendservices',
+  'sql.gcp.upbound.io/v1beta2/DatabaseInstance': 'databaseinstances',
+  'sql.gcp.upbound.io/v1beta1/Database': 'databases',
+  'sql.gcp.upbound.io/v1beta2/User': 'users',
+};
+async function getCleanupResource(resource) {
+  const plural = CLEANUP_KINDS[`${resource.apiVersion}/${resource.kind}`];
+  if (!plural || !/^[a-z0-9][a-z0-9.-]*$/.test(resource.name || '')) throw new Error('Ressource de nettoyage non autorisée.');
+  const [group, version] = resource.apiVersion.split('/');
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  api.addInterceptor(options => { options.timeout = 10000; });
+  try { return (await api.getClusterCustomObject(group, version, plural, resource.name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    handleError(err, `getCleanupResource(${resource.kind}/${resource.name})`);
+  }
+}
+
+async function getV2ServiceStatus(appName) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const { body } = await api.getClusterCustomObject('cloudrun.gcp.upbound.io', 'v1beta2', 'v2services', appName);
+    return observedServiceStatus(body);
+  } catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return { ready: false, url: null, image: null, failure: null };
+    handleError(err, `getV2ServiceStatus(${appName})`);
+  }
+}
+
+// État d'une app Azure vue par Crossplane (providers Upbound : objets cluster-scoped, un par ressource Azure).
+// Fonction pure, séparée de l'appel API pour être testable. Une ressource absente est « pas encore créée » :
+// Argo CD ne crée la Container App (vague 2) qu'une fois le serveur et la base prêts.
+function conditionOf(body, type) {
+  return (body?.status?.conditions || []).find(c => c.type === type) || null;
+}
+
+// Image réellement déployée, lue dans l'état OBSERVÉ de la Container App (pas dans la spec : une nouvelle spec n'est
+// pas une révision prête). Selon la version du provider, `template` est un objet ou une liste d'un élément.
+function azureObservedImage(containerApp) {
+  const observed = containerApp?.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+  return container?.image || null;
+}
+
+function azureAppStatusFrom({ server, database, containerApp }) {
+  const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
+  if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
+    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp) };
+  }
+  // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
+  // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
+  // réconciliation (ReconcileError) peut être passagère : on ne la déclare pas en échec.
+  for (const [name, body] of [['Container App', containerApp], ['base de données', database], ['serveur PostgreSQL', server]]) {
+    const op = conditionOf(body, 'LastAsyncOperation');
+    if (op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)) {
+      const detail = String(op.message || op.reason).replace(/\s+/g, ' ').trim();
+      return { phase: 'failed', failure: `${name} : ${detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}` };
+    }
+  }
+  if (!server) return { phase: 'waiting-argocd', failure: null };
+  if (!ready(server)) return { phase: 'server', failure: null };
+  if (!ready(database)) return { phase: 'database', failure: null };
+  return { phase: 'containerapp', failure: null };
+}
+
+async function getAzureObject(api, group, version, plural, name) {
+  try { return (await api.getClusterCustomObject(group, version, plural, name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+async function getAzureAppStatus(appName, { serverName, databaseName, containerAppName }) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const [server, database, containerApp] = await Promise.all([
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', serverName),
+      getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
+      getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', containerAppName || appName),
+    ]);
+    const present = [server, database, containerApp].filter(Boolean);
+    return {
+      ...azureAppStatusFrom({ server, database, containerApp }),
+      // Pour confirmer un démontage : quelque chose existe encore / quelque chose est en cours de suppression.
+      exists: present.length > 0,
+      deleting: present.some(body => !!body.metadata?.deletionTimestamp),
+    };
+  } catch (err) {
+    handleError(err, `getAzureAppStatus(${appName})`);
   }
 }
 
@@ -401,41 +636,56 @@ async function getIngressUrl(appName, env) {
 //   - patches argocd-cm to enable the account (accounts.<username>: login)
 //   - patches argocd-secret to store the bcrypt password hash
 // bcryptHash must already be a bcrypt string (e.g. from bcryptjs.hashSync).
-async function provisionArgoCDLocalUser(username, bcryptHash) {
+// Accounts the portal must never (re)write: admin is Argo CD's superuser, cnp-portal is the portal itself.
+// A developer whose GitHub login maps to one of these would otherwise take over its password.
+const RESERVED_ARGOCD_ACCOUNTS = new Set(['admin', 'cnp-portal']);
+
+async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false } = {}) {
+  if (!/^[a-z0-9-]{1,32}$/.test(username) || RESERVED_ARGOCD_ACCOUNTS.has(username)) {
+    throw new Error(`Nom de compte Argo CD refusé : ${username}`);
+  }
   const kc  = getKubeConfig();
   const api = kc.makeApiClient(k8s.CoreV1Api);
   const ns  = 'argocd';
   const mergeHeader = { headers: { 'Content-Type': 'application/merge-patch+json' } };
+  // The installed SDK ignores extra fields in its options argument; set the
+  // transport timeout through its interceptor, so a late PATCH is not merely
+  // abandoned by a Promise.race while the network request keeps running.
+  api.addInterceptor(options => { options.timeout = 10000; });
+  let stage = 'argocd-cm';
 
   try {
     // 1. Enable the account in argocd-cm
     await api.patchNamespacedConfigMap(
       'argocd-cm', ns,
       { data: { [`accounts.${username}`]: 'apiKey,login' } },
-      undefined, undefined, undefined, undefined,
+      undefined, dryRun ? 'All' : undefined, undefined, undefined, undefined,
       mergeHeader,
     );
 
     // 2. Store the bcrypt password hash in argocd-secret (value must be base64-encoded)
+    stage = 'argocd-secret';
     const hashB64 = Buffer.from(bcryptHash).toString('base64');
     await api.patchNamespacedSecret(
       'argocd-secret', ns,
       { data: { [`accounts.${username}.password`]: hashB64 } },
-      undefined, undefined, undefined, undefined,
+      undefined, dryRun ? 'All' : undefined, undefined, undefined, undefined,
       mergeHeader,
     );
   } catch (err) {
-    handleError(err, `provisionArgoCDLocalUser(${username})`);
+    handleError(err, `provisionArgoCDLocalUser(${username}), étape ${stage}`);
   }
 }
 
 module.exports = {
+  refreshArgocdApplication,
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
-  applyApplicationSet, deleteApplicationSet,
-  applyArgocdApplication, deleteArgocdApplication,
+  applyApplicationSet, deleteApplicationSet, removeApplicationSetPath,
+  applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
-  getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
+  getCleanupResource, CLEANUP_KINDS,
+  getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

@@ -73,7 +73,8 @@
         <div class="card-header"><span class="card-title">Accès ArgoCD</span></div>
         <div class="card-body">
           <p style="margin-bottom:16px;color:var(--text-muted);">
-            Vous n'avez pas encore accès à ArgoCD. Envoyez une demande à votre manager — il recevra une notification et pourra l'approuver directement depuis ce portail.
+            Vous n'avez pas encore de compte ArgoCD approuvé.
+            <%= user.role === 'manager' ? 'Votre demande doit être validée par le compte administrateur local admin.' : 'Envoyez une demande à votre manager pour validation.' %>
           </p>
           <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-primary">
             Demander un accès
@@ -89,7 +90,7 @@
           <span class="badge badge-warning">En attente d'approbation</span>
         </div>
         <div class="card-body" style="color:var(--text-muted);">
-          <p>Votre demande a été envoyée à votre manager le <strong><%= new Date(myRequest.createdAt).toLocaleString('fr-FR') %></strong>.</p>
+          <p>Votre demande a été envoyée à <%= user.role === 'manager' ? 'l’administrateur local admin' : 'votre manager' %> le <strong><%= new Date(myRequest.createdAt).toLocaleString('fr-FR') %></strong>.</p>
           <p style="margin-top:8px;">Raison transmise : <em><%= myRequest.reason %></em></p>
         </div>
       </div>
@@ -124,10 +125,17 @@
 
             <div style="display:flex;align-items:center;gap:12px;padding:10px 0;">
               <span style="width:140px;color:var(--text-muted);font-size:13px;flex-shrink:0;">3. Password</span>
+              <% if (myRequest.argoCDPassword) { %>
               <input type="password" id="argocd-pwd" value="<%= myRequest.argoCDPassword %>" readonly
                 style="font-family:monospace;font-size:14px;flex:1;border:none;background:transparent;outline:none;color:inherit;">
               <button id="argocd-pwd-toggle" onclick="(function(btn){var f=document.getElementById('argocd-pwd');var shown=f.type==='text';f.type=shown?'password':'text';btn.textContent=shown?'Afficher':'Masquer';})(this)" class="btn btn-secondary btn-sm">Afficher</button>
               <button onclick="navigator.clipboard.writeText(document.getElementById('argocd-pwd').value).then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copier',1500)})" class="btn btn-secondary btn-sm">Copier</button>
+              <% } else { %>
+              <span role="status" style="color:var(--text-muted);font-size:13px;">
+                Le mot de passe enregistré est illisible avec la configuration actuelle.
+                Cliquez sur « Régénérer mes identifiants » pour en créer un nouveau.
+              </span>
+              <% } %>
             </div>
           </div>
 
@@ -215,7 +223,7 @@
 
       <!-- ── Modal demande d'accès ──────────────────────────────────────── -->
       <% if (can('argocd:access:request') && (!myRequest || myRequest.status === 'rejected')) { %>
-      <div id="access-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
+      <div id="access-modal" class="modal-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;">
         <div class="card" style="width:460px;">
           <div class="card-header">
             <span class="card-title">Demande d'accès ArgoCD</span>

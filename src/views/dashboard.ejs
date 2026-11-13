@@ -17,22 +17,28 @@
                 </div>
               </div>
 
+              <% if (locals.unavailableSources && unavailableSources.length) { %>
+                <div class="flash flash-warning" role="status">
+                  Données temporairement indisponibles : <%= unavailableSources.join(', ') %>. Vous pouvez continuer à utiliser le portail.
+                </div>
+              <% } %>
+
               <div class="stats-grid">
                 <div class="stat-card">
                   <div class="stat-label">Alertes actives</div>
                   <div class="stat-value"
-                    style="color: <%= stats.activeAlerts > 0 ? 'var(--danger)' : 'var(--success)' %>">
-                    <%= stats.activeAlerts %>
+                    style="color: <%= stats.activeAlerts == null ? 'var(--text-muted)' : stats.activeAlerts > 0 ? 'var(--danger)' : 'var(--success)' %>">
+                    <%= stats.activeAlerts ?? '—' %>
                   </div>
                   <div class="stat-meta">Datadog alerts</div>
                 </div>
                 <div class="stat-card">
                   <div class="stat-label">Apps ArgoCD</div>
                   <div class="stat-value">
-                    <%= stats.syncedApps %>
+                    <%= stats.syncedApps ?? '—' %>
                   </div>
                   <div class="stat-meta">
-                    <%= stats.totalApps %> apps gérées
+                    <%= stats.totalApps ?? '—' %> apps gérées
                   </div>
                 </div>
               </div>
@@ -93,7 +99,7 @@
                     <% if (recentAlerts.length===0) { %>
                       <div style="text-align:center; padding:20px; color:var(--text-muted);">
                         <div style="font-size:24px;margin-bottom:8px;">✓</div>
-                        Aucune alerte active
+                        <%= stats.activeAlerts == null ? 'Alertes indisponibles' : 'Aucune alerte active' %>
                       </div>
                       <% } else { %>
                         <% recentAlerts.forEach(alert=> { %>

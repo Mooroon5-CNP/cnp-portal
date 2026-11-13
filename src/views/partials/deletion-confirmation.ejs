@@ -1,0 +1,16 @@
+<input type="hidden" name="returnTo" value="<%= locals.returnTo === 'list' ? 'list' : 'detail' %>">
+<% if (locals.deletionDraft?.action === prefix) { %>
+  <div class="flash flash-error" role="alert"><%= deletionDraft.error %></div>
+<% } %>
+<div style="margin-bottom:14px;">
+  <label for="<%= prefix %>ConfirmText" style="display:block;margin-bottom:6px;">Pour confirmer, saisissez <strong>delete</strong> :</label>
+  <input type="text" id="<%= prefix %>ConfirmText" name="confirmation" autocomplete="off" placeholder="delete" required
+    pattern="[dD][eE][lL][eE][tT][eE]" data-deletion-confirmation="<%= prefix %>"
+    style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);">
+</div>
+<div id="<%= prefix %>BucketAck" style="display:<%= hasBucket ? 'block' : 'none' %>;margin-bottom:14px;">
+  <label style="display:flex;align-items:flex-start;gap:8px;">
+    <input type="checkbox" id="<%= prefix %>BucketAckCheck" name="destroyData" value="yes" data-deletion-data="<%= prefix %>" <%= hasBucket ? 'required' : 'disabled' %>>
+    Je confirme la suppression définitive des données et du stockage appartenant à cet environnement.
+  </label>
+</div>

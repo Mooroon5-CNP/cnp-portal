@@ -1,0 +1,19 @@
+# Opérations du portail en régime plateforme (secrets par l'API, sans CLI). Versions figées, comme requirements.txt.
+-r requirements.automation.txt
+kubernetes==31.0.0
+google-cloud-secret-manager==2.21.1
+# Importés directement par l'opérateur du portail (lectures Cloud Run et Cloud SQL Admin).
+google-auth==2.38.0
+requests==2.32.3
+# Secret Manager 2.21.1 requires protobuf <6. New Google/gRPC releases require
+# protobuf >=6 and make pip backtrack through many incompatible combinations.
+# Keep this SDK family compatible rather than upgrading deployment code here.
+google-api-core==2.24.2
+googleapis-common-protos==1.70.0
+grpc-google-iam-v1==0.14.2
+proto-plus==1.26.1
+protobuf==5.29.6
+grpcio==1.76.0
+grpcio-status==1.71.2
+# Générateurs de manifestes (engine/render_*.py), déplacés du config-repo le 08/11/2026.
+PyYAML==6.0.3

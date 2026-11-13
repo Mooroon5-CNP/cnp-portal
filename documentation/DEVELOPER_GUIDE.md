@@ -60,7 +60,10 @@ RUN npm ci --omit=dev
 
 FROM node:20-alpine
 # hadolint ignore=DL3018
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+            /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg   # see "Why remove npm" below
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY src/ ./src/
@@ -80,6 +83,7 @@ CMD ["node", "src/index.js"]
 | Init process | Use `tini` (`apk add --no-cache tini` + `ENTRYPOINT ["/sbin/tini", "--"]`) to handle PID 1 signal forwarding and zombie reaping |
 | No `apt-get` / `yum` | Alpine only — use `apk` |
 | Multi-stage build | Required — keeps the final image small and free of build tools |
+| No npm in the final image | Remove npm/yarn/corepack from the **final** stage (see below). Otherwise `scan-image` fails. |
 | `/tmp` write dir | If your app writes to `/tmp` at runtime, nothing to add. If you need persistent data, use `/data` with a GCS volume (see §5). |
 
 ### Why `USER 1000` not `USER node`?
@@ -93,6 +97,23 @@ USER 1000
 ```
 
 The `node` user has UID 1000 in `node:20-alpine`, but relying on the name is fragile: if the base image ever changes the UID mapping, your app silently runs as the wrong user. Always use the numeric UID.
+
+### Why remove npm from the final image?
+
+**In short:** npm is a tool to *install* dependencies. Once the image is built, your app no longer needs it, but `node:20-alpine` still ships it, and that copy of npm contains a known vulnerability. The pipeline scans the whole image, so it blocks the deployment.
+
+How it happens:
+
+1. `node:20-alpine` is not just Node.js: it also contains **npm**, yarn and corepack.
+2. npm itself depends on a library called `tar`. The version bundled in the image (6.2.1) has a **CRITICAL** vulnerability (CVE-2026-59873).
+3. The pipeline runs two scans:
+   - `scan-deps` checks **your** dependencies (`package-lock.json`). Your app can be perfectly clean here.
+   - `scan-image` checks **everything inside the final image**, base image included. It finds the vulnerable `tar` inside npm and **fails, even though your own code is fine**.
+4. Your container starts with `node src/index.js` and never calls npm. Removing npm from the final stage fixes the scan without changing anything for your app.
+
+Remove it in the **final** stage only. The `deps` stage still needs npm to run `npm ci`, and it is thrown away anyway. Only what you copy from it (`node_modules`) ends up in the final image.
+
+> Apps whose final image is not Node (e.g. a Python image that only uses Node in a build stage) are not affected: npm is not in their final image.
 
 ---
 

@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('./cloud-env').loadCloudEnv();
 
 const REQUIRED_VARS = [
   'GITHUB_APP_ID',
@@ -17,7 +18,10 @@ const REQUIRED_VARS = [
 ];
 
 function getMissingVars() {
-  return REQUIRED_VARS.filter(v => !process.env[v] || process.env[v].trim() === '');
+  return REQUIRED_VARS.filter(v => {
+    if (v === 'ARGOCD_TOKEN' && process.env.ARGOCD_USERNAME && process.env.ARGOCD_PASSWORD) return false;
+    return !process.env[v] || process.env[v].trim() === '';
+  });
 }
 
 // When run directly: validate and exit with the list of missing vars
@@ -42,6 +46,17 @@ function normalizePrivateKey(raw) {
   return key;
 }
 
+function normalizePublicCertificate(raw) {
+  if (!raw) return null;
+  let certificate;
+  try { certificate = Buffer.from(raw.trim(), 'base64').toString('utf8').trim(); }
+  catch (_) { throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.'); }
+  if (!certificate.startsWith('-----BEGIN CERTIFICATE-----') || !certificate.endsWith('-----END CERTIFICATE-----')) {
+    throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.');
+  }
+  return certificate;
+}
+
 const config = {
   github: {
     appId: process.env.GITHUB_APP_ID,
@@ -59,7 +74,10 @@ const config = {
   argocd: {
     serverUrl: process.env.ARGOCD_SERVER_URL,
     token: process.env.ARGOCD_TOKEN,
+    username: process.env.ARGOCD_USERNAME,
+    password: process.env.ARGOCD_PASSWORD,
     insecure: process.env.ARGOCD_INSECURE === 'true',
+    caCert: normalizePublicCertificate(process.env.ARGOCD_CA_CERT_BASE64),
     // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
     // Falls back to serverUrl if not set.
     uiUrl: process.env.ARGOCD_UI_URL || process.env.ARGOCD_SERVER_URL || null,
@@ -81,6 +99,9 @@ const config = {
   cluster: {
     baseDomain: process.env.CLUSTER_BASE_DOMAIN || 'cnp.example.com',
   },
+  applications: {
+    baseDomain: process.env.APPLICATIONS_BASE_DOMAIN || 'apps.mooroon5.fr',
+  },
   gcp: {
     project:       process.env.GCP_PROJECT        || 'cnp-terraform-500015',
     region:        process.env.GCP_REGION         || 'europe-west9',
@@ -90,6 +111,47 @@ const config = {
     cloudRunSa:    process.env.GCP_CLOUD_RUN_SA
       || `cloud-run-sa@${process.env.GCP_PROJECT || 'cnp-terraform-500015'}.iam.gserviceaccount.com`,
   },
+  // Tier souveraineté UE (Azure). Ces clés ne sont volontairement PAS dans CLOUD_KEYS (cloud-env.js) :
+  // l'import du Terraform GCP exige toutes les clés de cette liste et échouerait faute des clés Azure.
+  // Valeurs : sortie Terraform `portal_environment` du dossier azure/. Aucune valeur d'infrastructure par défaut.
+  azure: {
+    namePrefix:        process.env.AZURE_NAME_PREFIX || 'cnp-sov',
+    regionKey:         process.env.AZURE_REGION_KEY || 'fr',
+    location:          process.env.AZURE_LOCATION || 'francecentral',
+    subscriptionId:    process.env.AZURE_SUBSCRIPTION_ID,
+    tenantId:          process.env.AZURE_TENANT_ID,
+    ciClientId:        process.env.AZURE_CLIENT_ID,
+    acrLoginServer:    process.env.AZURE_ACR_LOGIN_SERVER,
+    resourceGroup:     process.env.AZURE_RESOURCE_GROUP,
+    nameSuffix:        process.env.AZURE_NAME_SUFFIX,
+    environmentId:     process.env.AZURE_CONTAINERAPP_ENVIRONMENT_ID,
+    environmentDomain: process.env.AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN,
+    pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
+    dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
+    dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,
+  },
 };
 
-module.exports = { config, getMissingVars };
+// Clé de config.azure -> variable d'environnement, pour les valeurs sans lesquelles un déploiement Azure est impossible.
+const AZURE_REQUIRED = {
+  subscriptionId: 'AZURE_SUBSCRIPTION_ID',
+  tenantId: 'AZURE_TENANT_ID',
+  ciClientId: 'AZURE_CLIENT_ID',
+  acrLoginServer: 'AZURE_ACR_LOGIN_SERVER',
+  resourceGroup: 'AZURE_RESOURCE_GROUP',
+  nameSuffix: 'AZURE_NAME_SUFFIX',
+  environmentId: 'AZURE_CONTAINERAPP_ENVIRONMENT_ID',
+  environmentDomain: 'AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN',
+  pullIdentityId: 'AZURE_ACRPULL_IDENTITY_ID',
+  dbSubnetId: 'AZURE_DB_SUBNET_ID',
+  dbDnsZoneId: 'AZURE_DB_DNS_ZONE_ID',
+};
+
+/** Variables Azure manquantes (noms des variables d'environnement). Vide = déploiement Azure possible. */
+function getMissingAzureVars(azure = config.azure) {
+  return Object.entries(AZURE_REQUIRED)
+    .filter(([key]) => !azure[key] || String(azure[key]).trim() === '')
+    .map(([, envName]) => envName);
+}
+
+module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED };

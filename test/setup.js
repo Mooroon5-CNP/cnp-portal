@@ -6,3 +6,4 @@ process.env.DB_PATH = ':memory:';
 
 // Deployment tokens are encrypted at rest; the model refuses to load without a secret.
 process.env.DEPLOYMENTS_SECRET = process.env.DEPLOYMENTS_SECRET || 'test-only-deployments-secret';
+process.env.ADMIN_INITIAL_PASSWORD = 'test-only-admin-password';

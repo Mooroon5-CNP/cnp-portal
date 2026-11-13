@@ -9,13 +9,13 @@ const PERMISSIONS = {
   'users:view-self':         ['manager', 'devops', 'dev'],
   'users:modify-permissions':['manager'],
 
-  'cicd:connect-gitlab':     ['manager', 'devops', 'dev'],
   'cicd:trigger-pipeline':   ['manager', 'devops', 'dev'],
   'cicd:view-pipeline':      ['manager', 'devops', 'dev'],
   'cicd:modify-config':      ['manager'],
   'cicd:view-logs':          ['manager', 'devops', 'dev'],
 
   'deployments:deploy':           ['manager', 'devops', 'dev'],
+  'repositories:create':          ['manager', 'devops', 'dev'],
   'deployments:choose-cloud':     ['manager', 'devops'],
   'deployments:choose-replicas':  ['manager', 'devops'],
   'deployments:delete':               ['manager'],

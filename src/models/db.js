@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const { randomBytes } = require('crypto');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
 const DB_PATH  = process.env.DB_PATH  || path.join(DATA_DIR, 'cnp-portal.sqlite');
@@ -19,7 +20,6 @@ db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id           TEXT PRIMARY KEY,
-    gitlab_id    INTEGER UNIQUE,
     github_id    INTEGER UNIQUE,
     username     TEXT NOT NULL UNIQUE,
     email        TEXT,
@@ -34,6 +34,11 @@ db.exec(`
 
 // Migrations: add columns introduced after initial schema
 const cols = db.pragma('table_info(users)').map(c => c.name);
+if (!cols.includes('gitlab_id')) {
+  db.exec('ALTER TABLE users ADD COLUMN gitlab_id INTEGER');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_gitlab_id ON users(gitlab_id) WHERE gitlab_id IS NOT NULL');
+}
+
 if (!cols.includes('github_id')) {
   db.exec('ALTER TABLE users ADD COLUMN github_id INTEGER');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id) WHERE github_id IS NOT NULL');
@@ -43,15 +48,41 @@ if (!cols.includes('approved')) {
   db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1');
 }
 
-// Seed default admin (local login) — always active and approved
-const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
-if (!adminExists) {
-  const hash = bcrypt.hashSync('admin', 10);
+// Preserve the explicitly enabled local development account during upstream bootstrap.
+const adminExists = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get('admin');
+const defaultPassword = adminExists?.password_hash && bcrypt.compareSync('admin', adminExists.password_hash);
+const localAdmin = process.env.ALLOW_LOCAL_DEFAULT_ADMIN === 'true'
+  && process.env.NODE_ENV === 'development'
+  && ['127.0.0.1', 'localhost', '::1'].includes(process.env.HOST || '127.0.0.1');
+if (!adminExists || (defaultPassword && !localAdmin)) {
+  let password = process.env.ADMIN_INITIAL_PASSWORD;
+  if (!password) {
+    const credentialPath = path.join(dataDir, 'admin-initial-password');
+    try {
+      password = fs.readFileSync(credentialPath, 'utf8').trim();
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      password = randomBytes(32).toString('hex');
+      try { fs.writeFileSync(credentialPath, password + '\n', { flag: 'wx', mode: 0o600 }); }
+      catch (writeError) {
+        if (writeError.code !== 'EEXIST') throw writeError;
+        password = fs.readFileSync(credentialPath, 'utf8').trim();
+      }
+    }
+  }
+  if (!(localAdmin && password === 'admin') && (Buffer.byteLength(password) < 16 || Buffer.byteLength(password) > 72)) {
+    throw new Error('Admin bootstrap password must contain 16–72 bytes.');
+  }
+  const hash = bcrypt.hashSync(password, 12);
   const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO users (id, gitlab_id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
-    VALUES (?, NULL, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
-  `).run(uuidv4(), hash, now, now);
+  if (adminExists) {
+    db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(hash, now, adminExists.id);
+  } else {
+    db.prepare(`
+      INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
+      VALUES (?, NULL, 'admin', 'admin@local', NULL, ?, 'manager', 1, 1, ?, ?)
+    `).run(uuidv4(), hash, now, now);
+  }
 }
 
 module.exports = db;
