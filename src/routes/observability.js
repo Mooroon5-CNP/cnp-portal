@@ -17,7 +17,9 @@ function resolveOr403(req, res) {
     return scope.resolveServices(req.user, typeof req.query.service === 'string' && req.query.service ? req.query.service : null);
   } catch (err) {
     if (err instanceof scope.ScopeError) {
-      res.status(403).send(err.message);
+      // Même page de refus que le reste du portail ; texte brut pour l'export CSV.
+      if (req.path.endsWith('.csv')) res.status(403).send(err.message);
+      else res.status(403).render('error', { title: 'Accès refusé', message: err.message, code: 403, user: req.user });
       return null;
     }
     throw err;
@@ -35,13 +37,19 @@ function commonLocals(req, title, extra) {
   };
 }
 
+// Demandes d'accès qu'un approbateur peut voir et approuver : celles des personnes qui partagent
+// une équipe avec lui. La même règle sert à l'affichage et à l'approbation.
+function mayApprove(user, request) {
+  return can(user, 'observability:access:approve') && teamService.getTeamMemberIds(user.id).has(request.userId);
+}
+
+async function accessRequestsFor(user) {
+  if (!can(user, 'observability:access:approve')) return [];
+  return (await datadogService.getAccessRequests()).filter(r => mayApprove(user, r));
+}
+
 router.get('/datadog', requireAuth, async (req, res) => {
-  let accessRequests = [];
-  if (can(req.user, 'observability:access:approve')) {
-    const myTeamMemberIds = teamService.getTeamMemberIds(req.user.id);
-    const all = await datadogService.getAccessRequests();
-    accessRequests = all.filter(r => myTeamMemberIds.has(r.userId));
-  }
+  const accessRequests = await accessRequestsFor(req.user);
 
   res.render('observability/datadog', {
     title: 'DataDog — CNP Portal',
@@ -129,11 +137,7 @@ router.get('/alerts', requireAuth, requirePermission('observability:metrics:view
   const resolved = resolveOr403(req, res);
   if (!resolved) return;
   const alerts = await datadogService.getAlerts(resolved.selected);
-  let accessRequests = [];
-  if (can(req.user, 'observability:access:approve')) {
-    const myTeamMemberIds = teamService.getTeamMemberIds(req.user.id);
-    accessRequests = (await datadogService.getAccessRequests()).filter(r => myTeamMemberIds.has(r.userId) || req.user.role === 'manager');
-  }
+  const accessRequests = await accessRequestsFor(req.user);
 
   res.render('observability/alerts', commonLocals(req, 'Alertes — CNP Portal', {
     alerts, accessRequests, services: resolved.allowed, selectedService: req.query.service || '',
@@ -184,9 +188,12 @@ router.post('/access-request', requireAuth, requirePermission('observability:acc
   res.redirect('/observability/logs');
 });
 
-router.post('/access-request/:index/approve', requireAuth, requirePermission('observability:access:approve'), async (req, res) => {
+router.post('/access-request/:id/approve', requireAuth, requirePermission('observability:access:approve'), async (req, res) => {
   try {
-    await datadogService.approveAccess(parseInt(req.params.index));
+    const request = await datadogService.getAccessRequest(req.params.id);
+    // Une demande d'une autre équipe se comporte comme une demande inexistante.
+    if (!request || !mayApprove(req.user, request)) throw new Error('Demande introuvable.');
+    await datadogService.approveAccess(request.id);
     req.flash('success', 'Accès approuvé.');
   } catch (err) {
     req.flash('error', err.message);
