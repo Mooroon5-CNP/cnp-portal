@@ -90,7 +90,9 @@ function manifests(dep, revision) {
 
 /** Noms de fichiers d'un environnement (suppression). */
 function fileNames() {
-  return ['containerapp-secretname.yaml', 'flexibleserver.yaml', 'flexibleserver-database.yaml', 'containerapp-claim.yaml', 'kustomization.yaml'];
+  // Les fichiers de copie n'existent qu'en prod ; leur absence en dev est sans effet (seuls les fichiers présents sont retirés).
+  return ['containerapp-secretname.yaml', 'flexibleserver.yaml', 'flexibleserver-database.yaml', 'containerapp-claim.yaml',
+    ...azureTemplates.PROD_COPY_FILES, 'kustomization.yaml'];
 }
 
 /**

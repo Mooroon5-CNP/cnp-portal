@@ -35,6 +35,7 @@ const AZURE = {
   acrLoginServer: 'acr.azurecr.io', resourceGroup: 'rg-1', nameSuffix: 'abc123',
   environmentId: '/subscriptions/sub-1/env', environmentDomain: 'env.francecentral.azurecontainerapps.io',
   pullIdentityId: '/subscriptions/sub-1/uami', dbSubnetId: '/subscriptions/sub-1/subnet', dbDnsZoneId: '/subscriptions/sub-1/dns',
+  copyRegionKey: 'it', copyLocation: 'italynorth', copyResourceGroup: 'rg-it', copyDbSubnetId: '/subscriptions/sub-1/subnet-it', keyVaultId: '/subscriptions/sub-1/vault',
 };
 
 describe('azure-templates', () => {
