@@ -2,6 +2,8 @@
 
 Ce document sert à préparer les instances nécessaires aux variables d'environnement des applications. Il ne contient ni secret, ni commande d'installation live. Le déploiement de la plateforme est assuré par l'utilisatrice. Les changements d'infrastructure seront de préférence déclarés en Terraform ; aucun `terraform apply` ni push sur `cnp/cluster` avant son accord.
 
+**État du code au 15/11/2026 :** le formulaire accepte désormais des lignes manuelles et l'import local d'un `.env`. Le serveur refuse un déploiement avec variables si les endpoints OpenBao ou identités runtime requis ne sont pas configurés. Les adaptateurs GCP, Azure et AWS et le rendu des références sont testés localement. Aucune instance OpenBao ni aucun droit cloud n'a été installé ou vérifié en conditions réelles ; la recette applicative reste à faire après préparation de ces prérequis.
+
 ## Instances nécessaires selon le formulaire actuel
 
 | Mode de déploiement | OpenBao à rendre disponible |
@@ -52,6 +54,8 @@ L'adaptateur AWS du portail sait créer `cnp/failover/<application>/env-<hash>` 
 - Accorder au rôle d'exécution ECS de l'application `secretsmanager:GetSecretValue` sur ses seuls secrets `env-*`. Le rôle d'exécution actuel doit être vérifié ; un rôle partagé avec accès à toutes les applications compromettrait l'isolation. Utiliser Terraform pour les droits et les paramètres de compte/région, sans `apply` ici.
 - Fournir au portail `CNP_AWS_RUNTIME_EXECUTION_ROLES`, objet JSON non secret de la forme `{ "mon-app/prod": "arn:aws:iam::<compte>:role/<role-app>" }`. Une identité ne peut pas être réutilisée pour deux applications. Le portail vérifie que le rôle et l'image ECS appartiennent au même compte. Le profil failover doit aussi référencer dès sa création le compte GCP runtime dédié, afin que le mot de passe SQL existant reste lisible.
 - Fournir `CNP_AWS_REGION` au portail et une identité AWS effective. Éviter de réutiliser la clé statique `aws-creds` de Crossplane pour l'écriture des variables. Les nouvelles valeurs doivent être livrées sur AWS avant de rendre publiable la révision GCP PostgreSQL prod.
+
+**Changement de comptes :** le moteur failover et la provenance CI existants contiennent encore des identifiants de compte/projet et de région historiques (`failover-ci-images.js`, `render_aws_prod_example.py`, `render_failover_phase1.py`, `platform_secrets.py`). Il faudra les paramétrer et aligner les déclarations Terraform avant de changer de comptes. Les nouveaux adaptateurs de variables prennent leurs identifiants depuis la configuration du portail ; ils ne corrigent pas à eux seuls le moteur failover historique.
 
 ## Paramètres attendus par le code du portail
 

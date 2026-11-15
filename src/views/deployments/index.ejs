@@ -135,7 +135,7 @@
               <div id="newDeploymentModal"
                 class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
                 <div
-                  style="background:var(--surface);width:600px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  style="background:var(--surface);width:600px;max-height:90vh;overflow:auto;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
                   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                     <h3 style="margin:0;">Nouveau déploiement</h3>
                     <button id="closeNewDeployment" class="btn btn-ghost">Fermer</button>
@@ -146,7 +146,7 @@
                     Kubernetes. Vous n'avez rien d'autre à faire.
                   </div>
 
-                  <form action="/deployments" method="POST">
+                  <form id="newDeploymentForm" action="/deployments" method="POST">
                     <% if (draft.error) { %><div class="flash flash-error" role="alert"><%= draft.error %></div><% } %>
                     <div class="form-group">
                       <label for="githubRepoUrl">URL du repo GitHub</label>
@@ -223,6 +223,18 @@
                       <div class="form-hint">Réglé au déploiement ; pour en changer, redéployer l’application.</div>
                     </div>
 
+                    <div class="form-group">
+                      <label>Variables d'environnement de l'application (facultatif)</label>
+                      <div class="form-hint">Ajoutez des variables une par une ou importez un fichier .env. Leur destination OpenBao suit automatiquement l'hébergement choisi ; GCP Cloud SQL en production prépare aussi le secours AWS.</div>
+                      <div id="deploymentVariableRows"></div>
+                      <button type="button" id="addDeploymentVariable" class="btn btn-secondary btn-sm">Ajouter une variable</button>
+                      <label for="deploymentEnvFile" style="display:block;margin-top:12px;">Importer un fichier .env</label>
+                      <input type="file" id="deploymentEnvFile" accept=".env,.local,text/plain">
+                      <div id="deploymentVariableSummary" class="form-hint" aria-live="polite">Aucune variable ajoutée.</div>
+                      <div id="deploymentVariableError" class="flash flash-error" role="alert" hidden></div>
+                      <div class="form-hint">Les valeurs restent masquées et devront être ressaisies si le formulaire est refusé.</div>
+                    </div>
+
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
@@ -291,7 +303,9 @@
                 </div>
               </div>
 
+              <script src="/js/deployment-variables.js"></script>
               <script>
+                window.CNPDeploymentVariables.init();
                 const openBtn = document.getElementById('openNewDeployment');
                 const modal = document.getElementById('newDeploymentModal');
                 const closeBtn = document.getElementById('closeNewDeployment');

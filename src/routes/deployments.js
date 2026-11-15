@@ -22,6 +22,10 @@ const manifestMrModel = require('../models/manifest_mr');
 const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
 const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
+const { valuesFromForm } = require('../services/deployment-variable-input');
+const openbaoVariables = require('../services/openbao-variables');
+const deploymentVariables = require('../models/deployment_variables');
+const openbaoRuntime = require('../services/openbao-runtime');
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
 const SUPPORTED_CLOUDS = ['gcp', 'azure'];
@@ -337,6 +341,13 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    let variableValues;
+    try { variableValues = valuesFromForm(req.body); }
+    catch (error) {
+        req.flash('error', error.message);
+        return res.redirect('/deployments');
+    }
+
     // Un nom d'application partagé entre environnements garde les mêmes droits d'accès.
     const visibleIds = new Set(deploymentModel.listForUser(req.user).map(row => row.id));
     if (deploymentModel.listForUser(null).some(row => row.app_name === appName && !visibleIds.has(row.id))) {
@@ -360,6 +371,15 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    if (Object.keys(variableValues).length) {
+        try { openbaoRuntime.assertReady({ appName, environment, targetCluster: targetCluster || 'gcp', failoverRequested,
+            persistentStorage: hasPersistentStorage }); }
+        catch (error) {
+            req.flash('error', `Variables indisponibles : ${error.message}`);
+            return res.redirect('/deployments');
+        }
+    }
+
     // Only record the deployment after the read-only compatibility check succeeds.
     let dep;
     try {
@@ -380,6 +400,16 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
+    }
+
+    if (Object.keys(variableValues).length) {
+        try { await openbaoVariables.service().prepare(dep, variableValues); }
+        catch (error) {
+            deploymentVariables.remove(dep.id);
+            deploymentModel.delete(dep.id);
+            req.flash('error', `Variables non préparées : ${error.message} Ressaisissez leurs valeurs avant de réessayer.`);
+            return res.redirect('/deployments');
+        }
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.

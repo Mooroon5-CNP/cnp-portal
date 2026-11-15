@@ -5,6 +5,7 @@ const variables = require('../src/services/openbao-variables');
 const { GcpVariableDelivery } = require('../src/services/openbao-delivery-gcp');
 const awsDelivery = require('../src/services/openbao-delivery-aws');
 const runtime = require('../src/services/openbao-runtime');
+const { OpenBaoClient } = require('../src/services/openbao-client');
 
 const dep = { id: 'deployment-test', appName: 'sample-app', environment: 'prod', targetCluster: 'gcp', failoverRequested: true };
 const sa = 'sample-app-prod@test-project.iam.gserviceaccount.com';
@@ -51,4 +52,12 @@ test('a shared GCP profile or missing dedicated AWS role stops publication befor
   process.env.CNP_AWS_RUNTIME_EXECUTION_ROLES = '{}';
   await expect(runtime.failoverReferences(dep, profile, image)).rejects.toThrow('Rôle AWS');
   expect(gcp).not.toHaveBeenCalled();
+});
+
+test('deployment preflight requires both OpenBao domains before a failover app is recorded', () => {
+  const client = jest.spyOn(OpenBaoClient, 'fromEnvironment').mockImplementation(domain => ({ domain }));
+  expect(() => runtime.assertReady(dep)).not.toThrow();
+  expect(client.mock.calls.map(([domain]) => domain)).toEqual(['gcp', 'aws']);
+  process.env.CNP_AWS_RUNTIME_EXECUTION_ROLES = '{}';
+  expect(() => runtime.assertReady(dep)).toThrow('Rôle AWS');
 });

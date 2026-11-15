@@ -5,6 +5,8 @@ const variables = require('./openbao-variables');
 const { GcpVariableDelivery } = require('./openbao-delivery-gcp');
 const { AzureVariableDelivery } = require('./openbao-delivery-azure');
 const awsDelivery = require('./openbao-delivery-aws');
+const { OpenBaoClient } = require('./openbao-client');
+const { domainsForDeployment } = require('./openbao-routing');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
 
@@ -40,6 +42,28 @@ function gcpRuntimeIdentity(deployment) {
     throw new Error('Compte GCP runtime dédié à cette application manquant.');
   }
   return identity;
+}
+
+function assertReady(deployment) {
+  const domains = domainsForDeployment(deployment);
+  for (const domain of domains) OpenBaoClient.fromEnvironment(domain);
+  if (deployment.targetCluster === 'azure') {
+    azureRuntimeIdentity(deployment);
+    AzureVariableDelivery.fromEnvironment();
+    return;
+  }
+  if (!process.env.GCP_PROJECT || !process.env.GCP_REGION) throw new Error('Configuration GCP des variables OpenBao manquante.');
+  gcpRuntimeIdentity(deployment);
+  if (deployment.failoverRequested) {
+    const roles = identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
+    const key = `${deployment.appName}/prod`;
+    const role = roles[key];
+    if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]+$/.test(role || '')
+      || Object.entries(roles).some(([other, value]) => other !== key && value === role)
+      || !/^[a-z]{2}-[a-z]+-[0-9]$/.test(process.env.CNP_AWS_REGION || '')) {
+      throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
+    }
+  }
 }
 
 async function azureReferences(deployment) {
@@ -123,4 +147,5 @@ async function references(deployment) {
   return delivery.deliver(deployment, published.values.gcp);
 }
 
-module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity, failoverReferences };
+module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity,
+  failoverReferences, assertReady };
