@@ -4,12 +4,22 @@ Branche de travail : `feat/OpenBao-Vault`. Ces spécifications décrivent les va
 
 La [liste opérationnelle des prérequis des instances](instances_openBao.md) précise ce qui est déjà préparé et ce qui reste à installer sur chaque cloud.
 
-| Ordre | Spécification | Résultat attendu |
-| --- | --- | --- |
-| 0, plateforme sous responsabilité de l'utilisatrice | [SPEC-OPENBAO-00](SPEC-OPENBAO-00-instances-et-prerequis.md) | Instances OpenBao et contrats d'accès nécessaires sur Azure, GCP et AWS, sans appliquer l'infrastructure depuis cette branche. |
-| 1 | [SPEC-OPENBAO-01](SPEC-OPENBAO-01-contrat-et-routage.md) | Écriture et lecture versionnées, isolées par application/environnement, dans les domaines OpenBao appropriés. |
-| 2 | [SPEC-OPENBAO-02](SPEC-OPENBAO-02-livraison-deploiements.md) | Livraison des références et valeurs aux runtimes GCP, Azure et au secours AWS lorsqu'il fait partie du mode existant, sans changer la construction des images. |
-| 3, **en dernier** | [SPEC-OPENBAO-03](SPEC-OPENBAO-03-formulaire-variables.md) | Saisie manuelle ou import `.env` dans le formulaire, puis déploiement d'une application témoin qui lit réellement ses variables. |
+| Ordre | Spécification | Code sur `feat/OpenBao-Vault` | Acceptation complète |
+| --- | --- | --- | --- |
+| 0, plateforme | [SPEC-OPENBAO-00](SPEC-OPENBAO-00-instances-et-prerequis.md) | Contrat et prérequis documentés ; instances AWS/Azure non déclarées ici. | **À faire** : instances, identités, réseau et tests d'accès réels. |
+| 1 | [SPEC-OPENBAO-01](SPEC-OPENBAO-01-contrat-et-routage.md) | Client KV v2, CAS, routage et générations implémentés et testés avec faux services. | **À faire** : vérifier les politiques JWT, l'isolation et la panne sur les instances réelles. |
+| 2 | [SPEC-OPENBAO-02](SPEC-OPENBAO-02-livraison-deploiements.md) | Livraison initiale GCP, Azure et secours AWS codée ; références versionnées dans les manifests. | **À faire** : identités et droits cloud, mise à jour sans nouvelle CI, retrait/nettoyage, rollback et recettes. |
+| 3, **en dernier** | [SPEC-OPENBAO-03](SPEC-OPENBAO-03-formulaire-variables.md) | Saisie manuelle, import `.env`, validation serveur et préflight implémentés. | **À faire** : démonstration d'un déploiement réel dans chaque mode et contrôle après redémarrage. |
+
+**Aucune de ces SPEC n'est marquée `DONE` au sens de ses critères d'acceptation.** Les parties codées et testées localement sont indiquées ci-dessus ; la recette cloud n'a pas eu lieu. Le détail des prérequis manuels est dans [instances_openBao.md](instances_openBao.md).
+
+## Reste à faire pour que tout fonctionne
+
+1. **Installer et raccorder OpenBao GCP, Azure et AWS :** HTTPS/CA, stockage durable, auto-unseal, sauvegarde, KV v2 avec CAS, auth JWT du portail, politiques par chemin, DNS et accès depuis le pod réel. Revoir la déclaration GCP existante pour les futurs comptes ; AWS et Azure n'ont pas encore de déclaration d'instance dans les dépôts inspectés.
+2. **Préparer les identités et permissions cloud :** écriture du portail vers GCP Secret Manager, Azure Key Vault et AWS Secrets Manager ; lecture par des comptes runtime GCP, identités Container Apps Azure et rôles d'exécution ECS AWS dédiés à chaque application/environnement. Fournir les paramètres non secrets listés dans `instances_openBao.md`. L'attribution et la configuration par application sont aujourd'hui manuelles ; leur automatisation reste à concevoir si le déploiement doit être entièrement en libre-service.
+3. **Vérifier le contrat des providers et les comptes :** contrôler sur le cluster les champs Crossplane Cloud Run et Container Apps, ainsi que le montage du jeton fédéré Azure. Avant la bascule de comptes, retirer les identifiants historiques du moteur failover, de la provenance CI et des déclarations Terraform/config-repo concernées.
+4. **Terminer le cycle de vie des variables :** permettre leur modification et leur retrait après création sans nouvelle image CI, conserver une version active pendant un retour arrière, puis nettoyer les secrets possédés lors de la suppression d'un environnement. Traiter les écritures partielles OpenBao qui restent orphelines après un échec initial.
+5. **Faire la recette réelle :** application fictive avec une valeur manuelle et une importée depuis `.env` en GCP SQLite, GCP PostgreSQL dev, Azure et GCP PostgreSQL prod avec AWS ; vérifier lecture après démarrage/redémarrage, absence de valeur en clair dans Git/logs, refus d'accès croisé, validation manager, CI échouée et démarrage AWS sans GCP.
 
 Le choix d'hébergement et de données existant détermine automatiquement le ou les domaines OpenBao. L'utilisateur n'a aucun choix « serveur OpenBao » supplémentaire à faire. Le mode GCP PostgreSQL en production conserve son secours AWS obligatoire ; GCP SQLite et GCP PostgreSQL en dev n'activent pas ce secours.
 

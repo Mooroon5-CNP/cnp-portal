@@ -2,7 +2,7 @@
 
 **Ordre : 3/3, dernière SPEC à implémenter pour ce parcours.** Dépend des SPEC-OPENBAO-01 et 02 et de leurs tests hors interface.
 
-**État au 15/11/2026 :** interface et validation serveur implémentées sur `feat/OpenBao-Vault`, tests locaux passés. La démonstration d'acceptation sur les trois clouds reste à effectuer après installation des instances et des identités décrites dans `instances_openBao.md` ; cette SPEC n'est donc pas encore validée en réel.
+**Statut : IMPLÉMENTÉ LOCALEMENT, ACCEPTATION À FAIRE (15/11/2026).** Interface et validation serveur implémentées sur `feat/OpenBao-Vault`, tests locaux passés. La démonstration d'acceptation sur les trois clouds reste à effectuer après installation des instances et des identités décrites dans `instances_openBao.md` ; la SPEC n'est pas `DONE`.
 
 ## Parcours utilisateur
 

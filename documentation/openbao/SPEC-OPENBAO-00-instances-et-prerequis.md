@@ -2,6 +2,8 @@
 
 **Ordre : 0/3, préalable de plateforme sous responsabilité de l'utilisatrice.** Cette SPEC décrit le contrat nécessaire au portail ; elle ne demande ni application Terraform ni déploiement depuis la branche du portail.
 
+**Statut : À FAIRE (acceptation).** Les prérequis sont documentés ; les trois instances, leurs politiques et leur accès depuis le portail n'ont pas été vérifiés en réel. Ne pas marquer `DONE` avant les quatre contrôles d'acceptation ci-dessous.
+
 ## État des dépôts constaté le 15 novembre 2026
 
 - `config-repo/platform/openbao/` prépare une installation **GCP opt-in** par Application Argo manuelle. Son fichier de valeurs mentionne encore le projet et le compte GCP actuels ; ce n'est pas une preuve d'installation live.

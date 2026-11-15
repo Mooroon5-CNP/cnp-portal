@@ -2,6 +2,8 @@
 
 **Ordre : 2/3.** Dépend de SPEC-OPENBAO-01. Ne modifie pas la génération ni la publication de l'image CI.
 
+**Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée est codée pour GCP, Azure et le secours AWS, avec tests locaux. Restent les identités/droits cloud et la recette réelle, la mise à jour sans nouvelle CI, le retrait et nettoyage des variables, la gestion des écritures partielles et le retour arrière. La SPEC n'est pas `DONE`.
+
 ## Résultat fonctionnel
 
 Après une CI réussie, le portail prépare les variables de la version choisie pour le runtime et publie le déploiement par les chemins GitOps existants. L'application reçoit ses variables au démarrage et au redémarrage sans appeler le portail. Le portail indisponible empêche les changements et nouveaux déploiements, mais ne rend pas indisponible une application déjà provisionnée.

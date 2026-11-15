@@ -2,6 +2,8 @@
 
 **Ordre : 1/3.** Dépend du service OpenBao fourni par l'utilisatrice ; l'implémentation du portail peut être développée et testée avec un faux service. Le déploiement des instances OpenBao n'est pas dans cette SPEC.
 
+**Statut : IMPLÉMENTÉ LOCALEMENT, ACCEPTATION À FAIRE.** Client JWT/KV v2, CAS, routage, métadonnées sans valeurs et validation de génération sont codés et testés avec de faux services. Les politiques réelles, le refus d'accès croisé et le comportement en panne sur les instances déployées restent à vérifier ; la SPEC n'est pas `DONE`.
+
 ## Résultat fonctionnel
 
 Le portail reçoit un ensemble de paires `NOM=valeur` pour une application et un environnement (`dev` ou `prod`), l'enregistre dans OpenBao et garde une référence de version. Un nom identique en dev et prod désigne deux valeurs indépendantes. Le portail ne garde pas les valeurs en SQLite, Git, session navigateur, erreur ou journal.
