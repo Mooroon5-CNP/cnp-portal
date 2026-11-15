@@ -2,6 +2,8 @@
 
 Branche de travail : `feat/OpenBao-Vault`. Ces spécifications décrivent les variables **des applications déployées**, pas la migration de la base SQLite du portail. Le déploiement des instances OpenBao et de la plateforme est pris en charge séparément par l'utilisatrice. Aucune opération `terraform apply`, déploiement live ou push de `cnp/cluster` n'est impliquée.
 
+La [liste opérationnelle des prérequis des instances](instances_openBao.md) précise ce qui est déjà préparé et ce qui reste à installer sur chaque cloud.
+
 | Ordre | Spécification | Résultat attendu |
 | --- | --- | --- |
 | 0, plateforme sous responsabilité de l'utilisatrice | [SPEC-OPENBAO-00](SPEC-OPENBAO-00-instances-et-prerequis.md) | Instances OpenBao et contrats d'accès nécessaires sur Azure, GCP et AWS, sans appliquer l'infrastructure depuis cette branche. |

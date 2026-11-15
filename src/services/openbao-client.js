@@ -65,8 +65,10 @@ class OpenBaoClient {
       return response.data;
     } catch (error) {
       // Axios errors can embed the request (and its secret body). Never propagate them.
-      const status = Number.isInteger(error.response?.status) ? ` (HTTP ${error.response.status})` : '';
-      throw new Error(`OpenBao ${this.domain} indisponible ou accès refusé${status}.`);
+      const code = error.response?.status;
+      const status = Number.isInteger(code) ? ` (HTTP ${code})` : '';
+      throw Object.assign(new Error(`OpenBao ${this.domain} indisponible ou accès refusé${status}.`),
+        { status: Number.isInteger(code) ? code : undefined });
     }
   }
 
