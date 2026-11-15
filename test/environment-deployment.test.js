@@ -40,6 +40,7 @@ beforeEach(() => {
   run = { id: 10, head_sha: revision, head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/10' };
   sourceHead = revision; trees = []; published = []; existing = new Map(); prHead = 'commit-1'; mergedBy = null;
   api = { request: jest.fn(async (route, args) => {
+    if (route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches') return { status: 204 };
     if (route.includes('/actions/workflows/')) return { data: { workflow_runs: [run] } };
     if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
       if (!existing.has(`${args.repo}/${args.path}`)) throw Object.assign(new Error('not found'), { status: 404 });
@@ -376,6 +377,32 @@ test('production setup also leaves the legacy parent absent and uses only its pr
   expect(applied.spec.template.metadata.name).toBe('{{path[1]}}-prod');
   expect(applied.spec.generators[0].git.directories).toEqual([{ path: 'apps/pixelcam/crossplane/prod' }]);
   expect(trees.filter(tree => tree.repo === 'config').every(tree => !tree.tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml'))).toBe(true);
+  const dispatch = api.request.mock.calls.find(([route]) => route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches');
+  expect(dispatch).toEqual(['POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+    { owner: 'team', repo: 'pixelcalm', workflow_id: 'cnp-pixelcam.yml', ref: 'main' }]);
+  const prodTrigger = api.request.mock.calls.findIndex(([route, args]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}' && args.ref === 'heads/prod' && args.repo === 'pixelcalm');
+  const dispatchIndex = api.request.mock.calls.indexOf(dispatch);
+  expect(dispatchIndex).toBeGreaterThan(prodTrigger);
+});
+
+test('production setup starts a dev CI for the new main head after a skipped configuration commit', async () => {
+  production();
+  const mainHead = 'b'.repeat(40);
+  await service.onboard(dep);
+  const devId = deployments.create({ environment: 'dev', appName: 'pixelcam', appPort: 8080,
+    githubRepoUrl: 'https://github.com/team/pixelcalm', persistentStorage: true, ownerUserId: 'owner' }).id;
+  deployments.updateOnboardingStatus(devId, 'ready');
+  const token = releases.acquire(devId, '__registration__', 0);
+  releases.save(devId, '__registration__', token, 'registered');
+  releases.release(devId, '__registration__', token);
+  sourceHead = mainHead;
+  run = { ...run, head_branch: 'main' };
+  const dev = deployments.get(devId);
+  expect((await service.reconcile(dev)).phase).toBe('waiting');
+  expect(api.request).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+    { owner: 'team', repo: 'pixelcalm', workflow_id: 'cnp-pixelcam.yml', ref: 'main' });
+  run = { ...run, id: 11, head_sha: mainHead };
+  expect(await service.reconcile(dev)).toMatchObject({ phase: 'deploying', revision: mainHead, runId: 11 });
 });
 
 test('missing environment project or orphaned legacy application prevents setup before source writes', async () => {

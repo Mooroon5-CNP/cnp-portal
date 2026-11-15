@@ -323,6 +323,13 @@ async function prepareOnboarding(dep) {
   }, `chore(${dep.appName}): register ${dep.environment}`);
   await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
+  if (dep.environment === 'prod') {
+    // Configurer le workflow prod peut avancer main avec [skip ci] après la CI dev.
+    // Une exécution explicite sur la tête de main évite de laisser dev en attente.
+    await api.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+      ...source, workflow_id: workflowName(dep.appName), ref: 'main',
+    });
+  }
 }
 
 function onboard(dep) {
