@@ -28,6 +28,17 @@ Le portail est le client qui écrit les valeurs dans ces domaines. Les applicati
 
 Pour les **nouvelles variables Azure**, la livraison doit utiliser Azure Key Vault : le chemin Crossplane existant pour le mot de passe PostgreSQL passe par un Secret Kubernetes du cluster GCP. Prévoir une identité fédérée d'écriture pour le portail et une identité de lecture propre à l'application (ou des droits équivalents bornés par application) pour Container Apps. Cette adaptation peut être préparée en Terraform sans toucher au secret PostgreSQL existant.
 
+### Préparation Azure Key Vault pour les nouvelles variables
+
+Le coffre existant dans `cnp/azure/9-key-vault.tf` utilise Azure RBAC. L'adaptateur du portail sait déjà échanger un jeton Kubernetes projeté contre un jeton Entra et écrire une version de secret dans ce coffre ; **il n'est pas encore raccordé aux manifests Container Apps**. Les points suivants sont nécessaires avant une recette Azure :
+
+1. Déclarer en Terraform une identité managée **distincte de celle de Crossplane** pour le service account Kubernetes `cnp-portal`, avec fédération sur l'issuer OIDC du cluster GKE et l'audience `api://AzureADTokenExchange`. Monter dans le pod un jeton projeté avec cette audience. Donner à cette identité le droit de créer et lire les secrets du coffre, sans rôle Azure Resource Manager global.
+2. Fournir au portail `CNP_AZURE_VAULT_URL`, `CNP_AZURE_TENANT_ID`, `CNP_AZURE_PORTAL_CLIENT_ID` et `CNP_AZURE_FEDERATED_TOKEN_FILE` après installation. Ce sont des paramètres d'identité et d'adresse, pas des clés statiques.
+3. Préparer une identité managée de lecture **par application ou périmètre isolé**, l'attacher à la Container App et lui attribuer `Key Vault Secrets User` sur ses seuls secrets. L'identité de pull ACR actuelle est partagée entre applications : lui donner le rôle sur le coffre entier donnerait à toutes les applications l'accès à toutes les variables.
+4. Vérifier que la version de `provider-azure-containerapp` installée accepte `secret[].keyVaultSecretId` et `secret[].identity`, puis raccorder ces références aux manifests. Conserver `DB_PASSWORD` et ses `nameSecretRef`/`valueSecretRef` actuels.
+
+L'écriture dans Key Vault crée une nouvelle version et renvoie une URL versionnée. Aucun secret applicatif n'est transmis au dépôt GitOps. Une variable Azure ne doit pas être proposée dans le formulaire tant que ces prérequis et le raccordement des manifests ne sont pas validés.
+
 ## Paramètres attendus par le code du portail
 
 Pour chaque domaine `GCP`, `AZURE`, `AWS` réellement utilisé :
