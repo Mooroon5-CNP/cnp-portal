@@ -100,13 +100,17 @@ def bootstrap(config):
     validate(config)
     app = config["app_name"]
     name = app + "-prod"
+    # Vagues Argo CD : les deux prérequis de la RDS (quelques secondes) en -1, la RDS en 0 avec Cloud SQL. Avec la RDS en
+    # vague 1, Argo attendait que Cloud SQL soit prête (~11 min) avant de la créer : les ~9 min de RDS s'ajoutaient au lieu de
+    # se superposer (mesuré le 14/11/2026, cnp-test-azure). Les deux bases ne dépendent pas l'une de l'autre ; la réplication
+    # ne démarre qu'à l'étape bootstrap, une fois les deux observées prêtes.
     subnet = resource("rds.aws.upbound.io/v1beta1", "SubnetGroup", name + "-subnets",
                       {"region": REGION, "description": "RDS prive prod - " + app,
-                       "subnetIds": PLATFORM["subnets"]}, app)
+                       "subnetIds": PLATFORM["subnets"]}, app, -1)
     params = resource("rds.aws.upbound.io/v1beta1", "ParameterGroup", name + "-pg15",
                       {"region": REGION, "family": "postgres15",
                        "description": "Replication logique aller et retour - " + app,
-                       "parameter": [{"name": "rds.logical_replication", "value": "1", "applyMethod": "pending-reboot"}]}, app)
+                       "parameter": [{"name": "rds.logical_replication", "value": "1", "applyMethod": "pending-reboot"}]}, app, -1)
     database = resource("rds.aws.upbound.io/v1beta2", "Instance", name + "-db",
                         {"region": REGION, "identifier": name + "-db", "engine": "postgres", "engineVersion": "15",
                          "instanceClass": "db.t3.micro", "allocatedStorage": 20, "storageEncrypted": True,
@@ -117,7 +121,7 @@ def bootstrap(config):
                          "backupRetentionPeriod": config.get("backup_retention_period", 7),
                          "dbSubnetGroupNameRef": {"name": name + "-subnets"},
                          "parameterGroupNameRef": {"name": name + "-pg15"},
-                         "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 1)
+                         "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 0)
     # Le mot de passe administrateur est le nôtre (Secret Kubernetes de l'app, copié dans AWS Secrets Manager), jamais le secret
     # géré par RDS, dont le nom est aléatoire et que le worker ne pourrait lire qu'avec un droit sur tous les secrets RDS du compte.
     # (Le secret géré servait au pilote, retiré le 07/11/2026.)
