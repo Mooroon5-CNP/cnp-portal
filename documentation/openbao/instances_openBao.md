@@ -39,6 +39,14 @@ Le coffre existant dans `cnp/azure/9-key-vault.tf` utilise Azure RBAC. L'adaptat
 
 L'écriture dans Key Vault crée une nouvelle version et renvoie une URL versionnée. Aucun secret applicatif n'est transmis au dépôt GitOps. Une variable Azure ne doit pas être proposée dans le formulaire tant que ces prérequis et le raccordement des manifests ne sont pas validés.
 
+### Préparation AWS Secrets Manager pour le secours
+
+L'adaptateur AWS du portail sait créer `cnp/failover/<application>/env-<hash>` et retourner une référence ECS épinglée à une version. Il réutilise le SDK Python déjà présent dans l'image du portail et transmet les valeurs au sous-processus par son entrée standard. Il reste **hors du chemin de publication** jusqu'au raccordement de `environment-failover.js` et du moteur de rendu ECS/GCP.
+
+- Vérifier que l'identité AWS effective du portail dispose des permissions `DescribeSecret`, `CreateSecret`, `PutSecretValue` et `TagResource` sur ce préfixe. La politique Terraform actuelle dans `cnp/deployment/failover-phase1/platform/main.tf` couvre déjà `cnp/failover/*`, mais elle est liée à l'ancien compte et n'est pas une preuve de droits actifs.
+- Accorder au rôle d'exécution ECS de l'application `secretsmanager:GetSecretValue` sur ses seuls secrets `env-*`. Le rôle d'exécution actuel doit être vérifié ; un rôle partagé avec accès à toutes les applications compromettrait l'isolation. Utiliser Terraform pour les droits et les paramètres de compte/région, sans `apply` ici.
+- Fournir `CNP_AWS_REGION` au portail et une identité AWS effective. Éviter de réutiliser la clé statique `aws-creds` de Crossplane pour l'écriture des variables. Les nouvelles valeurs doivent être livrées sur AWS avant de rendre publiable la révision GCP PostgreSQL prod.
+
 ## Paramètres attendus par le code du portail
 
 Pour chaque domaine `GCP`, `AZURE`, `AWS` réellement utilisé :
