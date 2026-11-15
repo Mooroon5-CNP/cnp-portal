@@ -67,11 +67,15 @@ function azureNames(appName, azure, env) {
         throw new Error(`Nom d'application trop long pour Azure avec un environnement (${appName.length} > ${MAX_APP_NAME_WITH_ENV}) : ${appName}`);
     }
     const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-${env}-${azure.nameSuffix}`;
-    if (server.length > 63) {
-        throw new Error(`Nom de serveur PostgreSQL trop long (${server.length} > 63) : ${server}`);
+    // Serveur de copie (prod seulement) : même nom, clé de la région de copie à la place de celle du calcul.
+    const copyServer = `${azure.namePrefix}-${azure.copyRegionKey || 'it'}-${appName}-${env}-${azure.nameSuffix}`;
+    for (const name of [server, copyServer]) {
+        if (name.length > 63) throw new Error(`Nom de serveur PostgreSQL trop long (${name.length} > 63) : ${name}`);
     }
     return {
         server,
+        copyServer,
+        copyPasswordSecret: `${appName}-${env}-copy-pg-password`,
         database: `${appName}-${env}-appdb`,
         passwordSecret: `${appName}-${env}-pg-password`,
         nameSecret: `${appName}-${env}-containerapp-secretname`,
@@ -118,7 +122,7 @@ function tplAzureFlexibleServer(appName, azure, env) {
     return header(
         `Serveur PostgreSQL de l'app ${appName} (tier souveraineté, Azure), créé par Crossplane via le portail.\n` +
         `Un serveur par app et par environnement : son administrateur ne voit que les bases de cette app. Tag cnp-env=${tagEnv}` +
-        `${tagEnv === 'dev' ? ' : non copié en Irlande' : ' : repris par le job de copie vers l\'Irlande'}.\n` +
+        `${tagEnv === 'dev' ? ' : non copié' : ' : copié par le job de copie vers son serveur de copie (flexibleserver-copy.yaml)'}.\n` +
         `Le mot de passe est généré dans le Secret ${n.passwordSecret} (${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
@@ -227,7 +231,81 @@ function tplAzureContainerApp(appName, appPort, azure, env, revision) {
     ) + yaml.dump(doc, DUMP);
 }
 
-function tplAzureKustomization() {
+/**
+ * Serveur de COPIE de la base de prod (décision du 15/11/2026 : un serveur de copie par app, comme la RDS de secours
+ * par app côté AWS). Dans la région de copie (Italie), créé en même temps que le serveur de l'app (vague 0, les deux en
+ * parallèle) avec son propre mot de passe généré. Le job de copie Terraform (azure/10-db-copy-job-v2.tf) le retrouve par
+ * ses tags (cnp-role=copy-db, cnp-app) et y recopie la base toutes les quelques minutes. Il disparaît avec la prod.
+ */
+function tplAzureCopyServer(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
+    const doc = {
+        apiVersion: 'dbforpostgresql.azure.upbound.io/v1beta1',
+        kind: 'FlexibleServer',
+        metadata: { name: n.copyServer, annotations: { 'argocd.argoproj.io/sync-wave': '0' } },
+        spec: {
+            forProvider: {
+                location: azure.copyLocation,
+                resourceGroupName: azure.copyResourceGroup,
+                version: '16',
+                skuName: 'B_Standard_B1ms',
+                storageMb: 32768,
+                autoGrowEnabled: false,
+                delegatedSubnetId: azure.copyDbSubnetId,
+                privateDnsZoneId: azure.dbDnsZoneId,
+                publicNetworkAccessEnabled: false,
+                administratorLogin: DB_ADMIN,
+                autoGeneratePassword: true,
+                administratorPasswordSecretRef: { name: n.copyPasswordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                backupRetentionDays: 7,
+                geoRedundantBackupEnabled: false,
+                tags: {
+                    'cnp-role': 'copy-db', 'cnp-app': appName, 'cnp-env': env,
+                    'managed-by': 'crossplane', project: 'cnp', tier: 'souverainete',
+                },
+            },
+            providerConfigRef: { name: 'default' },
+        },
+    };
+    return header(
+        `Serveur de COPIE de la base de l'app ${appName} (${env}), dans la région de copie (${azure.copyLocation}).\n` +
+        'Alimenté par le job de copie (azure/10-db-copy-job-v2.tf), qui le retrouve par ses tags. En cas de perte de la\n' +
+        'France, on restaure la base depuis lui (azure/azure.md §7). Mot de passe généré dans le Secret ' +
+        `${n.copyPasswordSecret} (${CROSSPLANE_NAMESPACE}).`
+    ) + yaml.dump(doc, DUMP);
+}
+
+/**
+ * Mots de passe des deux serveurs de prod recopiés dans le Key Vault, où le job de copie les lit (secrets
+ * « <app>-<env>-pg-password » et « <app>-<env>-copy-pg-password »). Crossplane les génère dans des Secrets Kubernetes,
+ * que le job (qui tourne dans Azure) ne peut pas lire. Vague 1 : le mot de passe existe dès la création du serveur.
+ */
+function tplAzureKeyVaultSecrets(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
+    const secret = (name, source) => ({
+        apiVersion: 'keyvault.azure.upbound.io/v1beta1',
+        kind: 'Secret',
+        metadata: { name, annotations: { 'argocd.argoproj.io/sync-wave': '1' } },
+        spec: {
+            forProvider: {
+                name,
+                keyVaultId: azure.keyVaultId,
+                valueSecretRef: { name: source, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                tags: { 'cnp-app': appName, 'cnp-env': env, 'managed-by': 'crossplane' },
+            },
+            providerConfigRef: { name: 'default' },
+        },
+    });
+    return header(
+        `Mots de passe PostgreSQL de l'app ${appName} (${env}) dans le Key Vault, pour le job de copie (lecture seule).`
+    ) + [secret(n.passwordSecret, n.passwordSecret), secret(n.copyPasswordSecret, n.copyPasswordSecret)]
+        .map(doc => yaml.dump(doc, DUMP)).join('---\n');
+}
+
+// Fichiers propres à la prod : copie de la base dans la région de copie.
+const PROD_COPY_FILES = ['flexibleserver-copy.yaml', 'keyvault-secrets.yaml'];
+
+function tplAzureKustomization(env) {
     return yaml.dump({
         apiVersion: 'kustomize.config.k8s.io/v1beta1',
         kind: 'Kustomization',
@@ -236,19 +314,25 @@ function tplAzureKustomization() {
             'flexibleserver.yaml',
             'flexibleserver-database.yaml',
             'containerapp-claim.yaml',
+            ...(env === 'prod' ? PROD_COPY_FILES : []),
         ],
     }, DUMP);
 }
 
 /** Fichiers écrits dans le config-repo : { chemin relatif à apps/<app>/crossplane : contenu }. */
 function azureCrossplaneFiles(appName, appPort, azure, env, revision) {
-    return {
+    const files = {
         'containerapp-secretname.yaml': tplAzureSecretName(appName, azure, env),
         'flexibleserver.yaml': tplAzureFlexibleServer(appName, azure, env),
         'flexibleserver-database.yaml': tplAzureDatabase(appName, azure, env),
         'containerapp-claim.yaml': tplAzureContainerApp(appName, appPort, azure, env, revision),
-        'kustomization.yaml': tplAzureKustomization(),
     };
+    if (env === 'prod') {
+        files['flexibleserver-copy.yaml'] = tplAzureCopyServer(appName, azure, env);
+        files['keyvault-secrets.yaml'] = tplAzureKeyVaultSecrets(appName, azure, env);
+    }
+    files['kustomization.yaml'] = tplAzureKustomization(env);
+    return files;
 }
 
 /** Chemins du config-repo créés pour une app Azure (suppression à l'offboarding). */
@@ -311,4 +395,5 @@ module.exports = {
     ENVIRONMENTS, MAX_APP_NAME_WITH_ENV, validateAzureAppName, azureNames, azureCrossplaneFiles, azureConfigRepoPaths,
     tplAzureCiWorkflow, azureRepoVariables, azureAppUrl,
     tplAzureFlexibleServer, tplAzureDatabase, tplAzureSecretName, tplAzureContainerApp, tplAzureKustomization,
+    tplAzureCopyServer, tplAzureKeyVaultSecrets, PROD_COPY_FILES,
 };
