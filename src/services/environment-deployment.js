@@ -486,7 +486,9 @@ async function reconcile(dep) {
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
       const files = manifests(dep, revision);
-      if (!azure.isAzure(dep)) {
+      if (azure.isAzure(dep)) {
+        openbaoRuntime.applyAzureReferences(files, dep, await openbaoRuntime.azureReferences(dep));
+      } else {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
@@ -509,6 +511,7 @@ async function reconcile(dep) {
         const custom = await openbaoRuntime.references(dep);
         const occupied = new Set([...container.env, ...runtime].map(item => item.name));
         if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
+        if (custom.length) claim.spec.forProvider.template.serviceAccount = openbaoRuntime.gcpRuntimeIdentity(dep);
         container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime, custom);
         files[claimPath] = yaml.dump(claim);
       }

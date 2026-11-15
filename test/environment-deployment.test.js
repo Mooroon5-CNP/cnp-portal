@@ -11,7 +11,8 @@ jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getPro
 
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), hasOwnedRoute: jest.fn().mockResolvedValue(true), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
-jest.mock('../src/services/openbao-runtime', () => ({ references: jest.fn().mockResolvedValue([]) }));
+jest.mock('../src/services/openbao-runtime', () => ({ references: jest.fn().mockResolvedValue([]),
+  gcpRuntimeIdentity: jest.fn().mockReturnValue('app-run@test-project.iam.gserviceaccount.com') }));
 
 jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
@@ -587,6 +588,7 @@ test('OpenBao references are pinned in the GCP claim only after successful CI', 
   const claim = yaml.load(claimTree.tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
   expect(claim.spec.forProvider.template.containers[0].env).toContainEqual({ name: 'API_KEY',
     valueSource: { secretKeyRef: { secret: 'cnp-pixelcam-dev-var-abcdef123456', version: '7' } } });
+  expect(claim.spec.forProvider.template.serviceAccount).toBe('app-run@test-project.iam.gserviceaccount.com');
   expect(JSON.stringify(claimTree)).not.toContain('private-value');
 });
 
