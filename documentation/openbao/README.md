@@ -6,10 +6,10 @@ Branche de travail : `feat/OpenBao-Vault`. Ces spécifications décrivent les va
 | --- | --- | --- |
 | 0, plateforme sous responsabilité de l'utilisatrice | [SPEC-OPENBAO-00](SPEC-OPENBAO-00-instances-et-prerequis.md) | Instances OpenBao et contrats d'accès nécessaires sur Azure, GCP et AWS, sans appliquer l'infrastructure depuis cette branche. |
 | 1 | [SPEC-OPENBAO-01](SPEC-OPENBAO-01-contrat-et-routage.md) | Écriture et lecture versionnées, isolées par application/environnement, dans les domaines OpenBao appropriés. |
-| 2 | [SPEC-OPENBAO-02](SPEC-OPENBAO-02-livraison-deploiements.md) | Livraison des références et valeurs aux runtimes GCP, Azure et, seulement si choisi, au secours AWS, sans changer la construction des images. |
+| 2 | [SPEC-OPENBAO-02](SPEC-OPENBAO-02-livraison-deploiements.md) | Livraison des références et valeurs aux runtimes GCP, Azure et au secours AWS lorsqu'il fait partie du mode existant, sans changer la construction des images. |
 | 3, **en dernier** | [SPEC-OPENBAO-03](SPEC-OPENBAO-03-formulaire-variables.md) | Saisie manuelle ou import `.env` dans le formulaire, puis déploiement d'une application témoin qui lit réellement ses variables. |
 
-Le choix du cloud et du secours existant détermine automatiquement le ou les domaines OpenBao. L'utilisateur n'a aucun choix « serveur OpenBao » supplémentaire à faire. La production GCP doit proposer explicitement le secours AWS au lieu de l'imposer par le seul choix PostgreSQL.
+Le choix d'hébergement et de données existant détermine automatiquement le ou les domaines OpenBao. L'utilisateur n'a aucun choix « serveur OpenBao » supplémentaire à faire. Le mode GCP PostgreSQL en production conserve son secours AWS obligatoire ; GCP SQLite et GCP PostgreSQL en dev n'activent pas ce secours.
 
 Le pipeline CI continue à construire et publier l'image immuable. Les variables sont des **données d'exécution** prises en charge lors de la publication du déploiement après succès CI. Aucune modification du workflow de build n'est prévue par ces trois SPEC ; si un essai démontre qu'un workflow réécrit le manifeste de runtime ou supprime ses références, corriger cette seule interaction et ajouter un test ciblé. Les variables nécessaires à la construction de l'image restent hors de ce périmètre.
 

@@ -9,9 +9,9 @@ Dans le formulaire « Nouveau déploiement », après le choix application, envi
 1. Ajouter manuellement autant de lignes `NOM` / `valeur` que nécessaire ; supprimer ou corriger une ligne avant envoi.
 2. Importer un fichier `.env` local ; le portail détecte les lignes `NOM=valeur`, ignore lignes vides et commentaires, et montre une prévisualisation des **noms**, du nombre de variables et des conflits, avec valeurs masquées.
 3. Combiner import et saisie manuelle. Un doublon demande une résolution explicite ; aucune valeur n'est écrasée silencieusement.
-4. Appuyer sur « Déployer » : les variables sont enregistrées dans le ou les domaines OpenBao déterminés automatiquement par Azure/GCP et l'option secours AWS, puis la procédure de déploiement habituelle reprend.
+4. Appuyer sur « Déployer » : les variables sont enregistrées dans le ou les domaines OpenBao déterminés automatiquement par le mode existant (Azure, GCP SQLite, GCP PostgreSQL dev ou GCP PostgreSQL prod avec secours AWS), puis la procédure de déploiement habituelle reprend.
 
-Le formulaire ne demande pas à l'utilisateur de sélectionner une instance OpenBao. Pour GCP, l'option « Secours AWS » est visible et indépendante du choix PostgreSQL ; si elle est désactivée, un texte court indique que ces variables ne seront pas préparées pour AWS et que ce déploiement ne bénéficiera pas de ce secours.
+Le formulaire ne demande pas à l'utilisateur de sélectionner une instance OpenBao et n'ajoute aucune nouvelle option de secours. Le choix GCP PostgreSQL en production garde son secours AWS obligatoire ; le comportement des autres modes reste identique.
 
 ## Validation et confidentialité
 

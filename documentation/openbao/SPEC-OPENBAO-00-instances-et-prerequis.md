@@ -8,9 +8,9 @@
 | --- | --- | --- |
 | Azure | Une application est déployée sur Azure. | Instance OpenBao Azure accessible par le portail et par son mécanisme de livraison ; données Azure isolées des domaines publics. |
 | GCP | Une application est déployée sur GCP. | Instance OpenBao GCP accessible par le portail. |
-| AWS | Un secours AWS est demandé pour une application GCP. | Instance OpenBao AWS et valeurs nécessaires prêtes avant la panne GCP ; leur lecture et la reprise ne dépendent pas d'OpenBao GCP. |
+| AWS | Le mode GCP PostgreSQL est déployé en production, avec son secours AWS obligatoire. | Instance OpenBao AWS et valeurs nécessaires prêtes avant la panne GCP ; leur lecture et la reprise ne dépendent pas d'OpenBao GCP. |
 
-Un déploiement GCP sans secours AWS ne nécessite aucune écriture dans l'instance AWS. Aucun choix d'instance n'est ajouté au formulaire. Le portail route les variables à partir des options de déploiement validées par le serveur.
+Les modes GCP SQLite et GCP PostgreSQL dev ne nécessitent aucune écriture dans l'instance AWS. Aucun choix d'instance ni de secours supplémentaire n'est ajouté au formulaire. Le portail route les variables à partir du mode de déploiement validé par le serveur.
 
 ## Contrat que la plateforme fournit au portail
 
@@ -24,7 +24,7 @@ Un déploiement GCP sans secours AWS ne nécessite aucune écriture dans l'insta
 
 1. Chaque endpoint requis répond sur HTTPS avec une chaîne de confiance vérifiée depuis le portail.
 2. Un rôle de test peut écrire puis lire une version KV v2 dans son périmètre, et ne peut pas accéder à une autre application ou à l'autre environnement.
-3. Le domaine AWS reste lisible sans GCP pour un déploiement ayant choisi le secours ; aucun secret d'un déploiement GCP sans secours n'y est créé.
+3. Le domaine AWS reste lisible sans GCP pour le mode GCP PostgreSQL prod ; aucun secret des modes GCP sans secours n'y est créé.
 4. Aucune valeur secrète n'apparaît dans Terraform state affiché, Git, les logs de test ou la réponse utilisateur.
 
 Tout ajustement d'infrastructure nécessaire est préparé de préférence en Terraform, avec un plan revu séparément. Aucun `terraform apply` et aucun push sur `cnp/cluster` avant accord explicite de l'utilisatrice.
