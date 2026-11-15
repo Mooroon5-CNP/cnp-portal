@@ -72,15 +72,22 @@ function azureNames(appName, azure, env) {
     for (const name of [server, copyServer]) {
         if (name.length > 63) throw new Error(`Nom de serveur PostgreSQL trop long (${name.length} > 63) : ${name}`);
     }
+    const serverHost = `${server}.postgres.database.azure.com`;
+    // Prod : l'app passe par un ALIAS DNS par app (CNAME <app>-prod-db dans la zone privée PostgreSQL), tenu par le moteur
+    // de réplication (cnp-portal/scripts/failover/engine/azure_replication.py) : il désigne le serveur actif, France ou
+    // copie, et une bascule ne réécrit que lui. Dev : le serveur directement (pas de copie, rien à basculer).
+    const zone = String(azure.dbDnsZoneId || '').split('/').pop();
+    const alias = `${appName}-${env}-db.${zone}`;
     return {
         server,
         copyServer,
-        copyPasswordSecret: `${appName}-${env}-copy-pg-password`,
         database: `${appName}-${env}-appdb`,
         passwordSecret: `${appName}-${env}-pg-password`,
         nameSecret: `${appName}-${env}-containerapp-secretname`,
         containerApp: `${appName}-${env}`,
-        host: `${server}.postgres.database.azure.com`,
+        serverHost,
+        alias,
+        host: env === 'prod' ? alias : serverHost,
     };
 }
 
@@ -122,7 +129,7 @@ function tplAzureFlexibleServer(appName, azure, env) {
     return header(
         `Serveur PostgreSQL de l'app ${appName} (tier souveraineté, Azure), créé par Crossplane via le portail.\n` +
         `Un serveur par app et par environnement : son administrateur ne voit que les bases de cette app. Tag cnp-env=${tagEnv}` +
-        `${tagEnv === 'dev' ? ' : non copié' : ' : copié par le job de copie vers son serveur de copie (flexibleserver-copy.yaml)'}.\n` +
+        `${tagEnv === 'dev' ? ' : non copié' : ' : répliqué vers son serveur de copie (flexibleserver-copy.yaml) ; l\'app y accède par l\'alias ${n.alias}'}.\n` +
         `Le mot de passe est généré dans le Secret ${n.passwordSecret} (${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
@@ -233,9 +240,13 @@ function tplAzureContainerApp(appName, appPort, azure, env, revision) {
 
 /**
  * Serveur de COPIE de la base de prod (décision du 15/11/2026 : un serveur de copie par app, comme la RDS de secours
- * par app côté AWS). Dans la région de copie (Italie), créé en même temps que le serveur de l'app (vague 0, les deux en
- * parallèle) avec son propre mot de passe généré. Le job de copie Terraform (azure/10-db-copy-job-v2.tf) le retrouve par
- * ses tags (cnp-role=copy-db, cnp-app) et y recopie la base toutes les quelques minutes. Il disparaît avec la prod.
+ * par app côté AWS). Dans la région de copie (Italie), créé en même temps que le serveur de l'app (vague 0).
+ *
+ * MÊME administrateur et MÊME mot de passe que le serveur de l'app (le Secret généré par celui-ci) : depuis le 16/11/2026
+ * la copie est une réplication logique, et une bascule ne fait que réécrire l'alias DNS de l'app ; l'app doit pouvoir se
+ * connecter au serveur de copie avec son secret inchangé. Crossplane attend que le Secret existe (il est écrit dès la
+ * première réconciliation du serveur de l'app, avant même sa création côté Azure) : les deux serveurs restent en parallèle.
+ * Le moteur de réplication le retrouve par ses tags (cnp-role=copy-db, cnp-app, cnp-env). Il disparaît avec la prod.
  */
 function tplAzureCopyServer(appName, azure, env) {
     const n = azureNames(appName, azure, env);
@@ -255,8 +266,8 @@ function tplAzureCopyServer(appName, azure, env) {
                 privateDnsZoneId: azure.dbDnsZoneId,
                 publicNetworkAccessEnabled: false,
                 administratorLogin: DB_ADMIN,
-                autoGeneratePassword: true,
-                administratorPasswordSecretRef: { name: n.copyPasswordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                autoGeneratePassword: false,
+                administratorPasswordSecretRef: { name: n.passwordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
                 backupRetentionDays: 7,
                 geoRedundantBackupEnabled: false,
                 tags: {
@@ -269,16 +280,15 @@ function tplAzureCopyServer(appName, azure, env) {
     };
     return header(
         `Serveur de COPIE de la base de l'app ${appName} (${env}), dans la région de copie (${azure.copyLocation}).\n` +
-        'Alimenté par le job de copie (azure/10-db-copy-job-v2.tf), qui le retrouve par ses tags. En cas de perte de la\n' +
-        'France, on restaure la base depuis lui (azure/azure.md §7). Mot de passe généré dans le Secret ' +
-        `${n.copyPasswordSecret} (${CROSSPLANE_NAMESPACE}).`
+        'Réplique logique du serveur actif (moteur azure_replication.py) ; l\'alias DNS de l\'app désigne l\'un ou l\'autre.\n' +
+        `Même administrateur et même mot de passe que le serveur de l'app (Secret ${n.passwordSecret}, ${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
 
 /**
- * Mots de passe des deux serveurs de prod recopiés dans le Key Vault, où le job de copie les lit (secrets
- * « <app>-<env>-pg-password » et « <app>-<env>-copy-pg-password »). Crossplane les génère dans des Secrets Kubernetes,
- * que le job (qui tourne dans Azure) ne peut pas lire. Vague 1 : le mot de passe existe dès la création du serveur.
+ * Mot de passe des deux serveurs de prod (le même) recopié dans le Key Vault, où le moteur de réplication le lit (secret
+ * « <app>-<env>-pg-password »). Crossplane le génère dans un Secret Kubernetes, que le moteur (qui tourne dans Azure) ne
+ * peut pas lire. Vague 1 : le mot de passe existe dès la création du serveur.
  */
 function tplAzureKeyVaultSecrets(appName, azure, env) {
     const n = azureNames(appName, azure, env);
@@ -297,9 +307,8 @@ function tplAzureKeyVaultSecrets(appName, azure, env) {
         },
     });
     return header(
-        `Mots de passe PostgreSQL de l'app ${appName} (${env}) dans le Key Vault, pour le job de copie (lecture seule).`
-    ) + [secret(n.passwordSecret, n.passwordSecret), secret(n.copyPasswordSecret, n.copyPasswordSecret)]
-        .map(doc => yaml.dump(doc, DUMP)).join('---\n');
+        `Mot de passe PostgreSQL de l'app ${appName} (${env}) dans le Key Vault, pour le moteur de réplication (lecture seule).`
+    ) + yaml.dump(secret(n.passwordSecret, n.passwordSecret), DUMP);
 }
 
 // Fichiers propres à la prod : copie de la base dans la région de copie.

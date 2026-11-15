@@ -26,7 +26,7 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
 jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
-  getArgocdApplicationIfExists: jest.fn(),
+  getArgocdApplicationIfExists: jest.fn(), removeApplicationSetPath: jest.fn(),
 }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -106,7 +106,7 @@ describe('claims par environnement', () => {
     expect(names(dev).filter(n => names(prod).includes(n))).toEqual([]);
   });
 
-  test('prod seulement : un serveur de copie par app en Italie et les deux mots de passe dans le Key Vault', () => {
+  test('prod seulement : un serveur de copie par app en Italie, même mot de passe, app sur l\'alias DNS', () => {
     const dev = service.manifests(dep, revision), prod = service.manifests({ ...dep, environment: 'prod' }, revision);
     const file = (files, name) => files[Object.keys(files).find(p => p.endsWith(`/${name}`))];
     expect(file(dev, 'flexibleserver-copy.yaml')).toBeUndefined();
@@ -116,19 +116,25 @@ describe('claims par environnement', () => {
     const copy = yaml.load(file(prod, 'flexibleserver-copy.yaml'));
     expect(copy.metadata.name).toBe('cnp-sov-it-todo-prod-abc123');
     expect(copy.metadata.annotations['argocd.argoproj.io/sync-wave']).toBe('0');
+    // même administrateur, même mot de passe (le Secret généré par le serveur de l'app) : la bascule ne touche que l'alias
     expect(copy.spec.forProvider).toMatchObject({
       location: 'italynorth', resourceGroupName: 'rg-it', delegatedSubnetId: '/subscriptions/sub-1/subnet-it',
-      privateDnsZoneId: '/subscriptions/sub-1/dns', publicNetworkAccessEnabled: false, autoGeneratePassword: true,
-      administratorPasswordSecretRef: { name: 'todo-prod-copy-pg-password', namespace: 'crossplane-system', key: 'password' },
+      privateDnsZoneId: '/subscriptions/sub-1/dns', publicNetworkAccessEnabled: false, autoGeneratePassword: false,
+      administratorLogin: 'pgadmin',
+      administratorPasswordSecretRef: { name: 'todo-prod-pg-password', namespace: 'crossplane-system', key: 'password' },
     });
-    // le job de copie le retrouve par ces tags
+    expect(yaml.load(file(prod, 'flexibleserver.yaml')).spec.forProvider.administratorPasswordSecretRef.name).toBe('todo-prod-pg-password');
     expect(copy.spec.forProvider.tags).toMatchObject({ 'cnp-role': 'copy-db', 'cnp-app': 'todo', 'cnp-env': 'prod' });
 
     const secrets = yaml.loadAll(file(prod, 'keyvault-secrets.yaml'));
-    expect(secrets.map(s => s.spec.forProvider.name)).toEqual(['todo-prod-pg-password', 'todo-prod-copy-pg-password']);
-    expect(secrets.every(s => s.spec.forProvider.keyVaultId === '/subscriptions/sub-1/vault')).toBe(true);
-    expect(secrets.map(s => s.spec.forProvider.valueSecretRef.name)).toEqual(['todo-prod-pg-password', 'todo-prod-copy-pg-password']);
+    expect(secrets.map(s => s.spec.forProvider.name)).toEqual(['todo-prod-pg-password']);
+    expect(secrets[0].spec.forProvider).toMatchObject({ keyVaultId: '/subscriptions/sub-1/vault', valueSecretRef: { name: 'todo-prod-pg-password' } });
     expect(yaml.load(file(prod, 'kustomization.yaml')).resources).toEqual(expect.arrayContaining(['flexibleserver-copy.yaml', 'keyvault-secrets.yaml']));
+
+    // l'app de prod passe par l'alias (zone tirée de AZURE_DB_DNS_ZONE_ID) ; la dev parle à son serveur
+    const dbHost = files => yaml.load(file(files, 'containerapp-claim.yaml')).spec.forProvider.template.container[0].env.find(e => e.name === 'DB_HOST').value;
+    expect(dbHost(prod)).toBe('todo-prod-db.dns');
+    expect(dbHost(dev)).toBe('cnp-sov-fr-todo-dev-abc123.postgres.database.azure.com');
   });
 
   test('l\'image est la vraie révision de la CI, jamais une image de départ', () => {
@@ -260,6 +266,10 @@ describe('suppression', () => {
     // (preserveResourcesOnDeletion) retire le finalizer posé et recrée l'Application : ressources orphelines.
     const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
     expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+    // …et après le retrait de son chemin de l'ApplicationSet : sinon il recrée l'Application sans finalizer et la cascade
+    // s'arrête (serveurs et secrets orphelins, constaté le 16/11/2026).
+    expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-prod', 'apps/todo/crossplane/prod');
+    expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(kubernetes.removeApplicationSetPath.mock.invocationCallOrder[0]);
   });
 
   test('un échec de la cascade remonte, pour que la suppression puisse être rejouée', async () => {
