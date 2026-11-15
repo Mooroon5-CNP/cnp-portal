@@ -2,6 +2,13 @@
 
 **Ordre : 0/3, préalable de plateforme sous responsabilité de l'utilisatrice.** Cette SPEC décrit le contrat nécessaire au portail ; elle ne demande ni application Terraform ni déploiement depuis la branche du portail.
 
+## État des dépôts constaté le 15 novembre 2026
+
+- `config-repo/platform/openbao/` prépare une installation **GCP opt-in** par Application Argo manuelle. Son fichier de valeurs mentionne encore le projet et le compte GCP actuels ; ce n'est pas une preuve d'installation live.
+- Aucune installation OpenBao AWS ou Azure n'est déclarée dans les dossiers inspectés. Ces domaines doivent être préparés avant la recette des modes correspondants.
+- `cnp/gcp/11-vault.tf` déclare un **Vault HashiCorp** séparé, avec son propre chart et son propre stockage. Il ne constitue pas l'instance OpenBao demandée ; aucune migration ou suppression de ce Vault n'est implicite.
+- Le changement prochain des comptes GCP, AWS et Azure impose de revoir les identités, réseaux, KMS et références avant installation. Les changements d'infrastructure seront préparés de préférence en Terraform et revus sans `apply`.
+
 ## Instances requises
 
 | Domaine | Nécessaire quand | Emplacement et indépendance |
