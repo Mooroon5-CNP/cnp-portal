@@ -4,6 +4,7 @@ const records = require('../models/deployment_variables');
 const variables = require('./openbao-variables');
 const { GcpVariableDelivery } = require('./openbao-delivery-gcp');
 const { AzureVariableDelivery } = require('./openbao-delivery-azure');
+const awsDelivery = require('./openbao-delivery-aws');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
 
@@ -47,6 +48,33 @@ async function azureReferences(deployment) {
   const published = await variables.service().published(deployment);
   if (!published) return null;
   return { identity, references: await AzureVariableDelivery.fromEnvironment().deliver(deployment, published.values.azure) };
+}
+
+async function failoverReferences(deployment, profile, imageRecord) {
+  if (!records.get(deployment.id)) return null;
+  if (!deployment.failoverRequested || deployment.environment !== 'prod' || deployment.targetCluster !== 'gcp') {
+    throw new Error('Variables du secours réservées à GCP PostgreSQL prod.');
+  }
+  const serviceAccount = gcpRuntimeIdentity(deployment);
+  if (profile?.gcp?.gcp_runtime?.service_account !== serviceAccount) {
+    throw new Error('Le profil failover doit utiliser le compte GCP dédié avant la publication des variables.');
+  }
+  const roles = identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
+  const key = `${deployment.appName}/prod`;
+  const role = roles[key];
+  const account = imageRecord?.aws?.match(/^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com\//);
+  if (!account || !new RegExp(`^arn:aws:iam::${account[1]}:role/[A-Za-z0-9_+=,.@/-]+$`).test(role || '')
+    || Object.entries(roles).some(([other, value]) => other !== key && value === role)
+    || !process.env.CNP_AWS_REGION || process.env.CNP_AWS_REGION !== account[2]) {
+    throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
+  }
+  if (!process.env.GCP_PROJECT || !process.env.GCP_REGION) throw new Error('Configuration GCP des variables OpenBao manquante.');
+  const published = await variables.service().published(deployment);
+  if (!published) return null;
+  const gcp = await new GcpVariableDelivery({ project: process.env.GCP_PROJECT, region: process.env.GCP_REGION,
+    runtimeServiceAccount: serviceAccount }).deliver(deployment, published.values.gcp);
+  const aws = awsDelivery.deliver(deployment, published.generation, published.values.aws);
+  return { gcp, aws, aws_execution_role: role };
 }
 
 function applyAzureReferences(files, deployment, prepared) {
@@ -95,4 +123,4 @@ async function references(deployment) {
   return delivery.deliver(deployment, published.values.gcp);
 }
 
-module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity };
+module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity, failoverReferences };

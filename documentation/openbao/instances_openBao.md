@@ -50,6 +50,7 @@ L'adaptateur AWS du portail sait créer `cnp/failover/<application>/env-<hash>` 
 
 - Vérifier que l'identité AWS effective du portail dispose des permissions `DescribeSecret`, `CreateSecret`, `PutSecretValue` et `TagResource` sur ce préfixe. La politique Terraform actuelle dans `cnp/deployment/failover-phase1/platform/main.tf` couvre déjà `cnp/failover/*`, mais elle est liée à l'ancien compte et n'est pas une preuve de droits actifs.
 - Accorder au rôle d'exécution ECS de l'application `secretsmanager:GetSecretValue` sur ses seuls secrets `env-*`. Le rôle d'exécution actuel doit être vérifié ; un rôle partagé avec accès à toutes les applications compromettrait l'isolation. Utiliser Terraform pour les droits et les paramètres de compte/région, sans `apply` ici.
+- Fournir au portail `CNP_AWS_RUNTIME_EXECUTION_ROLES`, objet JSON non secret de la forme `{ "mon-app/prod": "arn:aws:iam::<compte>:role/<role-app>" }`. Une identité ne peut pas être réutilisée pour deux applications. Le portail vérifie que le rôle et l'image ECS appartiennent au même compte. Le profil failover doit aussi référencer dès sa création le compte GCP runtime dédié, afin que le mot de passe SQL existant reste lisible.
 - Fournir `CNP_AWS_REGION` au portail et une identité AWS effective. Éviter de réutiliser la clé statique `aws-creds` de Crossplane pour l'écriture des variables. Les nouvelles valeurs doivent être livrées sur AWS avant de rendre publiable la révision GCP PostgreSQL prod.
 
 ## Paramètres attendus par le code du portail

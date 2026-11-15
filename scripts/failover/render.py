@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 # Générateurs : dans engine/, à côté de ce script (déplacés du config-repo le 08/11/2026, une seule copie).
@@ -11,6 +12,63 @@ from prepare_failover_phase1 import build, resolve_credentials, automation_profi
 import render_aws_prod_example as aws
 
 WORKER_KINDS = {'MetricAlarm', 'TableItem'}
+
+
+def managed_gcp_variable(item, app):
+    secret = item.get('valueSource', {}).get('secretKeyRef', {}).get('secret', '')
+    return isinstance(secret, str) and bool(re.fullmatch(r'cnp-' + re.escape(app) + r'-prod-var-[a-f0-9]{12}', secret))
+
+
+def managed_aws_variable(item, app):
+    ref = item.get('valueFrom', '')
+    return isinstance(ref, str) and bool(re.fullmatch(r'arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:cnp/failover/'
+                                                      + re.escape(app) + r'/env-[a-f0-9]{12}-[A-Za-z0-9]{6}:::[0-9a-f-]{36}', ref))
+
+
+def inject_runtime_variables(result, profile, references):
+    """Add references only after the generator has merged existing runtime settings."""
+    app = profile['gcp']['app_name']
+    prefix = f'apps/{app}/crossplane/prod/'
+    gcp_refs = references.get('gcp')
+    aws_refs = references.get('aws')
+    role = references.get('aws_execution_role')
+    if (not isinstance(gcp_refs, list) or not isinstance(aws_refs, list) or not gcp_refs
+            or len(gcp_refs) != len(aws_refs) or not isinstance(role, str)
+            or not re.fullmatch(r'arn:aws:iam::\d{12}:role/[A-Za-z0-9_+=,.@/-]+', role)):
+        raise ValueError('Références runtime du secours invalides.')
+    gcp_path = prefix + 'cloudrun-claim.yaml'
+    aws_path = prefix + 'ecs-task-definition.yaml'
+    gcp = result[gcp_path]
+    aws_task = result[aws_path]
+    gcp_container = gcp['spec']['forProvider']['template']['containers'][0]
+    aws_containers = json.loads(aws_task['spec']['forProvider']['containerDefinitions'])
+    if len(aws_containers) != 1:
+        raise ValueError('Topologie ECS inattendue pour les variables.')
+    aws_container = aws_containers[0]
+    gcp_existing = {item['name'] for item in gcp_container.get('env', [])}
+    aws_existing = {item['name'] for item in aws_container.get('secrets', [])}
+    gcp_names = {item.get('name') for item in gcp_refs}
+    aws_names = {item.get('name') for item in aws_refs}
+    if (gcp_names != aws_names or len(gcp_names) != len(gcp_refs)
+            or gcp_names & gcp_existing or aws_names & aws_existing):
+        raise ValueError('Variables du secours incohérentes ou en conflit avec le runtime.')
+    for item in gcp_refs:
+        ref = item.get('valueSource', {}).get('secretKeyRef', {})
+        if (not isinstance(item.get('name'), str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', item['name'])
+                or not isinstance(ref.get('secret'), str) or not ref.get('secret')
+                or not isinstance(ref.get('version'), str) or not re.fullmatch(r'[1-9][0-9]*', ref['version'])):
+            raise ValueError('Référence Secret Manager GCP invalide.')
+    for item in aws_refs:
+        if (not isinstance(item.get('name'), str) or not isinstance(item.get('valueFrom'), str)
+                or not re.fullmatch(r'arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:cnp/failover/'
+                                    + re.escape(app) + r'/env-[a-f0-9]{12}-[A-Za-z0-9]{6}:::[0-9a-f-]{36}',
+                                    item['valueFrom'])):
+            raise ValueError('Référence Secrets Manager AWS invalide.')
+    gcp_container['env'].extend(gcp_refs)
+    aws_container.setdefault('secrets', []).extend(aws_refs)
+    rendered = aws.runtime_resources(profile['aws'], aws_container)
+    result.update({prefix + name: value for name, value in rendered.items()})
+    result[aws_path]['spec']['forProvider']['executionRoleArn'] = role
 
 
 def render(request):
@@ -44,13 +102,18 @@ def render(request):
             raise ValueError('Topologie ECS existante différente ; revue dédiée requise')
         container = {**old_containers[0], **new_containers[0]}
         for key in ('environment', 'secrets'):
-            values = {entry['name']: entry for entry in old_containers[0].get(key, [])}
+            old_values = old_containers[0].get(key, [])
+            if key == 'secrets' and request.get('runtime_variables'):
+                old_values = [entry for entry in old_values if not managed_aws_variable(entry, profile['gcp']['app_name'])]
+            values = {entry['name']: entry for entry in old_values}
             values.update({entry['name']: entry for entry in new_containers[0].get(key, [])})
             if values:
                 container[key] = list(values.values())
         # Calculer le nom immuable après conservation des paramètres applicatifs.
         runtime = aws.runtime_resources(profile['aws'], container)
         result.update({f"apps/{profile['gcp']['app_name']}/crossplane/prod/{name}": value for name, value in runtime.items()})
+    if stage == 'runtime' and request.get('runtime_variables'):
+        inject_runtime_variables(result, profile, request['runtime_variables'])
     # Le lot courant et tous les lots déjà présents restent référencés.
     # Le bucket et les données historiques ne sont jamais retirés.
     files = dict(baseline['files'])
@@ -65,7 +128,10 @@ def render(request):
             after = value['spec']['forProvider']['template']
             old_container = before.get('containers', [{}])[0]
             new_container = after['containers'][0]
-            env = {v['name']: v for v in old_container.get('env', [])}
+            old_env = old_container.get('env', [])
+            if request.get('runtime_variables'):
+                old_env = [v for v in old_env if not managed_gcp_variable(v, profile['gcp']['app_name'])]
+            env = {v['name']: v for v in old_env}
             env.update({v['name']: v for v in new_container.get('env', [])})
             after['containers'][0] = {**old_container, **new_container, 'env': list(env.values())}
             value['spec']['forProvider']['template'] = {**before, **after}

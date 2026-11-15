@@ -169,6 +169,9 @@ async function createProfile(app, mode, contract, user) {
   if (row.billing_mode === 'instance') profile.gcp.billing_mode = 'instance';
   profile.gcp.gcp_lb_ip = platform.gcp.gcp_lb_ip;
   profile.gcp.gcp_runtime.service_account = platform.gcp.gcp_runtime.service_account;
+  if (require('../models/deployment_variables').get(row.id)) {
+    profile.gcp.gcp_runtime.service_account = require('./openbao-runtime').gcpRuntimeIdentity(deployments.get(row.id));
+  }
   profile.gcp.gcp_runtime.subnetwork = platform.gcp.gcp_runtime.subnetwork;
   profile.aws.listener_priority = allocation.priority;
   if (mode === 'postgres') {

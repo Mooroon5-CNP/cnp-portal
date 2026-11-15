@@ -191,15 +191,23 @@ async function prepare(stage, user, requestedApp) {
     }
     const input = profileFor(app);
     let imageRecord = null;
+    let runtimeDeployment = null;
     if (stage === 'runtime') {
       const deployments = require('../models/deployment');
       const row = deployments.listForUser(null).find(row => row.app_name === app && row.deployment_environment === 'prod' && row.failover_requested);
-      if (row) imageRecord = await require('./failover-ci-images').resolve(deployments.get(row.id));
+      if (row) {
+        runtimeDeployment = deployments.get(row.id);
+        imageRecord = await require('./failover-ci-images').resolve(runtimeDeployment);
+      }
     }
     const renderingInput = JSON.parse(JSON.stringify(input));
     if (imageRecord) {
       renderingInput.profile.gcp.gcp_runtime.image = imageRecord.gcp;
       renderingInput.profile.aws.image = imageRecord.aws;
+    }
+    if (runtimeDeployment) {
+      const runtimeVariables = await require('./openbao-runtime').failoverReferences(runtimeDeployment, renderingInput.profile, imageRecord);
+      if (runtimeVariables) renderingInput.runtime_variables = runtimeVariables;
     }
     const api = await github.getInstallationOctokit();
     const repo = repository();
