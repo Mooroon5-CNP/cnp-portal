@@ -26,7 +26,7 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
 jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
-  getArgocdApplicationIfExists: jest.fn(),
+  getArgocdApplicationIfExists: jest.fn(), removeApplicationSetPath: jest.fn(),
 }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
@@ -266,6 +266,10 @@ describe('suppression', () => {
     // (preserveResourcesOnDeletion) retire le finalizer posé et recrée l'Application : ressources orphelines.
     const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
     expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+    // …et après le retrait de son chemin de l'ApplicationSet : sinon il recrée l'Application sans finalizer et la cascade
+    // s'arrête (serveurs et secrets orphelins, constaté le 16/11/2026).
+    expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-prod', 'apps/todo/crossplane/prod');
+    expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(kubernetes.removeApplicationSetPath.mock.invocationCallOrder[0]);
   });
 
   test('un échec de la cascade remonte, pour que la suppression puisse être rejouée', async () => {
