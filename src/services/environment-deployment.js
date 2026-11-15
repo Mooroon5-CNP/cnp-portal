@@ -15,6 +15,7 @@ const routing = require('./application-routing');
 const addresses = require('./application-address');
 const azure = require('./environment-azure');
 const failover = require('./environment-failover');
+const openbaoRuntime = require('./openbao-runtime');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -505,7 +506,10 @@ async function reconcile(dep) {
         }
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
-        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
+        const custom = await openbaoRuntime.references(dep);
+        const occupied = new Set([...container.env, ...runtime].map(item => item.name));
+        if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
+        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime, custom);
         files[claimPath] = yaml.dump(claim);
       }
       if (dep.environment === 'dev') {

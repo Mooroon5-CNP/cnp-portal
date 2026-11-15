@@ -9,7 +9,7 @@ Après une CI réussie, le portail prépare les variables de la version choisie 
 | Mode actuel | Adaptation minimale |
 | --- | --- |
 | GCP Cloud Run, SQLite/GCS ou Cloud SQL | Utiliser des versions de Secret Manager et des références `valueSource.secretKeyRef` dans le claim Cloud Run. Préserver `DB_*`, les références `runtime-secrets.yaml` existantes et les valeurs gérées par l'opérateur. |
-| Azure Container Apps | Livrer les valeurs par le mécanisme de secrets et références d'environnement de Container Apps/Crossplane, sans ajouter les valeurs dans les manifests Git. Préserver les secrets PostgreSQL existants. |
+| Azure Container Apps | Livrer les nouvelles variables dans Azure Key Vault, puis référencer leurs versions depuis les secrets de Container Apps. Ne pas recopier ces nouvelles valeurs dans un Secret Kubernetes GCP. Préserver le chemin actuel du mot de passe PostgreSQL. |
 | GCP PostgreSQL prod, avec son secours AWS obligatoire | Préparer les valeurs dans le domaine OpenBao AWS et dans le mécanisme de secrets AWS requis par le runtime de secours **avant** de rendre la version publiable. Tester un redémarrage AWS sans portail ni OpenBao GCP. |
 
 GCP SQLite, y compris en production, et GCP PostgreSQL dev ne provisionnent aucune variable sur AWS. Leur mode actuel ne promet pas de reprise AWS.
@@ -19,6 +19,7 @@ GCP SQLite, y compris en production, et GCP PostgreSQL dev ne provisionnent aucu
 - Garder les branches `main`/`prod`, le workflow CI, l'image identifiée par SHA, la publication après CI et la validation manager en production. Les variables sont injectées dans la phase runtime, après la réussite CI et avant de déclarer l'application prête.
 - Le choix `GCP PostgreSQL` en production conserve le secours AWS imposé par `src/routes/deployments.js`. Ne pas ajouter d'option de secours indépendante ni ouvrir le chemin GCP PostgreSQL prod sans secours ; préserver le formulaire et les validations de déploiement actuels.
 - Pas de valeur secrète dans le config-repo, les PR, les logs CI, les URLs, les messages d'erreur ou les artefacts. Les manifests contiennent seulement des références et versions.
+- Pour Azure, prévoir une identité du portail autorisée à écrire les secrets Key Vault et une identité de lecture adaptée à l'application. Une identité partagée qui donne à toutes les applications accès à toutes les variables Azure ne satisfait pas l'isolation demandée dans SPEC-OPENBAO-01. Préparer les droits et la fédération en Terraform, sans `apply` automatique.
 - Une mise à jour de variables doit produire une nouvelle révision de configuration contrôlée sans reconstruire l'image si le code ne change pas. Les changements de valeur ne doivent pas être considérés comme une CI réussie sur un nouveau SHA de code.
 - Le retrait d'une variable, la suppression d'un environnement et le retour arrière ne suppriment que les versions possédées par cet environnement, avec une politique de conservation compatible avec un runtime encore actif.
 

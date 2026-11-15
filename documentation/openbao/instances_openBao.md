@@ -26,6 +26,8 @@ Le portail est le client qui écrit les valeurs dans ces domaines. Les applicati
 4. **Identité du portail :** auth JWT au chemin `jwt`, rôle du portail limité aux chemins `apps/<application>/<dev|prod>`. Le portail demande un jeton d'identité Google à son runtime ; l'instance doit valider son issuer, son audience et le sujet réel du compte de service. Aucun token OpenBao statique dans Git ou dans le portail.
 5. **Audit et permissions :** audit sans valeurs, droits de lecture/écriture bornés au portail, pas de droits d'administration ni de lecture croisée pour une application. Préparer une procédure de rotation et de révocation.
 
+Pour les **nouvelles variables Azure**, la livraison doit utiliser Azure Key Vault : le chemin Crossplane existant pour le mot de passe PostgreSQL passe par un Secret Kubernetes du cluster GCP. Prévoir une identité fédérée d'écriture pour le portail et une identité de lecture propre à l'application (ou des droits équivalents bornés par application) pour Container Apps. Cette adaptation peut être préparée en Terraform sans toucher au secret PostgreSQL existant.
+
 ## Paramètres attendus par le code du portail
 
 Pour chaque domaine `GCP`, `AZURE`, `AWS` réellement utilisé :
