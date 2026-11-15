@@ -16,6 +16,14 @@ Modèle, symétrique :
 - `failover` : bascule quand l'actif ne répond plus. Perte bornée au retard de réplication (quelques centaines de ms
   mesurées le 15/11). Au retour de l'ancien actif, `reconcile` l'efface et le réabonne à l'actif.
 
+Bascule automatique (option C, désactivée par défaut, CNP_AUTO_FAILOVER=true) : `reconcile` déclenche lui-même
+`failover` quand l'actif reste injoignable plus de CNP_FAILOVER_AFTER_SECONDS, à condition que l'autre serveur ait été vu
+à jour moins de CNP_FRESHNESS_SECONDS avant le début de la panne ; puis, après une bascule AUTOMATIQUE seulement, il revient sur le serveur
+d'origine (`switch`, sans perte) quand celui-ci est de nouveau répliqué depuis plus de CNP_FAILBACK_AFTER_SECONDS. Une
+bascule faite à la main (`switch`) n'est jamais annulée automatiquement. La mémoire entre deux exécutions (depuis quand
+l'actif ne répond pas, dernière réplication saine, raison de la dernière bascule) est rangée dans les MÉTADONNÉES de
+l'alias DNS lui-même : aucun stockage de plus, et elle suit l'alias.
+
 Limites, à connaître :
 - la coupure de l'actif est un `default_transaction_read_only` sur la base, plus la fin des connexions existantes. Une
   session qui fait explicitement `SET TRANSACTION READ WRITE` passerait : l'app ne le fait pas ;
@@ -44,6 +52,8 @@ SUBSCRIPTION_PREFIX = 'cnp_azure_from_'
 # Réglages serveur exigés (constaté le 15/11 sur B1ms : 8 workers ne laissent aucune place à la copie initiale).
 REQUIRED_SETTINGS = {'wal_level': 'logical', 'max_worker_processes': '16'}
 MAX_SWITCH_LAG_BYTES = 16 * 1024 * 1024
+RESTARTING_STATES = ('Restarting', 'Starting', 'Updating')
+DOWN_STATES = ('ACTIVE_UNREACHABLE', 'ACTIVE_RESTARTING')
 
 
 class Server:
@@ -236,9 +246,10 @@ def promote(conn, source_reachable=True):
 class Engine:
     """Les décisions, indépendantes d'Azure : `platform` fournit les paires, l'alias, le mot de passe et les réglages."""
 
-    def __init__(self, platform, connect=connect, dump=None, log=print, sleep=time.sleep):
-        self.platform, self._connect, self.log, self.sleep = platform, connect, log, sleep
+    def __init__(self, platform, connect=connect, dump=None, log=print, sleep=time.sleep, auto=None, clock=time.time):
+        self.platform, self._connect, self.log, self.sleep, self.clock = platform, connect, log, sleep, clock
         self.dump = dump or self._dump_with_pg_dump
+        self.auto = auto  # AutoPolicy, ou None : aucune bascule automatique
 
     def _dump_with_pg_dump(self, server, password):
         params = {'host': server.fqdn, 'port': 5432, 'user': server.user, 'password': password, 'dbname': DATABASE,
@@ -261,7 +272,7 @@ class Engine:
         if target is None:
             if not create:
                 return None
-            self.platform.alias_set(pair, pair.primary.fqdn)
+            self.platform.alias_set(pair, pair.primary.fqdn, {})
             return pair.primary
         server = pair.by_fqdn(target)
         if server is None:
@@ -274,15 +285,23 @@ class Engine:
         if active is None:
             return self._report(pair, state='NO_ALIAS')
         standby = pair.other(active)
+        # État Azure de chaque serveur ; « unknown » si Azure ne répond pas (panne de la région, par exemple) : on ne
+        # s'arrête pas là, c'est la connexion PostgreSQL qui tranche.
+        states = {server.key: self.platform.server_state(server) for server in pair.servers()}
         if apply:
             for server in pair.servers():
-                changed = self.platform.ensure_settings(server, REQUIRED_SETTINGS)
-                if changed:
-                    return self._report(pair, active=active.key, state='SETTINGS_APPLYING', detail=changed)
+                if states[server.key] == 'Ready':
+                    changed = self.platform.ensure_settings(server, REQUIRED_SETTINGS)
+                    if changed:
+                        return self._report(pair, active=active.key, state='SETTINGS_APPLYING', detail=changed)
         password = self.platform.password(pair)
         src = self._open(active, password)
         if src is None:
-            return self._report(pair, active=active.key, state='ACTIVE_UNREACHABLE')
+            # Redémarrage en cours (le nôtre pour les réglages, ou une maintenance Azure) : pas une panne, tant qu'il ne
+            # dure pas (voir AutoPolicy.restart_grace).
+            restarting = states[active.key] in RESTARTING_STATES
+            return self._report(pair, active=active.key, state='ACTIVE_RESTARTING' if restarting else 'ACTIVE_UNREACHABLE',
+                                server_state=states[active.key])
         with src:
             dst = self._open(standby, password)
             if dst is None:
@@ -330,12 +349,41 @@ class Engine:
         results = []
         for pair in self.platform.pairs():
             try:
-                results.append(self.reconcile_pair(pair, apply))
+                result = self.reconcile_pair(pair, apply)
+                if apply:
+                    result = self._remember_and_decide(pair, result) or result
+                results.append(result)
             except Exception as error:  # noqa: BLE001 — une app en erreur n'empêche pas les autres.
                 results.append(self._report(pair, state='ERROR', error=type(error).__name__, detail=str(error)[:300]))
         return results
 
-    def switch(self, pair, timeout=30):
+    def _remember_and_decide(self, pair, result):
+        """Met à jour la mémoire de l'alias, puis applique la politique automatique (option C) si elle est activée."""
+        meta = dict(self.platform.alias_meta(pair) or {})
+        before, now, state = dict(meta), int(self.clock()), result.get('state')
+        if state in DOWN_STATES:
+            meta.setdefault('unreachable_since', str(now))
+        else:
+            meta.pop('unreachable_since', None)
+        if state == 'REPLICATING':
+            meta['last_replicating'] = str(now)
+            meta.setdefault('replicating_since', str(now))
+        else:
+            meta.pop('replicating_since', None)
+        if meta != before:
+            self.platform.alias_set(pair, self.platform.alias_get(pair), meta)
+        if self.auto is None:
+            return None
+        decision = self.auto.decide(pair, result, meta, now)
+        if decision == 'failover':
+            return self.failover(pair, reason='auto')
+        if decision == 'failback':
+            return self.switch(pair, reason='auto-failback')
+        if decision:
+            return self._report(pair, **{**result, 'auto': decision})
+        return None
+
+    def switch(self, pair, timeout=30, reason='manual'):
         """Bascule planifiée vers l'autre serveur, sans perte. Refusée si la réplication n'est pas prête."""
         active = self.active(pair)
         standby = pair.other(active)
@@ -358,11 +406,12 @@ class Engine:
                 unfence(src)
                 raise
             promote(dst, source_reachable=True)
-            self.platform.alias_set(pair, standby.fqdn)
-            return self._report(pair, event='SWITCHED', active=standby.key, previous=active.key, fenced_lsn=lsn,
+            # Bascule planifiée : la mémoire repart de zéro (et une bascule faite à la main n'est pas annulée seule).
+            self.platform.alias_set(pair, standby.fqdn, {'reason': reason})
+            return self._report(pair, event='SWITCHED', active=standby.key, previous=active.key, fenced_lsn=lsn, reason=reason,
                                 write_pause_ms=int((time.monotonic() - started) * 1000))
 
-    def failover(self, pair, attempts=3, force=False):
+    def failover(self, pair, attempts=3, force=False, reason='manual'):
         """Bascule quand l'actif ne répond plus. Refusée s'il répond (utiliser switch), sauf `force`."""
         active = self.active(pair)
         standby = pair.other(active)
@@ -382,14 +431,50 @@ class Engine:
             if subscription_name(active) not in our_subscriptions(dst):
                 raise RuntimeError("L'autre serveur n'était pas abonné à l'actif : ses données ne sont pas à jour.")
             promote(dst, source_reachable=False)
-        self.platform.alias_set(pair, standby.fqdn)
-        return self._report(pair, event='FAILED_OVER', active=standby.key, previous=active.key)
+        self.platform.alias_set(pair, standby.fqdn, {'reason': 'failover-' + reason, 'failed_over_at': str(int(self.clock()))})
+        return self._report(pair, event='FAILED_OVER', active=standby.key, previous=active.key, reason=reason)
 
     def find(self, app, env='prod'):
         pair = next((p for p in self.platform.pairs() if p.app == app and p.env == env), None)
         if pair is None:
             raise ValueError(f'Aucune paire de serveurs pour {app}/{env}.')
         return pair
+
+
+class AutoPolicy:
+    """Option C : quand basculer seul, quand revenir seul. Décision pure (aucun appel), testable sans base."""
+
+    def __init__(self, failover_after=90, freshness=600, failback_after=600, restart_grace=600):
+        self.failover_after, self.freshness, self.failback_after = failover_after, freshness, failback_after
+        # Un serveur qu'Azure dit en redémarrage n'est pas en panne : on lui laisse ce délai avant de basculer.
+        self.restart_grace = max(restart_grace, failover_after)
+
+    @classmethod
+    def from_environ(cls, environ):
+        if environ.get('CNP_AUTO_FAILOVER', '').lower() != 'true':
+            return None
+        return cls(int(environ.get('CNP_FAILOVER_AFTER_SECONDS', 90)), int(environ.get('CNP_FRESHNESS_SECONDS', 600)),
+                   int(environ.get('CNP_FAILBACK_AFTER_SECONDS', 600)), int(environ.get('CNP_RESTART_GRACE_SECONDS', 600)))
+
+    def decide(self, pair, result, meta, now):
+        state, active = result.get('state'), result.get('active')
+        if state in DOWN_STATES:
+            down = now - int(meta.get('unreachable_since', now))
+            limit = self.restart_grace if state == 'ACTIVE_RESTARTING' else self.failover_after
+            if down < limit:
+                return f'waiting-failover-{limit - down}s'
+            # Fraîcheur mesurée au DÉBUT de la panne, pas maintenant : pendant une panne longue, plus rien n'arrive de
+            # toute façon. La question est « l'autre serveur était-il à jour quand l'actif est tombé ? ».
+            fresh = int(meta.get('unreachable_since', now)) - int(meta.get('last_replicating', 0))
+            if fresh > self.freshness:
+                # L'autre serveur n'a pas été vu à jour récemment : basculer servirait des données périmées. Un humain
+                # décide (failover à la main, en connaissance de cause).
+                return 'failover-refused-stale-standby'
+            return 'failover'
+        if (state == 'REPLICATING' and active != pair.primary.key and meta.get('reason') == 'failover-auto'
+                and now - int(meta.get('replicating_since', now)) >= self.failback_after):
+            return 'failback'
+        return None
 
 
 # ---------------------------------------------------------------------------------------------------------------- Azure
@@ -456,14 +541,25 @@ class AzurePlatform:
         return (self._rg(self.zone_rg) + f'/providers/Microsoft.Network/privateDnsZones/{self.zone}/CNAME/{pair.alias}'
                 '?api-version=2020-06-01')
 
-    def alias_get(self, pair):
+    def _alias_record(self, pair):
         record = self._call('GET', self._record(pair))
-        return record and record['properties'].get('cnameRecord', {}).get('cname')
+        return record and record['properties']
 
-    def alias_set(self, pair, fqdn):
-        # TTL 30 s : c'est lui qui borne le temps pendant lequel l'app résout encore l'ancien serveur.
+    def alias_get(self, pair):
+        record = self._alias_record(pair)
+        return record and record.get('cnameRecord', {}).get('cname')
+
+    def alias_meta(self, pair):
+        record = self._alias_record(pair) or {}
+        return {k: v for k, v in (record.get('metadata') or {}).items() if k not in ('cnp_app', 'cnp_env')}
+
+    def alias_set(self, pair, fqdn, meta=None):
+        # TTL 30 s : c'est lui qui borne le temps pendant lequel l'app résout encore l'ancien serveur. Les métadonnées
+        # (chaînes seulement) portent la mémoire de la bascule automatique ; None les conserve telles quelles.
+        if meta is None:
+            meta = self.alias_meta(pair)
         self._call('PUT', self._record(pair), {'properties': {'ttl': 30, 'cnameRecord': {'cname': fqdn},
-                                                              'metadata': {'cnp_app': pair.app, 'cnp_env': pair.env}}})
+                                                              'metadata': {'cnp_app': pair.app, 'cnp_env': pair.env, **meta}}})
 
     def password(self, pair):
         url = f'https://{self.vault}.vault.azure.net/secrets/{pair.app}-{pair.env}-pg-password?api-version=7.4'
@@ -472,13 +568,20 @@ class AzurePlatform:
             raise RuntimeError(f'Secret {pair.app}-{pair.env}-pg-password absent du coffre.')
         return secret['value']
 
+    def _server_url(self, server):
+        rg = self.primary_rg if server.key == self.primary_key else self.copy_rg
+        return self._rg(rg) + f'/providers/Microsoft.DBforPostgreSQL/flexibleServers/{server.name}'
+
+    def server_state(self, server):
+        try:
+            found = self._call('GET', self._server_url(server) + '?api-version=2024-08-01')
+        except Exception:  # noqa: BLE001 — Azure injoignable : la connexion PostgreSQL tranchera.
+            return 'unknown'
+        return (found or {}).get('properties', {}).get('state') or 'absent'
+
     def ensure_settings(self, server, settings):
         """Pose les réglages manquants et redémarre le serveur s'il le faut. Renvoie ce qui a changé (vide sinon)."""
-        rg = self.primary_rg if server.key == self.primary_key else self.copy_rg
-        base = self._rg(rg) + f'/providers/Microsoft.DBforPostgreSQL/flexibleServers/{server.name}'
-        state = (self._call('GET', base + '?api-version=2024-08-01') or {}).get('properties', {}).get('state')
-        if state != 'Ready':
-            return [f'server-{state}']
+        base = self._server_url(server)
         changed, pending = [], False
         for name, value in settings.items():
             current = self._call('GET', base + f'/configurations/{name}?api-version=2024-08-01')['properties']
@@ -506,7 +609,7 @@ def main(argv=None, platform=None):
         if name == 'failover':
             cmd.add_argument('--force', action='store_true', help="bascule même si l'actif répond (perte possible)")
     args = parser.parse_args(argv)
-    engine = Engine(platform or AzurePlatform())
+    engine = Engine(platform or AzurePlatform(), auto=AutoPolicy.from_environ(os.environ))
     if args.command in ('reconcile', 'status'):
         results = engine.reconcile(apply=args.command == 'reconcile')
         return 1 if any(r.get('state') == 'ERROR' for r in results) else 0

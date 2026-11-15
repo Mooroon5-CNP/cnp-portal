@@ -28,7 +28,7 @@ class FakeArm:
     """Répond comme ARM / Key Vault / l'endpoint d'identité ; garde trace des écritures."""
 
     def __init__(self):
-        self.calls, self.cname, self.settings, self.state = [], None, {}, 'Ready'
+        self.calls, self.cname, self.meta, self.settings, self.state = [], None, {}, {}, 'Ready'
         self.servers = {
             'rg-fr': [server('cnp-sov-fr-todo-prod', 'fr.example', 'app-db'), server('cnp-sov-fr-todo-dev', 'dev.example', 'app-db', env='dev'),
                       server('cnp-sov-fr-solo-prod', 'solo.example', 'app-db', app='solo')],
@@ -50,10 +50,11 @@ class FakeArm:
         if '/CNAME/' in path:
             if method == 'PUT':
                 self.cname = body['properties']['cnameRecord']['cname']
+                self.meta = body['properties']['metadata']
                 return self._json({})
             if self.cname is None:
                 raise urllib.error.HTTPError(url, 404, 'not found', {}, io.BytesIO(b''))
-            return self._json({'properties': {'cnameRecord': {'cname': self.cname}}})
+            return self._json({'properties': {'cnameRecord': {'cname': self.cname}, 'metadata': self.meta}})
         if 'vault.azure.net' in url:
             assert req.headers['Authorization'] == 'Bearer token-https%3A%2F%2Fvault.azure.net'
             return self._json({'value': 's3cret'})
@@ -85,11 +86,15 @@ class AzurePlatformTest(unittest.TestCase):
                          [('todo', 'prod', 'fr.example', 'it.example', 'fr', 'it')])
         self.assertEqual(pairs[0].alias, 'todo-prod-db')
 
-    def test_alias_read_write_with_short_ttl(self):
+    def test_alias_read_write_with_short_ttl_and_memory(self):
         pair = self.platform.pairs()[0]
         self.assertIsNone(self.platform.alias_get(pair))
-        self.platform.alias_set(pair, 'it.example')
+        self.platform.alias_set(pair, 'it.example', {'reason': 'failover-auto'})
         self.assertEqual(self.platform.alias_get(pair), 'it.example')
+        self.assertEqual(self.platform.alias_meta(pair), {'reason': 'failover-auto'})
+        self.assertEqual(self.arm.meta['cnp_app'], 'todo')
+        self.platform.alias_set(pair, 'fr.example')  # None : la mémoire est conservée
+        self.assertEqual(self.platform.alias_meta(pair), {'reason': 'failover-auto'})
         put = next(c for c in self.arm.calls if c[0] == 'PUT')
         self.assertTrue(put[1].endswith('/privateDnsZones/cnp-sov.postgres.database.azure.com/CNAME/todo-prod-db'))
         self.assertEqual(put[2]['properties']['ttl'], 30)
@@ -104,16 +109,17 @@ class AzurePlatformTest(unittest.TestCase):
         self.assertTrue(any(c[0] == 'POST' and c[1].endswith('cnp-sov-it-todo-prod/restart') and '/rg-it/' in c[1] for c in self.arm.calls))
         self.assertEqual(self.platform.ensure_settings(pair.copy, ar.REQUIRED_SETTINGS), [])
 
-    def test_no_change_while_server_is_not_ready(self):
-        self.arm.state = 'Restarting'
-        self.assertEqual(self.platform.ensure_settings(self.platform.pairs()[0].primary, ar.REQUIRED_SETTINGS), ['server-Restarting'])
-        self.assertFalse(any(c[0] in ('PUT', 'POST') for c in self.arm.calls))
+    def test_server_state_and_unknown_when_azure_fails(self):
+        pair = self.platform.pairs()[0]
+        self.assertEqual(self.platform.server_state(pair.primary), 'Ready')
+        broken = ar.AzurePlatform(ENV, opener=lambda req, timeout=None: (_ for _ in ()).throw(OSError('région injoignable')))
+        self.assertEqual(broken.server_state(pair.primary), 'unknown')
 
 
 class FakePlatform:
     def __init__(self, alias=None):
         self.pair = ar.Pair('todo', 'prod', ar.Server('fr', 'a', 'fr.example', 'pgadmin'), ar.Server('it', 'b', 'it.example', 'pgadmin'))
-        self.alias, self.writes = alias, []
+        self.alias, self.writes, self.meta, self.state = alias, [], {}, 'Ready'
 
     def pairs(self):
         return [self.pair]
@@ -121,12 +127,20 @@ class FakePlatform:
     def alias_get(self, pair):
         return self.alias
 
-    def alias_set(self, pair, fqdn):
+    def alias_set(self, pair, fqdn, meta=None):
         self.alias = fqdn
+        if meta is not None:
+            self.meta = dict(meta)
         self.writes.append(fqdn)
+
+    def alias_meta(self, pair):
+        return self.meta
 
     def password(self, pair):
         return 'pw'
+
+    def server_state(self, server):
+        return self.state
 
     def ensure_settings(self, server, settings):
         return []
@@ -145,10 +159,16 @@ class EngineDecisionTest(unittest.TestCase):
         self.assertEqual(self.engine(platform).reconcile(apply=False)[0]['state'], 'NO_ALIAS')
         self.assertEqual(platform.writes, [])
 
-    def test_reconcile_creates_alias_towards_primary_and_reports_unreachable_active(self):
+    def test_reconcile_creates_alias_towards_primary_and_remembers_unreachable_active(self):
         platform = FakePlatform()
         self.assertEqual(self.engine(platform).reconcile()[0]['state'], 'ACTIVE_UNREACHABLE')
-        self.assertEqual(platform.writes, ['fr.example'])
+        self.assertEqual(platform.writes[0], 'fr.example')
+        self.assertIn('unreachable_since', platform.meta)
+
+    def test_restarting_active_is_not_reported_as_unreachable(self):
+        platform = FakePlatform(alias='fr.example')
+        platform.state = 'Restarting'
+        self.assertEqual(self.engine(platform).reconcile()[0]['state'], 'ACTIVE_RESTARTING')
 
     def test_alias_on_an_unknown_server_is_an_error_not_a_guess(self):
         result = self.engine(FakePlatform(alias='autre.example')).reconcile()[0]
@@ -177,6 +197,37 @@ class EngineDecisionTest(unittest.TestCase):
         ar.subscribe(Conn(), ar.Server('fr', 'a', 'fr.example', 'pgadmin'), "a'b\\c", 'cnp_azure_from_fr')
         literal = executed[0]._obj[3]._obj  # sql.Composed : CREATE SUBSCRIPTION …, nom, CONNECTION, conninfo
         self.assertIn("password='a\\'b\\\\c'", literal)
+
+
+class AutoPolicyTest(unittest.TestCase):
+    pair = FakePlatform().pair
+    policy = ar.AutoPolicy(failover_after=90, freshness=600, failback_after=600, restart_grace=600)
+
+    def test_disabled_unless_explicitly_enabled(self):
+        self.assertIsNone(ar.AutoPolicy.from_environ({}))
+        self.assertIsNone(ar.AutoPolicy.from_environ({'CNP_AUTO_FAILOVER': 'yes'}))
+        self.assertEqual(ar.AutoPolicy.from_environ({'CNP_AUTO_FAILOVER': 'true', 'CNP_FAILOVER_AFTER_SECONDS': '30'}).failover_after, 30)
+
+    def test_failover_only_after_the_delay_and_with_a_fresh_standby(self):
+        down = {'state': 'ACTIVE_UNREACHABLE', 'active': 'fr'}
+        self.assertEqual(self.policy.decide(self.pair, down, {'unreachable_since': '1000', 'last_replicating': '990'}, 1060), 'waiting-failover-30s')
+        self.assertEqual(self.policy.decide(self.pair, down, {'unreachable_since': '1000', 'last_replicating': '990'}, 1090), 'failover')
+        self.assertEqual(self.policy.decide(self.pair, down, {'unreachable_since': '1000', 'last_replicating': '100'}, 1090),
+                         'failover-refused-stale-standby')
+        self.assertEqual(self.policy.decide(self.pair, down, {'unreachable_since': '1000'}, 1090), 'failover-refused-stale-standby')
+
+    def test_a_restart_gets_a_longer_grace(self):
+        restarting = {'state': 'ACTIVE_RESTARTING', 'active': 'fr'}
+        meta = {'unreachable_since': '1000', 'last_replicating': '999'}
+        self.assertTrue(self.policy.decide(self.pair, restarting, meta, 1300).startswith('waiting-failover'))
+        self.assertEqual(self.policy.decide(self.pair, restarting, meta, 1600), 'failover')
+
+    def test_failback_only_after_an_automatic_failover_and_a_stable_replication(self):
+        replicating = {'state': 'REPLICATING', 'active': 'it'}
+        self.assertEqual(self.policy.decide(self.pair, replicating, {'reason': 'failover-auto', 'replicating_since': '1000'}, 1600), 'failback')
+        self.assertIsNone(self.policy.decide(self.pair, replicating, {'reason': 'failover-auto', 'replicating_since': '1000'}, 1500))
+        self.assertIsNone(self.policy.decide(self.pair, replicating, {'reason': 'manual', 'replicating_since': '0'}, 1600))
+        self.assertIsNone(self.policy.decide(self.pair, {'state': 'REPLICATING', 'active': 'fr'}, {'reason': 'failover-auto', 'replicating_since': '0'}, 1600))
 
 
 if __name__ == '__main__':

@@ -31,7 +31,7 @@ def docker(*args):
 
 class FakePlatform:
     def __init__(self, pair):
-        self.pair, self.alias, self.settings_calls = pair, None, 0
+        self.pair, self.alias, self.meta, self.settings_calls = pair, None, {}, 0
 
     def pairs(self):
         return [self.pair]
@@ -39,8 +39,16 @@ class FakePlatform:
     def alias_get(self, pair):
         return self.alias
 
-    def alias_set(self, pair, fqdn):
+    def alias_set(self, pair, fqdn, meta=None):
         self.alias = fqdn
+        if meta is not None:
+            self.meta = dict(meta)
+
+    def alias_meta(self, pair):
+        return self.meta
+
+    def server_state(self, server):
+        return 'Ready'
 
     def password(self, pair):
         return PASSWORD
@@ -188,6 +196,30 @@ def main():
         assert [t for _, t in final] == ['un', 'deux', 'trois', 'écrit en Italie', 'retour en France', 'avant la panne',
                                          'pendant la panne', 'après migration'], final
         steps.append(('retour final en France', len(final)))
+
+        # 6. Option C : panne de la France, bascule AUTOMATIQUE, puis retour automatique une fois la France répliquée.
+        engine.auto = ar.AutoPolicy(failover_after=3, freshness=600, failback_after=4, restart_grace=3)
+        assert engine.reconcile()[0]['state'] == 'REPLICATING'  # mémoire : dernière réplication saine
+        with app() as c:
+            c.execute("INSERT INTO todos(title, done) VALUES ('avant la panne auto', false)")
+        same()
+        docker('pause', containers[0])
+        first = engine.reconcile()[0]
+        assert first['state'] == 'ACTIVE_UNREACHABLE' and first['auto'].startswith('waiting-failover'), first
+        time.sleep(4)
+        auto = engine.reconcile()[0]
+        assert auto.get('event') == 'FAILED_OVER' and auto['reason'] == 'auto' and platform.alias == 'it', auto
+        with app() as c:
+            c.execute("INSERT INTO todos(title, done) VALUES ('pendant la panne auto', false)")
+        docker('unpause', containers[0])
+        converge('it')
+        time.sleep(5)
+        back = engine.reconcile()[0]
+        assert back.get('event') == 'SWITCHED' and back['reason'] == 'auto-failback' and platform.alias == 'fr', back
+        converge('fr')
+        final = same()
+        assert [t for _, t in final][-2:] == ['avant la panne auto', 'pendant la panne auto'], final
+        steps.append(('C : bascule puis retour automatiques', len(final)))
         # Aucun mot de passe dans les journaux.
         assert not any(PASSWORD in line for line in logs)
         for name, detail in steps:
