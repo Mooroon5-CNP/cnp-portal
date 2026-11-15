@@ -241,6 +241,8 @@ test('la disponibilité refuse les preuves d’un ancien profil et les dates fut
   expect(service.readiness(dep).phase).toBe('deploying');
   db.prepare('UPDATE failover_operations SET input_hash=? WHERE id=?').run(currentHash, 'health-proof');
   expect(service.readiness(dep).phase).toBe('success');
+  // La page du déploiement se recharge si cloudRunUrl ne correspond pas à l'adresse affichée : les deux doivent être présents.
+  expect(service.readiness(dep)).toMatchObject({ applicationUrl: `https://${APP}.apps.mooroon5.fr`, cloudRunUrl: `https://${APP}.apps.mooroon5.fr` });
   db.prepare('UPDATE failover_operations SET result=? WHERE id=?').run(JSON.stringify({ verified: true, observed_at: Date.now() / 1000 + 600 }), 'health-proof');
   expect(service.readiness(dep).phase).toBe('deploying');
 });
