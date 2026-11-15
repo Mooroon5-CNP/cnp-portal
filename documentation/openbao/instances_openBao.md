@@ -12,6 +12,8 @@ Ce document sert à préparer les instances nécessaires aux variables d'environ
 
 Le portail est le client qui écrit les valeurs dans ces domaines. Les applications utilisent ensuite les secrets préparés dans leur cloud ; elles ne doivent pas dépendre du portail au démarrage. Les valeurs AWS requises pour le secours doivent être disponibles avant une panne GCP.
 
+**Isolation des applications :** les manifests GCP actuels utilisent `GCP_CLOUD_RUN_SA`, un compte runtime partagé. L'adaptateur GCP donne à ce compte accès à chaque secret qu'il crée ; en l'état, les applications partageant ce compte pourraient lire les secrets des autres si leur code connaît les noms. Une identité runtime propre à l'application, avec droits limités à ses secrets, est nécessaire avant une mise en service multi-tenant. Le même contrôle s'applique aux identités Azure et aux rôles d'exécution ECS AWS.
+
 ## État constaté dans les dépôts
 
 - **GCP :** `config-repo/platform/openbao/` contient une Application Argo manuelle et des valeurs Helm OpenBao (chart 0.29.6, image 2.6.3, trois pods Raft, TLS, LoadBalancer interne et auto-unseal GCP KMS). Le dossier n'est découvert automatiquement par aucun ApplicationSet. Il référence encore le projet `cnp-terraform-512313`, le GSA `openbao-seal@cnp-terraform-512313.iam.gserviceaccount.com`, la zone `europe-west9-b` dans le runbook et la branche `fix/cloudrun-environment` dans l'Application. Il faudra les revoir lors du changement de compte. Aucune installation live n'est prouvée par ces fichiers.
