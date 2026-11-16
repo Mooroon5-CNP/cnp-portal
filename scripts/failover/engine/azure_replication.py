@@ -262,6 +262,24 @@ class Engine:
         except Exception:  # noqa: BLE001 — la cause peut contenir l'hôte et l'utilisateur : on ne la relaie pas.
             return None
 
+    def _open_standby(self, server, password):
+        """Comme _open, mais crée la base de l'app si elle manque : le portail ne la crée que sur le serveur de l'app
+        (FlexibleServerDatabase), pas sur le serveur de copie (constaté le 16/11 sur la prod : « database appdb does not
+        exist », STANDBY_UNREACHABLE en boucle). Elle est créée vide ; reconcile y copie ensuite le schéma."""
+        conn = self._open(server, password)
+        if conn is not None:
+            return conn
+        try:
+            admin = self._connect(server, password, dbname='postgres')
+        except Exception:  # noqa: BLE001 — serveur vraiment injoignable : rien à créer.
+            return None
+        with admin:
+            if admin.execute('SELECT 1 FROM pg_database WHERE datname=%s', (DATABASE,)).fetchone():
+                return None  # la base existe : l'échec de connexion a une autre cause
+            admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(DATABASE)))
+            self.log(json.dumps({'event': 'DATABASE_CREATED', 'server': server.key, 'database': DATABASE}))
+        return self._open(server, password)
+
     def _report(self, pair, **fields):
         record = {'app': pair.app, 'env': pair.env, **fields}
         self.log(json.dumps(record, ensure_ascii=False, sort_keys=True))
@@ -303,7 +321,7 @@ class Engine:
             return self._report(pair, active=active.key, state='ACTIVE_RESTARTING' if restarting else 'ACTIVE_UNREACHABLE',
                                 server_state=states[active.key])
         with src:
-            dst = self._open(standby, password)
+            dst = self._open_standby(standby, password) if apply else self._open(standby, password)
             if dst is None:
                 return self._report(pair, active=active.key, state='STANDBY_UNREACHABLE')
             with dst:
@@ -343,6 +361,10 @@ class Engine:
         drop_local_slots(src, sleep=self.sleep)
         ensure_publication(src)
         copy_schema(src, dst, self.dump(active, password))
+        # La copie du schéma finit par RESET ALL, qui remet la session dans l'état de son ouverture : si l'ancien actif était
+        # encore coupé (lecture seule) à ce moment-là, la session redevient lecture seule et CREATE SUBSCRIPTION échoue
+        # (constaté au premier retour sur Azure le 16/11 ; le passage suivant réussissait, 2 minutes perdues).
+        dst.execute('SET default_transaction_read_only = off')
         subscribe(dst, active, password, subscription_name(active))
 
     def reconcile(self, apply=True):
@@ -588,10 +610,13 @@ class AzurePlatform:
             if current['value'] != value:
                 self._call('PUT', base + f'/configurations/{name}?api-version=2024-08-01', {'properties': {'value': value, 'source': 'user-override'}})
                 changed.append(name)
-                pending = True
             elif current.get('isConfigPendingRestart'):
                 pending = True
-        if pending:
+        # Azure applique un réglage de façon ASYNCHRONE : redémarrer juste après l'écriture redémarrait parfois avant que le
+        # second réglage soit pris, et il fallait un redémarrage de plus (trois au lieu d'un sur la prod du 16/11). On écrit
+        # donc lors d'une exécution, et on ne redémarre qu'à une suivante, une seule fois, quand Azure annonce tous les
+        # réglages en place et en attente de redémarrage.
+        if pending and not changed:
             self._call('POST', base + '/restart?api-version=2024-08-01', {})
             changed.append('restart')
         return changed

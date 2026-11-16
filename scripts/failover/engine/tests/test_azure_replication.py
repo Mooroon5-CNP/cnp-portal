@@ -28,7 +28,7 @@ class FakeArm:
     """Répond comme ARM / Key Vault / l'endpoint d'identité ; garde trace des écritures."""
 
     def __init__(self):
-        self.calls, self.cname, self.meta, self.settings, self.state = [], None, {}, {}, 'Ready'
+        self.calls, self.cname, self.meta, self.settings, self.state, self.pending = [], None, {}, {}, 'Ready', False
         self.servers = {
             'rg-fr': [server('cnp-sov-fr-todo-prod', 'fr.example', 'app-db'), server('cnp-sov-fr-todo-dev', 'dev.example', 'app-db', env='dev'),
                       server('cnp-sov-fr-solo-prod', 'solo.example', 'app-db', app='solo')],
@@ -62,9 +62,11 @@ class FakeArm:
             name = path.rsplit('/', 1)[1]
             if method == 'PUT':
                 self.settings[name] = body['properties']['value']
+                self.pending = True
                 return self._json({})
-            return self._json({'properties': {'value': self.settings.get(name, 'default'), 'isConfigPendingRestart': False}})
+            return self._json({'properties': {'value': self.settings.get(name, 'default'), 'isConfigPendingRestart': self.pending}})
         if path.endswith('/restart'):
+            self.pending = False
             return self._json({})
         if '/flexibleServers/' in path:
             return self._json({'properties': {'state': self.state}})
@@ -103,10 +105,13 @@ class AzurePlatformTest(unittest.TestCase):
         self.assertEqual(self.platform.password(self.platform.pairs()[0]), 's3cret')
         self.assertTrue(any('/secrets/todo-prod-pg-password' in c[1] for c in self.arm.calls))
 
-    def test_settings_applied_then_restart_then_nothing(self):
+    def test_settings_written_then_one_restart_on_a_later_run_then_nothing(self):
+        # Azure applique les réglages de façon asynchrone : écriture d'abord, un seul redémarrage à l'exécution suivante.
         pair = self.platform.pairs()[0]
-        self.assertEqual(self.platform.ensure_settings(pair.copy, ar.REQUIRED_SETTINGS), ['wal_level', 'max_worker_processes', 'restart'])
-        self.assertTrue(any(c[0] == 'POST' and c[1].endswith('cnp-sov-it-todo-prod/restart') and '/rg-it/' in c[1] for c in self.arm.calls))
+        self.assertEqual(self.platform.ensure_settings(pair.copy, ar.REQUIRED_SETTINGS), ['wal_level', 'max_worker_processes'])
+        self.assertFalse(any(c[0] == 'POST' for c in self.arm.calls))
+        self.assertEqual(self.platform.ensure_settings(pair.copy, ar.REQUIRED_SETTINGS), ['restart'])
+        self.assertEqual(sum(1 for c in self.arm.calls if c[0] == 'POST' and c[1].endswith('cnp-sov-it-todo-prod/restart') and '/rg-it/' in c[1]), 1)
         self.assertEqual(self.platform.ensure_settings(pair.copy, ar.REQUIRED_SETTINGS), [])
 
     def test_server_state_and_unknown_when_azure_fails(self):
@@ -148,7 +153,7 @@ class FakePlatform:
 
 class EngineDecisionTest(unittest.TestCase):
     def engine(self, platform, reachable=()):
-        def connect(server, password):
+        def connect(server, password, dbname='appdb'):
             if server.key not in reachable:
                 raise OSError('injoignable')
             raise AssertionError('connexion non prévue dans ce test')
