@@ -361,6 +361,10 @@ class Engine:
         drop_local_slots(src, sleep=self.sleep)
         ensure_publication(src)
         copy_schema(src, dst, self.dump(active, password))
+        # La copie du schéma finit par RESET ALL, qui remet la session dans l'état de son ouverture : si l'ancien actif était
+        # encore coupé (lecture seule) à ce moment-là, la session redevient lecture seule et CREATE SUBSCRIPTION échoue
+        # (constaté au premier retour sur Azure le 16/11 ; le passage suivant réussissait, 2 minutes perdues).
+        dst.execute('SET default_transaction_read_only = off')
         subscribe(dst, active, password, subscription_name(active))
 
     def reconcile(self, apply=True):
