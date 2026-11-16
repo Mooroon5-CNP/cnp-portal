@@ -391,10 +391,17 @@ function azureRepoVariables(azure) {
 }
 
 /**
- * URL publique d'une app Azure (domaine par défaut de l'environnement Container Apps). Avec `env`, le nom de la
- * Container App est « <app>-<env> » (chemin dev/prod) ; sans `env`, c'est le nom de l'app (ancien chemin).
+ * URL publique d'une app Azure. Avec `env`, le nom de la Container App est « <app>-<env> » (chemin dev/prod) ; sans
+ * `env`, c'est le nom de l'app (ancien chemin).
+ * Avec AZURE_PUBLIC_DOMAIN (eu.mooroon5.fr depuis le 16/11/2026, zone Azure : azure/15-public-dns.tf du dépôt cnp), les
+ * apps dev/prod sont servies sous <app>.<domaine> (prod) et <app>-dev.<domaine> (dev). Le nom et son certificat géré
+ * sont posés par le job de réplication (scripts/failover/engine/azure_domains.py) quelques minutes après la création de
+ * la Container App ; l'adresse par défaut de l'environnement reste valable.
  */
 function azureAppUrl(appName, azure, env) {
+    if ((env === 'dev' || env === 'prod') && azure.publicDomain) {
+        return `https://${env === 'prod' ? appName : `${appName}-dev`}.${azure.publicDomain}`;
+    }
     if (!azure.environmentDomain) return null;
     const containerApp = (env === 'dev' || env === 'prod') ? `${appName}-${env}` : appName;
     return `https://${containerApp}.${azure.environmentDomain}`;

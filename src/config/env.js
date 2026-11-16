@@ -126,6 +126,8 @@ const config = {
     nameSuffix:        process.env.AZURE_NAME_SUFFIX,
     environmentId:     process.env.AZURE_CONTAINERAPP_ENVIRONMENT_ID,
     environmentDomain: process.env.AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN,
+    // Zone publique des apps (eu.mooroon5.fr) ; vide : adresse par défaut de l'environnement Container Apps.
+    publicDomain:      process.env.AZURE_PUBLIC_DOMAIN,
     pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
     dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
     dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,

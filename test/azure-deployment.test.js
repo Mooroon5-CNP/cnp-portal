@@ -96,6 +96,11 @@ describe('azure-templates', () => {
   test('URL de l\'app', () => {
     expect(t.azureAppUrl('todo', AZURE)).toBe('https://todo.env.francecentral.azurecontainerapps.io');
     expect(t.azureAppUrl('todo', { ...AZURE, environmentDomain: undefined })).toBeNull();
+    // Zone publique : la prod porte le nom de l'app, la dev le suffixe -dev ; l'ancien chemin garde l'adresse par défaut.
+    const pub = { ...AZURE, publicDomain: 'eu.example.fr' };
+    expect(t.azureAppUrl('todo', pub, 'prod')).toBe('https://todo.eu.example.fr');
+    expect(t.azureAppUrl('todo', pub, 'dev')).toBe('https://todo-dev.eu.example.fr');
+    expect(t.azureAppUrl('todo', pub)).toBe('https://todo.env.francecentral.azurecontainerapps.io');
   });
 });
 

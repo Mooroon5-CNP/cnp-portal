@@ -10,7 +10,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt ./
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
-COPY postgres_contract.py database.py replication_tls.py azure_replication.py ./
+COPY postgres_contract.py database.py replication_tls.py azure_replication.py azure_domains.py ./
 USER 10001
 ENTRYPOINT ["/opt/venv/bin/python", "azure_replication.py"]
 CMD ["status"]
