@@ -153,7 +153,7 @@ class FakePlatform:
 
 class EngineDecisionTest(unittest.TestCase):
     def engine(self, platform, reachable=()):
-        def connect(server, password):
+        def connect(server, password, dbname='appdb'):
             if server.key not in reachable:
                 raise OSError('injoignable')
             raise AssertionError('connexion non prévue dans ce test')

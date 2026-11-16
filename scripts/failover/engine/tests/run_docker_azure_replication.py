@@ -67,14 +67,16 @@ def main():
         for key in ('fr', 'it'):
             cid = docker('run', '--rm', '--detach', '--name', f'{token}-{key}', '--label', 'cnp.local-test=true',
                          '--network', token, '--network-alias', key, '--publish', '127.0.0.1::5432',
-                         '--env', 'POSTGRES_USER=pgadmin', '--env', f'POSTGRES_PASSWORD={PASSWORD}', '--env', 'POSTGRES_DB=appdb',
+                         '--env', 'POSTGRES_USER=pgadmin', '--env', f'POSTGRES_PASSWORD={PASSWORD}',
+                         # Comme sur Azure : la base de l'app n'existe que sur le serveur de l'app ; le moteur la crée sur l'autre.
+                         '--env', 'POSTGRES_DB=' + ('appdb' if key == 'fr' else 'postgres'),
                          IMAGE, 'postgres', '-c', 'wal_level=logical', '-c', 'max_worker_processes=16')
             containers.append(cid)
             ports[key] = json.loads(docker('inspect', cid))[0]['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort']
         pair = ar.Pair('todo', 'prod', ar.Server('fr', 'fr', 'fr', 'pgadmin'), ar.Server('it', 'it', 'it', 'pgadmin'))
 
-        def connect(server, password):
-            return psycopg.connect(host='127.0.0.1', port=ports[server.key], dbname='appdb', user='pgadmin', password=password,
+        def connect(server, password, dbname='appdb'):
+            return psycopg.connect(host='127.0.0.1', port=ports[server.key], dbname=dbname, user='pgadmin', password=password,
                                    sslmode='disable', connect_timeout=3, autocommit=True)
 
         def dump(server, password):
@@ -87,10 +89,11 @@ def main():
             deadline = time.monotonic() + 60
             while True:
                 try:
-                    with connect(pair.primary if key == 'fr' else pair.copy, PASSWORD) as c:
+                    db = 'appdb' if key == 'fr' else 'postgres'
+                    with connect(pair.primary if key == 'fr' else pair.copy, PASSWORD, db) as c:
                         c.execute('SELECT 1')
                     time.sleep(1)
-                    with connect(pair.primary if key == 'fr' else pair.copy, PASSWORD) as c:
+                    with connect(pair.primary if key == 'fr' else pair.copy, PASSWORD, db) as c:
                         c.execute('SELECT 1')
                     break
                 except psycopg.OperationalError:
@@ -130,7 +133,10 @@ def main():
             c.execute("INSERT INTO todos(title) VALUES ('un'), ('deux')")
         # status : observation seule.
         assert engine.reconcile(apply=False)[0]['state'] == 'NEEDS_RESYNC'
-        assert not ar.our_subscriptions(connect(pair.copy, PASSWORD))
+        # La base de l'app a été créée sur la copie par le premier reconcile (absente au départ, comme sur Azure) ; status
+        # n'y a rien abonné.
+        with connect(pair.copy, PASSWORD) as c:
+            assert not ar.our_subscriptions(c)
         steps.append(('réplication initiale', converge('fr')['state']))
         with app() as c:
             c.execute("INSERT INTO todos(title) VALUES ('trois')")
