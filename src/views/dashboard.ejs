@@ -68,14 +68,10 @@
                           <% } %>
                           <div style="flex:1;min-width:0;">
                             <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                              <%= app.name %>
+                              <%= app.name %><% if (app.environment) { %> <span style="font-weight:400;color:var(--text-muted);">(<%= app.environment %>)</span><% } %>
                             </div>
                             <div style="font-size:12px;color:var(--text-muted);">
-                              <% if (app.isGcp) { %>
-                                <%= app.url ? 'Cloud Run — actif' : (app.status === 'ready' ? 'Cloud Run — URL en attente' : 'Cloud Run — provisionnement') %>
-                              <% } else { %>
-                                <%= app.status %>
-                              <% } %>
+                              <%= app.cloud %> — <%= app.status === 'ready' ? (app.url ? 'actif' : 'URL en attente') : (app.status === 'configuring' ? 'provisionnement' : app.status) %>
                             </div>
                           </div>
                           <div style="display:flex;gap:6px;flex-shrink:0;">
