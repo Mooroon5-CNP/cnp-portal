@@ -78,6 +78,64 @@ Toute app PostgreSQL neuve est créée en **régime plateforme** ; il faut donc 
 
 ## Poste local
 
+Pour lancer le portail avec le Python nécessaire à PostgreSQL (y compris Cloud SQL dev sans failover), depuis `cnp-portal/` :
+
+```sh
+npm run dev:postgres
+```
+
+Arrêter auparavant l’ancienne instance du portail si elle occupe le même port. Ce démarrage prépare `data/.venv-failover`,
+installe les dépendances figées de `requirements.platform.txt`, vérifie leurs imports, puis lance le portail en définissant
+`CNP_FAILOVER_OPERATOR_PYTHON` et `CNP_FAILOVER_PYTHON`. Il nécessite un Python avec `venv`/`ensurepip` et l’accès au dépôt de
+paquets. Sur Debian/Ubuntu, installer le paquet `python3-venv` correspondant au Python utilisé s’il manque.
+
+Après une installation réussie, le lanceur conserve une empreinte des trois fichiers de dépendances et de la version Python.
+Au démarrage suivant, si cette empreinte est identique, que les imports fonctionnent et que `pip check` passe, il démarre sans
+relancer l’installation. Un changement de dépendances ou un environnement cassé déclenche une nouvelle préparation. Un échec
+d’installation ou de vérification empêche le lancement du portail et ne marque pas un nouvel environnement comme prêt.
+
+### Authentification Google après l’installation
+
+Les imports Python peuvent réussir alors que l’identité Google nécessaire à Secret Manager manque. Le client Python utilise
+les Application Default Credentials (ADC), distinctes du jeton Kubernetes du portail et de la simple connexion CLI `gcloud auth login`.
+Pour un portail lancé sur un poste local, avec le même utilisateur système :
+
+```sh
+gcloud auth application-default login
+```
+
+Terminer la connexion dans le navigateur, puis utiliser « Réessayer la configuration » sur le déploiement existant. Il n’est pas
+nécessaire de supprimer l’application ou de réinstaller Python. Dans une image déployée, configurer l’identité de workload/service
+prévue plutôt qu’une connexion utilisateur interactive. Voir la [documentation Google ADC locale](https://docs.cloud.google.com/docs/authentication/set-up-adc-local-dev-environment).
+
+L’opérateur affiche désormais une consigne explicite pour les erreurs ADC absentes ou expirées et pour les dépendances Python
+connues manquantes. Il ne renvoie jamais le texte brut de ces exceptions ; les erreurs inconnues gardent le message générique,
+afin de ne pas exposer de mot de passe, de jeton ou de réponse d’authentification.
+
+### Installation qui cherche de nombreuses versions Google
+
+Le message pip « looking at multiple versions » correspond au [backtracking du résolveur](https://pip.pypa.io/en/stable/topics/dependency-resolution/),
+avant le démarrage du portail. La version `google-cloud-secret-manager==2.21.1` conservée par la plateforme impose Protobuf `<6` ;
+des versions plus récentes de dépendances Google/gRPC exigent Protobuf 6 ou ultérieur et provoquaient une recherche très longue.
+
+`requirements.platform.txt` fixe désormais cette famille indirecte : `google-api-core==2.24.2`,
+`googleapis-common-protos==1.70.0`, `grpc-google-iam-v1==0.14.2`, `proto-plus==1.26.1`,
+`protobuf==5.29.6`, `grpcio==1.76.0` et `grpcio-status==1.71.2`. Le client Secret Manager et le code de déploiement ne sont pas
+mis à niveau par ce changement. Sources : [contraintes Secret Manager](https://github.com/googleapis/google-cloud-python/blob/google-cloud-secret-manager-v2.21.1/packages/google-cloud-secret-manager/setup.py),
+[API Core](https://github.com/googleapis/python-api-core/blob/v2.24.2/pyproject.toml),
+[gRPC Status](https://github.com/grpc/grpc/blob/v1.71.2/src/python/grpcio_status/setup.py).
+
+Si une installation antérieure est encore en train de résoudre les anciennes dépendances, l’arrêter avec `Ctrl+C`, puis
+relancer `npm run dev:postgres` depuis `cnp-portal/`. Il n’est pas nécessaire de supprimer l’application ou l’environnement virtuel.
+Cette correction a été vérifiée sur les contraintes publiées pour Python 3.12/3.13/3.14 et par cinq tests de lancement isolés.
+L’installation complète et les imports réels de ces versions restent à vérifier avec un accès réseau : le bac à sable de
+l’intervention ne permet pas leur téléchargement ni l’ouverture du port du portail.
+
+Un interpréteur explicitement fourni par ces variables est vérifié sans installation implicite de paquets dedans.
+`CNP_BOOTSTRAP_PYTHON` permet de choisir le Python utilisé pour créer le nouvel environnement virtuel. Les identités
+Kubernetes et Google doivent aussi être configurées pour les opérations cloud ; cette commande vérifie les bibliothèques,
+sans créer de base ni de secret. Elle ne modifie pas le choix de facturation Cloud Run de l’application.
+
 - **Node 22** (`.nvmrc`). La CI utilise Node 22 ; une autre version peut ne pas charger `better-sqlite3`.
 - **Python** : un environnement durable, hors dossier temporaire (chemins de la disposition imbriquée ; en dépôts côte à
   côte, remplacer `../deployment/` par `../cnp/deployment/`).

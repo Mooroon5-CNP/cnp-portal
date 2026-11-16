@@ -23,8 +23,8 @@ const platform = (overrides = {}) => ({
   gcp: { gcp_lb_ip: '34.54.71.90', gcp_runtime: { service_account: 'runtime@example.test', subnetwork: 'projects/p/regions/r/subnetworks/s' } },
   aws: { database_security_group_id: 'sg-0123456789abcdef0', database_ca_pem: CA },
   automation: {
-    worker_image: `804210702561.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:${'a'.repeat(64)}`,
-    ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:804210702561:cluster/cnp-cluster', ecs_security_group_id: 'sg-0aaaaaaaaaaaaaaaa',
+    worker_image: `626278345026.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:${'a'.repeat(64)}`,
+    ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:626278345026:cluster/cnp-cluster', ecs_security_group_id: 'sg-0aaaaaaaaaaaaaaaa',
     public_subnet_ids: ['subnet-1', 'subnet-2'], subscription_ca_path_on_rds: null, kube_context: 'ctx',
     bootstrap_task_definition: 'cnp-failover-platform-bootstrap', worker_task_definition: 'cnp-failover-platform-worker',
   },

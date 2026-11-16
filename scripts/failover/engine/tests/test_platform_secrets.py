@@ -70,7 +70,7 @@ class FakeAWS:
         if Name in self.secrets:
             raise error("ResourceExistsException")
         self.writes += 1
-        self.secrets[Name] = {"ARN": f"arn:aws:secretsmanager:eu-west-3:804210702561:secret:{Name}-AbCd12", "Tags": Tags, "value": SecretString}
+        self.secrets[Name] = {"ARN": f"arn:aws:secretsmanager:eu-west-3:626278345026:secret:{Name}-AbCd12", "Tags": Tags, "value": SecretString}
         if self.lose_response:
             raise error("RequestTimeout")
         return {"ARN": self.secrets[Name]["ARN"]}

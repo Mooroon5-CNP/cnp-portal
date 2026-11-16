@@ -14,7 +14,7 @@ function zip(value) {
 beforeEach(() => {
   record = { app: dep.appName, revision, digest,
     gcp: `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/${dep.appName}@${digest}`,
-    aws: `804210702561.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${digest}` };
+    aws: `626278345026.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${digest}` };
   run = { id: 10, head_sha: revision, head_branch: 'prod', status: 'completed', conclusion: 'success' };
   artifacts = [{ id: 1, name: `cnp-failover-images-${revision}`, expired: false, size_in_bytes: 1000 }];
   api = { request: jest.fn(async route => {

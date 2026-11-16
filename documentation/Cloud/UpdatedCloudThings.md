@@ -15,7 +15,7 @@ autre projet sans les recalculer. Aucun secret ne doit être ajouté à ce fichi
 | Identité Crossplane GCP | `crossplane-gcp-sa@cnp-terraform-512313.iam.gserviceaccount.com` | Compte et association Workload Identity |
 | Registre | `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry` | Hôte, projet et dépôt Artifact Registry |
 | Domaine applicatif | `apps.mooroon5.fr` | Domaine et délégation DNS |
-| Zone Route53 | `Z03070463OHUIPXFTWDYQ` | Zone du compte AWS propriétaire |
+| Zone Route53 | `Z0043335ESJGO8F4BE96` | Zone du compte AWS propriétaire |
 | IP du LB GCP | `34.54.71.90` | IP réservée du nouveau load balancer |
 | URLMap / CertificateMap | `cnp-apps-urlmap` / `cnp-apps-certmap` | Ressources du nouveau projet |
 

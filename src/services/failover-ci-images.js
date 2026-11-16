@@ -21,7 +21,7 @@ function validate(record, dep, revision) {
   if (!record || Object.keys(record).sort().join(',') !== 'app,aws,digest,gcp,revision'
     || record.app !== dep.appName || record.revision !== revision || !/^sha256:[a-f0-9]{64}$/.test(record.digest)
     || record.gcp !== `${registry}/${dep.appName}@${record.digest}`
-    || record.aws !== `804210702561.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${record.digest}`) {
+    || record.aws !== `626278345026.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${record.digest}`) {
     throw new Error('Images CI absentes ou incohérentes avec ce déploiement.');
   }
   return record;

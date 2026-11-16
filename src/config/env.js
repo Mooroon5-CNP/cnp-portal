@@ -46,6 +46,17 @@ function normalizePrivateKey(raw) {
   return key;
 }
 
+function normalizePublicCertificate(raw) {
+  if (!raw) return null;
+  let certificate;
+  try { certificate = Buffer.from(raw.trim(), 'base64').toString('utf8').trim(); }
+  catch (_) { throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.'); }
+  if (!certificate.startsWith('-----BEGIN CERTIFICATE-----') || !certificate.endsWith('-----END CERTIFICATE-----')) {
+    throw new Error('ARGOCD_CA_CERT_BASE64 must contain a base64-encoded public certificate.');
+  }
+  return certificate;
+}
+
 const config = {
   github: {
     appId: process.env.GITHUB_APP_ID,
@@ -66,6 +77,7 @@ const config = {
     username: process.env.ARGOCD_USERNAME,
     password: process.env.ARGOCD_PASSWORD,
     insecure: process.env.ARGOCD_INSECURE === 'true',
+    caCert: normalizePublicCertificate(process.env.ARGOCD_CA_CERT_BASE64),
     // Browser-accessible URL (may differ from serverUrl which can be in-cluster).
     // Falls back to serverUrl if not set.
     uiUrl: process.env.ARGOCD_UI_URL || process.env.ARGOCD_SERVER_URL || null,
@@ -114,9 +126,18 @@ const config = {
     nameSuffix:        process.env.AZURE_NAME_SUFFIX,
     environmentId:     process.env.AZURE_CONTAINERAPP_ENVIRONMENT_ID,
     environmentDomain: process.env.AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN,
+    // Zone publique des apps (eu.mooroon5.fr) ; vide : adresse par défaut de l'environnement Container Apps.
+    publicDomain:      process.env.AZURE_PUBLIC_DOMAIN,
     pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
     dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
     dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,
+    // Copie de la base de PROD : un serveur de copie par app, dans la région de copie (Italie depuis le 15/11/2026),
+    // et les mots de passe recopiés dans le Key Vault pour le job de copie (azure/10-db-copy-job-v2.tf).
+    copyRegionKey:     process.env.AZURE_COPY_REGION_KEY || 'it',
+    copyLocation:      process.env.AZURE_COPY_LOCATION,
+    copyResourceGroup: process.env.AZURE_COPY_RESOURCE_GROUP,
+    copyDbSubnetId:    process.env.AZURE_COPY_DB_SUBNET_ID,
+    keyVaultId:        process.env.AZURE_KEY_VAULT_ID,
   },
 };
 
@@ -133,6 +154,10 @@ const AZURE_REQUIRED = {
   pullIdentityId: 'AZURE_ACRPULL_IDENTITY_ID',
   dbSubnetId: 'AZURE_DB_SUBNET_ID',
   dbDnsZoneId: 'AZURE_DB_DNS_ZONE_ID',
+  copyLocation: 'AZURE_COPY_LOCATION',
+  copyResourceGroup: 'AZURE_COPY_RESOURCE_GROUP',
+  copyDbSubnetId: 'AZURE_COPY_DB_SUBNET_ID',
+  keyVaultId: 'AZURE_KEY_VAULT_ID',
 };
 
 /** Variables Azure manquantes (noms des variables d'environnement). Vide = déploiement Azure possible. */

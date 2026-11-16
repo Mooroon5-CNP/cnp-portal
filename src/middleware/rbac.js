@@ -15,6 +15,7 @@ const PERMISSIONS = {
   'cicd:view-logs':          ['manager', 'devops', 'dev'],
 
   'deployments:deploy':           ['manager', 'devops', 'dev'],
+  'repositories:create':          ['manager', 'devops', 'dev'],
   'deployments:choose-cloud':     ['manager', 'devops'],
   'deployments:choose-replicas':  ['manager', 'devops'],
   'deployments:delete':               ['manager'],

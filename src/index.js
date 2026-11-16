@@ -83,6 +83,7 @@ app.get('/pending', requirePending, (req, res) => {
 app.use('/profile',      require('./routes/profile'));
 app.use('/',             require('./routes/dashboard'));
 app.use('/deployments',  require('./routes/deployments'));
+app.use('/repositories', require('./routes/repositories'));
 app.use('/k8s',          require('./routes/k8s'));
 app.use('/observability',require('./routes/observability'));
 app.use('/argocd',       require('./routes/argocd'));

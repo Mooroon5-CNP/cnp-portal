@@ -22,9 +22,9 @@ def app(name="weather-api", prefix=None):
         "routing_latch_id": "12345678-1234-1234-1234-123456789abd",
         "primary_health_check_id": "12345678-1234-1234-1234-123456789abe",
         "source": {"host": "10.189.0.3", "ca_pem": "TEST-CA",
-            "secret_arn": f"arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/{name}/source-admin-AbCd12"},
+            "secret_arn": f"arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/{name}/source-admin-AbCd12"},
         "target": {"host": f"{name}-prod-db.abcdef.eu-west-3.rds.amazonaws.com", "ca_pem": "TEST-CA",
-            "secret_arn": f"arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/{name}/target-admin-AbCd12"}}
+            "secret_arn": f"arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/{name}/target-admin-AbCd12"}}
 
 
 def row(application, name=None):

@@ -9,6 +9,8 @@ test/
 docs/
 *.md
 !README.md
+!src/templates/repositories/**/README.md
+!documentation/APPLICATION_TEMPLATE_GUIDE.md
 .eslintrc*
 .npmrc
 

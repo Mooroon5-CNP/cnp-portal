@@ -11,7 +11,7 @@ import re
 import sys
 import ssl
 
-ACCOUNT = "804210702561"
+ACCOUNT = "626278345026"
 REGION = "eu-west-3"
 ALLOWED_KEYS = {
     "app_name", "environment", "image", "database_security_group_id", "runtime_secret_arn",
@@ -19,10 +19,10 @@ ALLOWED_KEYS = {
     "master_password_secret",
 }
 PLATFORM = {
-    "vpc": "vpc-097b5310024a545ad",
-    "subnets": ["subnet-001fd05e8fb4849d8", "subnet-00e02640fc38e3209"],
-    "ecs_security_group": "sg-06c537372132d775f",
-    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/c3325dca9a0b8685/32e36432fd043dce",
+    "vpc": "vpc-0a99bd6da5b289db4",
+    "subnets": ["subnet-069399247ab10b23e", "subnet-0259a6e88f0558ab0"],
+    "ecs_security_group": "sg-0c8e2003de9c975ef",
+    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/722456f0108435d7/fd877dabbaff37b7",
 }
 
 
@@ -100,13 +100,17 @@ def bootstrap(config):
     validate(config)
     app = config["app_name"]
     name = app + "-prod"
+    # Vagues Argo CD : les deux prérequis de la RDS (quelques secondes) en -1, la RDS en 0 avec Cloud SQL. Avec la RDS en
+    # vague 1, Argo attendait que Cloud SQL soit prête (~11 min) avant de la créer : les ~9 min de RDS s'ajoutaient au lieu de
+    # se superposer (mesuré le 14/11/2026, cnp-test-azure). Les deux bases ne dépendent pas l'une de l'autre ; la réplication
+    # ne démarre qu'à l'étape bootstrap, une fois les deux observées prêtes.
     subnet = resource("rds.aws.upbound.io/v1beta1", "SubnetGroup", name + "-subnets",
                       {"region": REGION, "description": "RDS prive prod - " + app,
-                       "subnetIds": PLATFORM["subnets"]}, app)
+                       "subnetIds": PLATFORM["subnets"]}, app, -1)
     params = resource("rds.aws.upbound.io/v1beta1", "ParameterGroup", name + "-pg15",
                       {"region": REGION, "family": "postgres15",
                        "description": "Replication logique aller et retour - " + app,
-                       "parameter": [{"name": "rds.logical_replication", "value": "1", "applyMethod": "pending-reboot"}]}, app)
+                       "parameter": [{"name": "rds.logical_replication", "value": "1", "applyMethod": "pending-reboot"}]}, app, -1)
     database = resource("rds.aws.upbound.io/v1beta2", "Instance", name + "-db",
                         {"region": REGION, "identifier": name + "-db", "engine": "postgres", "engineVersion": "15",
                          "instanceClass": "db.t3.micro", "allocatedStorage": 20, "storageEncrypted": True,
@@ -117,7 +121,7 @@ def bootstrap(config):
                          "backupRetentionPeriod": config.get("backup_retention_period", 7),
                          "dbSubnetGroupNameRef": {"name": name + "-subnets"},
                          "parameterGroupNameRef": {"name": name + "-pg15"},
-                         "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 1)
+                         "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 0)
     # Le mot de passe administrateur est le nôtre (Secret Kubernetes de l'app, copié dans AWS Secrets Manager), jamais le secret
     # géré par RDS, dont le nom est aléatoire et que le worker ne pourrait lire qu'avec un droit sur tous les secrets RDS du compte.
     # (Le secret géré servait au pilote, retiré le 07/11/2026.)

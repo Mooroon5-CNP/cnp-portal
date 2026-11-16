@@ -55,6 +55,12 @@ class AwsExampleTests(unittest.TestCase):
         self.assertTrue(db["forProvider"]["deletionProtection"])
         self.assertEqual(db["deletionPolicy"], "Orphan")
 
+    def test_rds_starts_with_cloud_sql_and_after_its_prerequisites(self):
+        # Cloud SQL est en vague 0 : la RDS aussi, pour que les deux créations se superposent (14/11/2026).
+        files = renderer.bootstrap(profile())
+        wave = lambda name: files[name]['metadata']['annotations']['argocd.argoproj.io/sync-wave']
+        self.assertEqual([wave('rds-subnet-group.yaml'), wave('rds-parameter-group.yaml'), wave('rds-instance.yaml')], ['-1', '-1', '0'])
+
     def test_dev_is_rejected(self):
         p = profile(); p["environment"] = "dev"
         with self.assertRaises(ValueError): renderer.bootstrap(p)

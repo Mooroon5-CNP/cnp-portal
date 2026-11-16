@@ -14,7 +14,7 @@ import sys
 from render_aws_prod_example import resource, write_files
 
 PROJECT = "cnp-terraform-512313"
-ZONE = "Z03070463OHUIPXFTWDYQ"
+ZONE = "Z0043335ESJGO8F4BE96"
 
 
 def validate(config):
@@ -243,7 +243,7 @@ def dns(config):
         "healthCheckIdSelector": {"matchLabels": primary_labels}}, app, 2)
     secondary = resource("route53.aws.upbound.io/v1beta2", "Record", app + "-failover-secondary", {
         **common, "setIdentifier": app + "-aws-secondary", "failoverRoutingPolicy": {"type": "SECONDARY"},
-        "alias": {"name": "cnp-alb-1733646164.eu-west-3.elb.amazonaws.com", "zoneId": "Z3Q77PNBQS71R4",
+        "alias": {"name": "cnp-alb-1261477539.eu-west-3.elb.amazonaws.com", "zoneId": "Z3Q77PNBQS71R4",
             "evaluateTargetHealth": False}}, app, 2)
     # Le secondaire reste éligible même avant LOGIN : il répondra 503 jusque-là.
     # La santé globale d'un ALB partagé ne représente pas cette application et

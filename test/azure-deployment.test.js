@@ -35,6 +35,7 @@ const AZURE = {
   acrLoginServer: 'acr.azurecr.io', resourceGroup: 'rg-1', nameSuffix: 'abc123',
   environmentId: '/subscriptions/sub-1/env', environmentDomain: 'env.francecentral.azurecontainerapps.io',
   pullIdentityId: '/subscriptions/sub-1/uami', dbSubnetId: '/subscriptions/sub-1/subnet', dbDnsZoneId: '/subscriptions/sub-1/dns',
+  copyRegionKey: 'it', copyLocation: 'italynorth', copyResourceGroup: 'rg-it', copyDbSubnetId: '/subscriptions/sub-1/subnet-it', keyVaultId: '/subscriptions/sub-1/vault',
 };
 
 describe('azure-templates', () => {
@@ -95,6 +96,11 @@ describe('azure-templates', () => {
   test('URL de l\'app', () => {
     expect(t.azureAppUrl('todo', AZURE)).toBe('https://todo.env.francecentral.azurecontainerapps.io');
     expect(t.azureAppUrl('todo', { ...AZURE, environmentDomain: undefined })).toBeNull();
+    // Zone publique : la prod porte le nom de l'app, la dev le suffixe -dev ; l'ancien chemin garde l'adresse par défaut.
+    const pub = { ...AZURE, publicDomain: 'eu.example.fr' };
+    expect(t.azureAppUrl('todo', pub, 'prod')).toBe('https://todo.eu.example.fr');
+    expect(t.azureAppUrl('todo', pub, 'dev')).toBe('https://todo-dev.eu.example.fr');
+    expect(t.azureAppUrl('todo', pub)).toBe('https://todo.env.francecentral.azurecontainerapps.io');
   });
 });
 

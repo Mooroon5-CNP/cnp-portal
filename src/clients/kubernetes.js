@@ -449,10 +449,36 @@ function observedServiceStatus(body) {
 
 async function getComputeResource(plural, name) {
   const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  api.addInterceptor(options => { options.timeout = 10000; });
   try { return (await api.getClusterCustomObject('compute.gcp.upbound.io', 'v1beta1', plural, name)).body; }
   catch (err) {
     if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
     handleError(err, `getComputeResource(${plural}/${name})`);
+  }
+}
+
+// Explicit allowlist for the deletion inventory; callers cannot read arbitrary CRDs.
+const CLEANUP_KINDS = {
+  'cloudrun.gcp.upbound.io/v1beta2/V2Service': 'v2services',
+  'cloudrun.gcp.upbound.io/v1beta2/ServiceIAMMember': 'serviceiammembers',
+  'storage.gcp.upbound.io/v1beta1/Bucket': 'buckets',
+  'storage.gcp.upbound.io/v1beta1/BucketIAMMember': 'bucketiammembers',
+  'compute.gcp.upbound.io/v1beta1/RegionNetworkEndpointGroup': 'regionnetworkendpointgroups',
+  'compute.gcp.upbound.io/v1beta1/BackendService': 'backendservices',
+  'sql.gcp.upbound.io/v1beta2/DatabaseInstance': 'databaseinstances',
+  'sql.gcp.upbound.io/v1beta1/Database': 'databases',
+  'sql.gcp.upbound.io/v1beta2/User': 'users',
+};
+async function getCleanupResource(resource) {
+  const plural = CLEANUP_KINDS[`${resource.apiVersion}/${resource.kind}`];
+  if (!plural || !/^[a-z0-9][a-z0-9.-]*$/.test(resource.name || '')) throw new Error('Ressource de nettoyage non autorisée.');
+  const [group, version] = resource.apiVersion.split('/');
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  api.addInterceptor(options => { options.timeout = 10000; });
+  try { return (await api.getClusterCustomObject(group, version, plural, resource.name)).body; }
+  catch (err) {
+    if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
+    handleError(err, `getCleanupResource(${resource.kind}/${resource.name})`);
   }
 }
 
@@ -659,6 +685,7 @@ module.exports = {
   applyApplicationSet, deleteApplicationSet, removeApplicationSetPath,
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
+  getCleanupResource, CLEANUP_KINDS,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

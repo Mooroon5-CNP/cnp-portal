@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="fr">
+<%- include('../partials/head', { title }) %>
+<body><div class="layout"><%- include('../partials/sidebar') %>
+<main class="main-content"><div class="content-wrapper">
+  <h1 class="page-title">Repo créé</h1>
+  <div class="card" style="padding:24px;">
+    <p><a href="<%= repository.url %>" target="_blank" rel="noopener noreferrer"><%= repository.owner %>/<%= repository.repo %></a></p>
+    <p>Modèle : <%= template.label %>. Branches : main et prod.</p>
+    <p>Aucun déploiement n’a été lancé. Consultez le README, développez votre application puis choisissez quand la déployer.</p>
+    <p>Pour commencer : clonez le repo, créez une branche de travail et suivez le guide des templates pour lancer l’application et connaître les fichiers à préserver.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+      <a class="btn btn-secondary" href="<%= repository.url %>" target="_blank" rel="noopener noreferrer">Voir le repo sur GitHub</a>
+      <a class="btn btn-secondary" href="/docs/APPLICATION_TEMPLATE_GUIDE.md">Aller voir la documentation</a>
+    </div>
+    <p>Dans le formulaire de déploiement, choisissez <%= repository.template === 'sqlite' ? 'GCP SQLite avec stockage persistant' : 'GCP Cloud SQL ou Azure PostgreSQL' %> pour ce modèle.</p>
+    <a class="btn btn-primary" href="/deployments#repository=<%= encodeURIComponent(repository.url) %>&amp;port=<%= repository.port %>">Déployer ce repo</a>
+    <a class="btn btn-secondary" href="/repositories/new">Créer un autre repo</a>
+  </div>
+</div></main></div></body></html>
