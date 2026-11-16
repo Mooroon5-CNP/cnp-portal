@@ -48,19 +48,21 @@ function workflow(appName, dep = {}) {
     } },
   };
   if (dep.failoverRequested || failover.enabled(dep)) {
+    const awsRegistry = require('./failover-ci-images').awsRegistry();
     document.jobs['failover-images'] = {
       needs: ['pipeline'], 'runs-on': 'ubuntu-latest',
       if: "${{ github.ref == 'refs/heads/prod' && needs.pipeline.result == 'success' }}",
       steps: [{ name: 'Record immutable images', env: {
         CNP_APP: appName, CNP_REVISION: '${{ github.sha }}', CNP_DIGEST: '${{ needs.pipeline.outputs.image_digest }}',
         CNP_GCP_REGISTRY: config.github.registryUrl || config.gcp.imageRegistry,
+        CNP_AWS_REGISTRY: awsRegistry,
       }, run: `python3 - <<'PY'
 import json, os, re
 assert re.fullmatch(r'sha256:[a-f0-9]{64}', os.environ['CNP_DIGEST'])
 app, digest = os.environ['CNP_APP'], os.environ['CNP_DIGEST']
 record = {'app': app, 'revision': os.environ['CNP_REVISION'], 'digest': digest,
     'gcp': os.environ['CNP_GCP_REGISTRY'] + '/' + app + '@' + digest,
-    'aws': '804210702561.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
+    'aws': os.environ['CNP_AWS_REGISTRY'] + '/' + app + '@' + digest}
 with open('cnp-images.json', 'w') as file: json.dump(record, file)
 PY` }, { uses: 'actions/upload-artifact@v4', with: {
         name: 'cnp-failover-images-${{ github.sha }}', path: 'cnp-images.json', 'if-no-files-found': 'error', 'retention-days': 30,

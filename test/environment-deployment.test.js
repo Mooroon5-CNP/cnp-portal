@@ -607,13 +607,23 @@ test('OpenBao references are pinned in the GCP claim only after successful CI', 
 });
 
 test('le failover publie la provenance seulement après succès du pipeline prod', () => {
+  const previousAccount = process.env.CNP_AWS_ACCOUNT_ID;
+  const previousRegion = process.env.CNP_AWS_REGION;
+  process.env.CNP_AWS_ACCOUNT_ID = '123456789012';
+  process.env.CNP_AWS_REGION = 'eu-west-3';
+  try {
   const doc = yaml.load(service.workflow('telemetry-api', { appName: 'telemetry-api', environment: 'prod', failoverRequested: true, appPort: 8080 }));
   expect(doc.jobs.pipeline.with.target_cloud).toBe('both');
   expect(doc.jobs.pipeline.with.gitops_mode).toBe('portal');
   expect(doc.jobs['failover-images'].needs).toEqual(['pipeline']);
   expect(doc.jobs['failover-images'].if).toContain("needs.pipeline.result == 'success'");
   expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
+  expect(doc.jobs['failover-images'].steps[0].env.CNP_AWS_REGISTRY).toBe('123456789012.dkr.ecr.eu-west-3.amazonaws.com');
   expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
+  } finally {
+    if (previousAccount === undefined) delete process.env.CNP_AWS_ACCOUNT_ID; else process.env.CNP_AWS_ACCOUNT_ID = previousAccount;
+    if (previousRegion === undefined) delete process.env.CNP_AWS_REGION; else process.env.CNP_AWS_REGION = previousRegion;
+  }
 });
 
 test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {

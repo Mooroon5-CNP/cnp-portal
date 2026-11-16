@@ -6,6 +6,7 @@ import argparse
 from copy import deepcopy
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import ssl
@@ -13,8 +14,12 @@ import sys
 
 from render_aws_prod_example import resource, write_files
 
-PROJECT = "cnp-terraform-512313"
-ZONE = "Z03070463OHUIPXFTWDYQ"
+PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
+GCP_REGION = os.environ.get("GCP_REGION", "europe-west9")
+BASE_DOMAIN = os.environ.get("APPLICATIONS_BASE_DOMAIN", "apps.mooroon5.fr")
+ALB_DNS = os.environ.get("CNP_AWS_ALB_DNS_NAME", "cnp-alb-1733646164.eu-west-3.elb.amazonaws.com")
+ALB_ZONE = os.environ.get("CNP_AWS_ALB_ZONE_ID", "Z3Q77PNBQS71R4")
+ZONE = os.environ.get("CNP_AWS_ROUTE53_ZONE_ID", "Z03070463OHUIPXFTWDYQ")
 
 
 def validate(config):
@@ -61,7 +66,7 @@ def cloudsql(config):
     def ref(key):
         return {"name": secret, "namespace": "crossplane-system", "key": key}
     instance = resource("sql.gcp.upbound.io/v1beta2", "DatabaseInstance", name, {
-        "project": PROJECT, "region": "europe-west9", "databaseVersion": "POSTGRES_15",
+        "project": PROJECT, "region": GCP_REGION, "databaseVersion": "POSTGRES_15",
         "deletionProtection": True, "rootPasswordSecretRef": ref("admin-password"),
         "settings": {"edition": "ENTERPRISE", "tier": "db-f1-micro", "availabilityType": "ZONAL",
             "diskSize": 10, "diskAutoresize": True, "deletionProtectionEnabled": True,
@@ -97,7 +102,7 @@ def observed_endpoint(config, observed):
     name = app + "-prod-gcp-db"
     if observed.get("kind") != "DatabaseInstance" or observed.get("metadata", {}).get("name") != name or conditions.get("Ready") != "True" or conditions.get("Synced") != "True":
         raise ValueError("Observation Cloud SQL Ready/Synced de cette application requise.")
-    if actual.get("connectionName") != f"{PROJECT}:europe-west9:{instance_name(config)}":
+    if actual.get("connectionName") != f"{PROJECT}:{GCP_REGION}:{instance_name(config)}":
         raise ValueError("Instance Cloud SQL d'un autre projet/région/application.")
     address = ipaddress.IPv4Address(actual.get("privateIpAddress") or "")
     if address not in ipaddress.ip_network("10.189.0.0/16"):
@@ -110,11 +115,11 @@ def cloudrun(config, observed):
     p = config.get("gcp_runtime") or {}
     if set(p) != {"image", "service_account", "subnetwork", "password_secret", "password_version", "database_ca_pem"}:
         raise ValueError("Les six entrées gcp_runtime doivent être renseignées explicitement.")
-    if not re.fullmatch(rf"europe-west9-docker\.pkg\.dev/{PROJECT}/cnp-registry/[a-z0-9-]+@sha256:[a-f0-9]{{64}}", p.get("image") or ""):
+    if not re.fullmatch(rf"{re.escape(GCP_REGION)}-docker\.pkg\.dev/{re.escape(PROJECT)}/cnp-registry/[a-z0-9-]+@sha256:[a-f0-9]{{64}}", p.get("image") or ""):
         raise ValueError("Image GAR du projet attendue, identifiée par digest.")
     if not re.fullmatch(rf"[a-z0-9-]+@{PROJECT}\.iam\.gserviceaccount\.com", p.get("service_account") or ""):
         raise ValueError("Compte de service runtime du projet requis.")
-    if not re.fullmatch(rf"projects/{PROJECT}/regions/europe-west9/subnetworks/[a-z0-9-]+", p.get("subnetwork") or ""):
+    if not re.fullmatch(rf"projects/{re.escape(PROJECT)}/regions/{re.escape(GCP_REGION)}/subnetworks/[a-z0-9-]+", p.get("subnetwork") or ""):
         raise ValueError("Sous-réseau Direct VPC réel requis.")
     if not re.fullmatch(rf"projects/{PROJECT}/secrets/[a-zA-Z0-9_-]+", p.get("password_secret") or "") or not re.fullmatch(r"[1-9][0-9]*", p.get("password_version") or ""):
         raise ValueError("Secret Manager et version numérique requis ; jamais de mot de passe en clair.")
@@ -127,7 +132,7 @@ def cloudrun(config, observed):
         raise ValueError("CA Cloud SQL invalide.") from None
     address = observed_endpoint(config, observed)
     service = resource("cloudrun.gcp.upbound.io/v1beta2", "V2Service", app+"-prod", {
-        "project":PROJECT, "location":"europe-west9", "ingress":"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+        "project":PROJECT, "location":GCP_REGION, "ingress":"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
         "template":{"serviceAccount":p["service_account"],
             "vpcAccess":{"egress":"PRIVATE_RANGES_ONLY", "networkInterfaces":[{
                 "network":f"projects/{PROJECT}/global/networks/gcp-hybrid-vpc", "subnetwork":p["subnetwork"]}]},
@@ -146,7 +151,7 @@ def cloudrun(config, observed):
         service["spec"]["forProvider"]["template"]["scaling"] = {"minInstanceCount": 1}
         service["spec"]["forProvider"]["template"]["containers"][0]["resources"] = {"cpuIdle": False}
     iam = resource("cloudrun.gcp.upbound.io/v1beta2", "ServiceIAMMember", app+"-prod-public", {
-        "project":PROJECT,"location":"europe-west9","service":app+"-prod","role":"roles/run.invoker","member":"allUsers"},app,3)
+        "project":PROJECT,"location":GCP_REGION,"service":app+"-prod","role":"roles/run.invoker","member":"allUsers"},app,3)
     return {"cloudrun-claim.yaml":service,"cloudrun-iam.yaml":iam}
 
 
@@ -159,10 +164,10 @@ def network(config):
     common = {"project": PROJECT}
     return {
         "application-neg.yaml": resource(api, "RegionNetworkEndpointGroup", neg, {
-            **common, "region": "europe-west9", "networkEndpointType": "SERVERLESS", "cloudRun": [{"service": service}]}, app, 4),
+            **common, "region": GCP_REGION, "networkEndpointType": "SERVERLESS", "cloudRun": [{"service": service}]}, app, 4),
         "application-backend.yaml": resource(api, "BackendService", backend, {
             **common, "protocol": "HTTP", "loadBalancingScheme": "EXTERNAL_MANAGED", "timeoutSec": 30,
-            "backend": [{"group": f"https://www.googleapis.com/compute/v1/projects/{PROJECT}/regions/europe-west9/networkEndpointGroups/{neg}"}]}, app, 5),
+            "backend": [{"group": f"https://www.googleapis.com/compute/v1/projects/{PROJECT}/regions/{GCP_REGION}/networkEndpointGroups/{neg}"}]}, app, 5),
     }
 
 
@@ -186,7 +191,7 @@ def routing(config, baseline):
     if "labels" in metadata:
         doc["metadata"]["labels"] = deepcopy(metadata["labels"])
     fp = doc["spec"]["forProvider"]
-    host, matcher = app + ".apps.mooroon5.fr", "cnp-" + app + "-prod"
+    host, matcher = app + "." + BASE_DOMAIN, "cnp-" + app + "-prod"
     owner = "cnp.io/route-" + app + "-prod"
     registered = annotations.get(owner)
     if registered is not None and registered != host:
@@ -215,14 +220,14 @@ def dns(config):
     labels = {"app": app, "cnp.io/environment": "prod", "cnp-failover": "health"}
     check = resource("route53.aws.upbound.io/v1beta1", "HealthCheck", app + "-failover", {
         "region": "us-east-1", "type": "HTTPS", "ipAddress": address, "port": 443,
-        "fqdn": app + ".apps.mooroon5.fr", "enableSni": True, "resourcePath": config.get("readiness_path", "/health"),
+        "fqdn": app + "." + BASE_DOMAIN, "enableSni": True, "resourcePath": config.get("readiness_path", "/health"),
         # Sonde rapide (10 s, 3 échecs : ~30 s) depuis le 06/11/2026 ; 30 s faisait perdre une minute à la détection. Réglage
         # figé à la création chez Route 53 : seules les sondes créées ensuite en profitent.
         "requestInterval": 10, "failureThreshold": 3}, app)
     check["metadata"]["labels"] = labels
     latch = resource("route53.aws.upbound.io/v1beta1", "HealthCheck", app + "-failover-latch-http", {
         "region": "us-east-1", "type": "HTTPS", "ipAddress": address, "port": 443,
-        "fqdn": app + ".apps.mooroon5.fr", "enableSni": True, "resourcePath": config.get("readiness_path", "/health"),
+        "fqdn": app + "." + BASE_DOMAIN, "enableSni": True, "resourcePath": config.get("readiness_path", "/health"),
         "requestInterval": 30, "failureThreshold": 3, "disabled": True}, app)
     # Le worker possède la fermeture persistante ; ArgoCD/Crossplane ne doit
     # jamais rouvrir le verrou lors d'une synchronisation après la promotion.
@@ -236,14 +241,14 @@ def dns(config):
         "childHealthchecksRefs": [{"name": app + "-failover", "policy": {"resolve": "Always"}},
             {"name": app + "-failover-latch-http", "policy": {"resolve": "Always"}}]}, app, 1)
     combined["metadata"]["labels"] = primary_labels
-    common = {"region": "us-east-1", "zoneId": ZONE, "name": app + ".apps.mooroon5.fr", "type": "A"}
+    common = {"region": "us-east-1", "zoneId": ZONE, "name": app + "." + BASE_DOMAIN, "type": "A"}
     primary = resource("route53.aws.upbound.io/v1beta2", "Record", app + "-failover-primary", {
         **common, "ttl": 60, "records": [address], "setIdentifier": app + "-gcp-primary",
         "failoverRoutingPolicy": {"type": "PRIMARY"},
         "healthCheckIdSelector": {"matchLabels": primary_labels}}, app, 2)
     secondary = resource("route53.aws.upbound.io/v1beta2", "Record", app + "-failover-secondary", {
         **common, "setIdentifier": app + "-aws-secondary", "failoverRoutingPolicy": {"type": "SECONDARY"},
-        "alias": {"name": "cnp-alb-1733646164.eu-west-3.elb.amazonaws.com", "zoneId": "Z3Q77PNBQS71R4",
+        "alias": {"name": ALB_DNS, "zoneId": ALB_ZONE,
             "evaluateTargetHealth": False}}, app, 2)
     # Le secondaire reste éligible même avant LOGIN : il répondra 503 jusque-là.
     # La santé globale d'un ALB partagé ne représente pas cette application et

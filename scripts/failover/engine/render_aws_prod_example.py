@@ -6,23 +6,25 @@ import postgres_contract
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
 import ssl
 
-ACCOUNT = "804210702561"
-REGION = "eu-west-3"
+ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "804210702561")
+REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
+BASE_DOMAIN = os.environ.get("APPLICATIONS_BASE_DOMAIN", "apps.mooroon5.fr")
 ALLOWED_KEYS = {
     "app_name", "environment", "image", "database_security_group_id", "runtime_secret_arn",
     "runtime_user", "database_name", "listener_priority", "log_group_name", "database_ca_pem", "application_profile", "backup_retention_period", "sql_contract", "container_port", "liveness_path", "readiness_path",
     "master_password_secret",
 }
 PLATFORM = {
-    "vpc": "vpc-097b5310024a545ad",
-    "subnets": ["subnet-001fd05e8fb4849d8", "subnet-00e02640fc38e3209"],
-    "ecs_security_group": "sg-06c537372132d775f",
-    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/c3325dca9a0b8685/32e36432fd043dce",
+    "vpc": os.environ.get("CNP_AWS_VPC_ID", "vpc-097b5310024a545ad"),
+    "subnets": os.environ.get("CNP_AWS_PUBLIC_SUBNET_IDS", "subnet-001fd05e8fb4849d8,subnet-00e02640fc38e3209").split(","),
+    "ecs_security_group": os.environ.get("CNP_AWS_ECS_SECURITY_GROUP_ID", "sg-06c537372132d775f"),
+    "https_listener": os.environ.get("CNP_AWS_HTTPS_LISTENER_ARN", f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/c3325dca9a0b8685/32e36432fd043dce"),
 }
 
 
@@ -145,7 +147,7 @@ def observed_endpoint(config, observed):
     if actual.get("dbName") != config.get("database_name", "appdb"):
         raise ValueError("Le nom de base observé ne correspond pas au profil.")
     address = actual.get("address") or ""
-    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]+\.eu-west-3\.rds\.amazonaws\.com", address):
+    if not re.fullmatch(rf"[a-z0-9][a-z0-9.-]+\.{re.escape(REGION)}\.rds\.amazonaws\.com", address):
         raise ValueError("L'adresse réelle de RDS est absente ou n'est pas dans la région attendue.")
     master = actual.get("masterUserSecret", [])
     if isinstance(master, dict):
@@ -204,7 +206,7 @@ def runtime_resources(config, container):
     rule = resource("elbv2.aws.upbound.io/v1beta1", "LBListenerRule", name + "-https",
                     {"region": REGION, "listenerArn": PLATFORM["https_listener"], "priority": config["listener_priority"],
                      "action": [{"type": "forward", "targetGroupArnSelector": selector}],
-                     "condition": [{"hostHeader": [{"values": [app + ".apps.mooroon5.fr"]}]}]}, app, 3)
+                     "condition": [{"hostHeader": [{"values": [app + "." + BASE_DOMAIN]}]}]}, app, 3)
     service = resource("ecs.aws.upbound.io/v1beta1", "Service", name,
                        {"region": REGION, "cluster": "cnp-cluster", "desiredCount": 1, "launchType": "FARGATE",
                         "taskDefinitionRef": {"name": task_name}, "networkConfiguration": [{"assignPublicIp": False,

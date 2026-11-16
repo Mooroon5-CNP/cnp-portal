@@ -5,6 +5,15 @@ const { config } = require('../config/env');
 const github = require('../clients/github');
 const repositories = require('./github');
 
+function awsRegistry() {
+  const account = process.env.CNP_AWS_ACCOUNT_ID;
+  const region = process.env.CNP_AWS_REGION;
+  if (!/^[0-9]{12}$/.test(account || '') || !/^[a-z]{2}-[a-z]+-[0-9]$/.test(region || '')) {
+    throw new Error('Compte ou région AWS du failover manquant.');
+  }
+  return `${account}.dkr.ecr.${region}.amazonaws.com`;
+}
+
 async function latest(dep, api) {
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
   if (!source || dep.environment !== 'prod') throw new Error('Production GitHub requise.');
@@ -21,7 +30,7 @@ function validate(record, dep, revision) {
   if (!record || Object.keys(record).sort().join(',') !== 'app,aws,digest,gcp,revision'
     || record.app !== dep.appName || record.revision !== revision || !/^sha256:[a-f0-9]{64}$/.test(record.digest)
     || record.gcp !== `${registry}/${dep.appName}@${record.digest}`
-    || record.aws !== `804210702561.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${record.digest}`) {
+    || record.aws !== `${awsRegistry()}/${dep.appName}@${record.digest}`) {
     throw new Error('Images CI absentes ou incohérentes avec ce déploiement.');
   }
   return record;
@@ -45,4 +54,4 @@ async function resolve(dep, expectedRevision) {
   { input: Buffer.from(archive), timeout: 5000, maxBuffer: 32768, stdio: ['pipe', 'pipe', 'pipe'] });
   return { ...validate(JSON.parse(output.toString()), dep, run.head_sha), runId: run.id, deploymentId: dep.id };
 }
-module.exports = { latest, resolve, validate };
+module.exports = { latest, resolve, validate, awsRegistry };

@@ -125,7 +125,7 @@ def credentials_profile(profile, outputs):
     context = profile["automation"].get("kube_context")
     # Le portail déployé lit le cluster avec l'identité de son pod : le contexte est facultatif (poste de l'opérateur seulement).
     if context is not None and (not isinstance(context, str) or not re.fullmatch(
-            rf"gke_{gcp.PROJECT}_europe-west9(?:-[abc])?_(?:main-production-cluster|cnp-cluster-terraform)", context)):
+            rf"gke_{re.escape(gcp.PROJECT)}_{re.escape(gcp.GCP_REGION)}(?:-[abc])?_(?:main-production-cluster|cnp-cluster-terraform)", context)):
         raise ValueError("Contexte GKE explicitement observé requis.")
     return {"app": app, "kube_context": context, "kubernetes_secret": profile["gcp"]["credentials_secret_name"],
         "aws_secret_arns": refs, "gcp_runtime_secret": secret}
@@ -204,14 +204,14 @@ def automation_profile(profile, observations, credentials, secret_result):
     if not isinstance(check_id, str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", check_id):
         raise ValueError("Identifiant réel Route53 requis.")
     # Vérifier également la cible de santé observée, pas seulement son nom.
-    if provider.get("ipAddress") != profile["gcp"]["gcp_lb_ip"] or provider.get("fqdn") != base["app"] + ".apps.mooroon5.fr" or \
+    if provider.get("ipAddress") != profile["gcp"]["gcp_lb_ip"] or provider.get("fqdn") != base["app"] + "." + gcp.BASE_DOMAIN or \
             provider.get("resourcePath") != profile["gcp"].get("readiness_path", "/health") or provider.get("enableSni") is not True or \
             provider.get("type") != "HTTPS" or provider.get("port") != 443:
         raise ValueError("Le contrôle observé doit viser l'IP GCP et le Host/SNI de l'app.")
     app = {key: base[key] for key in ("app", "profile", "source", "target")}
     if "readiness_path" in profile["gcp"]:
         app["readiness_path"] = profile["gcp"]["readiness_path"]
-    app.update(hostname=base["app"] + ".apps.mooroon5.fr", gcp_lb_ip=profile["gcp"]["gcp_lb_ip"],
+    app.update(hostname=base["app"] + "." + gcp.BASE_DOMAIN, gcp_lb_ip=profile["gcp"]["gcp_lb_ip"],
         alarm_name=worker.ALARM_PREFIX + base["app"], health_check_id=check_id)
     for key, observed_key, name, threshold in [("routing_latch_id", "routing_latch", "-failover-latch-http", None),
             ("primary_health_check_id", "primary_healthcheck", "-failover-primary-health", 2)]:

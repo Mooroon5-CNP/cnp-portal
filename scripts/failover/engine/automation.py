@@ -20,8 +20,8 @@ import tempfile
 import time
 from uuid import uuid4
 
-ACCOUNT = "804210702561"
-REGION = "eu-west-3"
+ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "804210702561")
+REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
 LEASE_SECONDS = 120
 # Durée d'alarme exigée avant de basculer. 90 s à l'origine ; 30 s depuis le 06/11/2026 (choix de Gabriel) : la sonde
 # (3 échecs à 10 s) et l'alarme (1 min sous le seuil) filtrent déjà les coupures brèves.

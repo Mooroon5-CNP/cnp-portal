@@ -1,8 +1,9 @@
 'use strict';
-jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn(), runtimeRevision: jest.fn() }));
+jest.mock('../src/services/environment-failover', () => ({ profileFor: jest.fn(), rows: jest.fn(), prepare: jest.fn(), autoApprove: jest.fn(), runtimeRevision: jest.fn(), runtimeVariableGeneration: jest.fn(() => null) }));
 jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start: jest.fn(), retry: jest.fn(), recoverInterrupted: jest.fn() }));
 jest.mock('../src/services/failover-ci-images', () => ({ latest: jest.fn() }));
 jest.mock('../src/models/deployment', () => ({ listForUser: jest.fn(() => []), get: jest.fn() }));
+jest.mock('../src/models/deployment_variables', () => ({ get: jest.fn(() => null) }));
 const db = require('../src/models/db');
 const profiles = require('../src/services/environment-failover');
 const operations = require('../src/services/failover-operations');
