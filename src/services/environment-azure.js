@@ -96,6 +96,20 @@ function fileNames() {
 }
 
 /**
+ * L'adresse publique répond-elle vraiment ? Avec le domaine public (eu.mooroon5.fr), le nom et son certificat sont posés
+ * par le job de réplication 5 à 10 min APRÈS la Container App : avant, le lien du portail mène à une erreur TLS. Toute
+ * réponse HTTP (même 503 : base en bascule) prouve que nom, DNS et certificat sont en place ; une erreur réseau ou TLS non.
+ */
+async function publicAddressAnswers(url) {
+  try {
+    await fetch(`${url}/health`, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Disponibilité réelle après une CI réussie : on lit l'état observé de Crossplane (serveur, base, Container App) et on
  * n'annonce « déployée » que si la Container App est prête SUR LA RÉVISION attendue. Un échec de création asynchrone
  * remonte avec sa cause ; une simple ReconcileError passagère n'est pas un échec.
@@ -114,6 +128,9 @@ async function readiness(dep, revision) {
   if (status.phase === 'failed') return { phase: 'failed', message: `Azure : ${status.failure}`, cloudRunUrl: null };
   if (status.phase === 'ready') {
     if (status.observedImage === imageRef(dep, revision)) {
+      if (config.azure.publicDomain && url && !(await publicAddressAnswers(url))) {
+        return { phase: 'deploying', message: 'Container App prête ; nom public et certificat en cours de pose (5 à 10 min).', cloudRunUrl: null };
+      }
       return { phase: 'success', message: 'Application déployée.', cloudRunUrl: url, applicationUrl: url };
     }
     return { phase: 'deploying', message: `Container App prête ; attente de la révision ${String(revision).slice(0, 7)}.`, cloudRunUrl: null };
