@@ -85,6 +85,21 @@ test('an explicit empty update publishes a new generation without old variable n
   expect(metadata.save).toHaveBeenCalledWith(deployment.id, result);
 });
 
+test('rollback reads pinned previous versions and writes a fresh generation to both domains', async () => {
+  const { clients, stores, variables } = fixture();
+  metadata.get.mockReturnValue({ history: [{ generation: 'previous', names: ['FEATURE'], versions: { gcp: 1, aws: 1 } },
+    { generation: 'current', names: [], versions: { gcp: 2, aws: 2 } }] });
+  stores.gcp.version = 2; stores.aws.version = 2;
+  for (const [domain, client] of Object.entries(clients)) client.read.mockImplementation(async (_app, _environment, version) => {
+    if (version === 1) return { version: 1, values: { FEATURE: 'on', [GENERATION_KEY]: 'previous' } };
+    if (version === 2 || !version && stores[domain].version === 2) return { version: 2, values: { [GENERATION_KEY]: 'current' } };
+    return { version: stores[domain].version, values: stores[domain].values };
+  });
+  await variables.restorePrevious(deployment);
+  expect(clients.gcp.write).toHaveBeenCalledWith('sample-app', 'prod', { FEATURE: 'on', [GENERATION_KEY]: 'generation-1' }, 2);
+  expect(clients.aws.write).toHaveBeenCalledWith('sample-app', 'prod', { FEATURE: 'on', [GENERATION_KEY]: 'generation-1' }, 2);
+});
+
 test('reads only the recorded versions and refuses a mismatched generation', async () => {
   const { clients, variables } = fixture();
   metadata.get.mockReturnValue({ generation: 'generation-1', names: ['API_URL'], versions: { gcp: 1, aws: 1 } });

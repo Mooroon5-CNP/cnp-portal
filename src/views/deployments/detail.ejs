@@ -59,6 +59,11 @@
                       <div id="updateVariableError" class="flash flash-error" role="alert" hidden></div>
                       <button type="submit" class="btn btn-primary" style="margin-top:12px;">Enregistrer et publier</button>
                     </form>
+                    <% if (canRestoreVariables) { %>
+                      <form action="/deployments/<%= deployment.id %>/variables/restore" method="POST" style="margin-top:12px;">
+                        <button type="submit" class="btn btn-secondary btn-sm">Rétablir la version précédente</button>
+                      </form>
+                    <% } %>
                   </div>
                 </div>
                 <script src="/js/deployment-variables.js"></script>

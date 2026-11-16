@@ -71,7 +71,7 @@ test('complete deletion waits for bucket release and actual disappearance before
   expect(deployments.get(dep.id)).not.toBeNull();
   expect(cleanup.get(dep.id)).toMatchObject({ state: 'waiting', step: 'verify' });
   kubernetes.getCleanupResource.mockResolvedValue(null);
-  await step(); await step();
+  await step(); await step(); await step();
   expect(deployments.get(dep.id)).toBeNull();
   expect(cleanup.get(dep.id).state).toBe('completed');
   expect(files.has('test-app/.github/workflows/cnp-test-app.yml')).toBe(false);

@@ -2,7 +2,7 @@
 
 **Ordre : 2/3.** Dépend de SPEC-OPENBAO-01. Ne modifie pas la génération ni la publication de l'image CI.
 
-**Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée et la mise à jour sans nouvelle image CI sont codées pour GCP, Azure et le secours AWS. Le formulaire de mise à jour remplace la liste complète ; la production ordinaire garde sa validation manager. Restent les identités/droits cloud et la recette réelle, le nettoyage après suppression, la gestion complète des écritures partielles et le retour arrière. La SPEC n'est pas `DONE`.
+**Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée, la mise à jour sans nouvelle image CI, le retour à la génération précédente et le nettoyage après disparition des ressources sont codés pour GCP, Azure et le secours AWS. Le formulaire de mise à jour remplace la liste complète ; la production ordinaire garde sa validation manager. Restent les identités/droits cloud et la recette réelle ainsi que la gestion complète des écritures partielles. La SPEC n'est pas `DONE`.
 
 ## Résultat fonctionnel
 
@@ -24,6 +24,8 @@ GCP SQLite, y compris en production, et GCP PostgreSQL dev ne provisionnent aucu
 - Pour Azure, prévoir une identité du portail autorisée à écrire les secrets Key Vault et une identité de lecture adaptée à l'application. Une identité partagée qui donne à toutes les applications accès à toutes les variables Azure ne satisfait pas l'isolation demandée dans SPEC-OPENBAO-01. Préparer les droits et la fédération en Terraform, sans `apply` automatique.
 - Une mise à jour de variables doit produire une nouvelle révision de configuration contrôlée sans reconstruire l'image si le code ne change pas. Les changements de valeur ne doivent pas être considérés comme une CI réussie sur un nouveau SHA de code.
 - Le retrait d'une variable, la suppression d'un environnement et le retour arrière ne suppriment que les versions possédées par cet environnement, avec une politique de conservation compatible avec un runtime encore actif.
+
+L'historique local conserve les noms possédés et les numéros de versions OpenBao, sans les valeurs. Le bouton de retour arrière lit la génération précédente et en prépare une nouvelle, puis suit le même circuit de publication. Après disparition vérifiée des ressources, la suppression d'environnement retire les secrets natifs portant les marqueurs de propriété du portail et détruit les versions OpenBao enregistrées. AWS Secrets Manager conserve une fenêtre de récupération de 7 jours ; Azure suit le soft delete du coffre ; GCP supprime le secret après vérification de ses labels.
 
 ## Critères d'acceptation
 

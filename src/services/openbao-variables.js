@@ -79,7 +79,28 @@ function service({ model = metadata, clientFor = domain => OpenBaoClient.fromEnv
     return { ...record, values };
   }
 
-  return { prepare, published };
+  async function restorePrevious(deployment) {
+    const record = model.get(deployment.id);
+    const previous = record?.history?.at(-2);
+    if (!previous) throw new Error('Aucune version précédente des variables.');
+    const domains = domainsForDeployment(deployment);
+    if (domains.some(domain => !previous.versions[domain])) throw new Error('Version précédente OpenBao incomplète.');
+    let values = null;
+    for (const domain of domains) {
+      const result = await clientFor(domain).read(deployment.appName, deployment.environment, previous.versions[domain]);
+      const selected = Object.fromEntries(Object.entries(result.values).filter(([name]) => name !== GENERATION_KEY));
+      if (result.version !== previous.versions[domain] || result.values[GENERATION_KEY] !== previous.generation
+        || JSON.stringify(Object.keys(selected).sort()) !== JSON.stringify([...previous.names].sort())
+        || (values && JSON.stringify(Object.entries(selected).sort(([a], [b]) => a.localeCompare(b)))
+          !== JSON.stringify(Object.entries(values).sort(([a], [b]) => a.localeCompare(b))))) {
+        throw new Error('Version précédente OpenBao incohérente.');
+      }
+      values = selected;
+    }
+    return prepare(deployment, values, { allowEmpty: true });
+  }
+
+  return { prepare, published, restorePrevious };
 }
 
 module.exports = { service, validate, GENERATION_KEY };

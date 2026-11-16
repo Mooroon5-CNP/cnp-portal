@@ -87,6 +87,17 @@ function canRetryConfiguration(user, dep) {
         && (user.role === 'manager' || user.id === dep.ownerUserId);
 }
 
+function assertVariableChangeAllowed(dep) {
+    if (!usesEnvironment(dep) || dep.onboardingStatus !== 'ready') throw new Error('Environnement indisponible pour la mise à jour.');
+    if (dep.failoverRequested && require('../services/failover-provisioning').get(dep.appName)?.state !== 'completed') {
+        throw new Error('Terminez la mise en service du failover avant de modifier ses variables.');
+    }
+    if (deploymentReleases.list(dep.id).some(release => ['pending', 'approving'].includes(release.state)
+        || (release.state === 'preparing' && release.lease_until > Date.now()))) {
+        throw new Error('Publication en cours : attendez sa fin avant de modifier les variables.');
+    }
+}
+
 async function environmentStatus(dep) {
     try {
         return await environmentService.observe(dep);
@@ -753,6 +764,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         currentPage: 'deployments',
         deployment: safeDeployment,
         variableNames: deploymentVariables.get(dep.id)?.names || [],
+        canRestoreVariables: (deploymentVariables.get(dep.id)?.history.length || 0) > 1,
         canEditVariables: usesEnvironment(dep) && dep.onboardingStatus === 'ready'
             && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
         deletionDraft,
@@ -790,14 +802,7 @@ router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy
         return res.status(403).send('Accès refusé');
     }
     try {
-        if (!usesEnvironment(dep) || dep.onboardingStatus !== 'ready') throw new Error('Environnement indisponible pour la mise à jour.');
-        if (dep.failoverRequested && require('../services/failover-provisioning').get(dep.appName)?.state !== 'completed') {
-            throw new Error('Terminez la mise en service du failover avant de modifier ses variables.');
-        }
-        if (deploymentReleases.list(dep.id).some(release => ['pending', 'approving'].includes(release.state)
-            || (release.state === 'preparing' && release.lease_until > Date.now()))) {
-            throw new Error('Publication en cours : attendez sa fin avant de modifier les variables.');
-        }
+        assertVariableChangeAllowed(dep);
         const values = valuesFromForm(req.body);
         if (Object.keys(values).length || deploymentVariables.get(dep.id)) openbaoRuntime.assertReady(dep);
         if (!Object.keys(values).length && !deploymentVariables.get(dep.id)) {
@@ -806,6 +811,21 @@ router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy
             await openbaoVariables.service().prepare(dep, values, { allowEmpty: true });
             req.flash('success', 'Variables enregistrées ; publication GitOps en cours.');
         }
+    } catch (err) { req.flash('error', err.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+router.post('/:id/variables/restore', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && req.user.id !== dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé');
+    }
+    try {
+        assertVariableChangeAllowed(dep);
+        openbaoRuntime.assertReady(dep);
+        await openbaoVariables.service().restorePrevious(dep);
+        req.flash('success', 'Version précédente préparée ; publication GitOps en cours.');
     } catch (err) { req.flash('error', err.message); }
     return res.redirect(`/deployments/${dep.id}`);
 });
