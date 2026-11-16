@@ -588,10 +588,13 @@ class AzurePlatform:
             if current['value'] != value:
                 self._call('PUT', base + f'/configurations/{name}?api-version=2024-08-01', {'properties': {'value': value, 'source': 'user-override'}})
                 changed.append(name)
-                pending = True
             elif current.get('isConfigPendingRestart'):
                 pending = True
-        if pending:
+        # Azure applique un réglage de façon ASYNCHRONE : redémarrer juste après l'écriture redémarrait parfois avant que le
+        # second réglage soit pris, et il fallait un redémarrage de plus (trois au lieu d'un sur la prod du 16/11). On écrit
+        # donc lors d'une exécution, et on ne redémarre qu'à une suivante, une seule fois, quand Azure annonce tous les
+        # réglages en place et en attente de redémarrage.
+        if pending and not changed:
             self._call('POST', base + '/restart?api-version=2024-08-01', {})
             changed.append('restart')
         return changed
