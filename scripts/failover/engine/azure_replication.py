@@ -553,7 +553,12 @@ class AzurePlatform:
         for item in found.get('value', []):
             tags = item.get('tags') or {}
             if tags.get('cnp-role') == role and tags.get('cnp-app') and tags.get('cnp-env') and tags.get('cnp-env') != 'dev':
-                props = item['properties']
+                props = item.get('properties') or {}
+                # Serveur en cours de suppression : Azure le liste encore, sans administrateur (constaté le 16/11, une
+                # exécution plantée). Il n'appartient plus à aucune paire. Un serveur ARRÊTÉ, lui, reste listé en entier
+                # et doit rester dans sa paire : c'est la panne que la bascule automatique traite.
+                if props.get('state') == 'Dropping' or not props.get('fullyQualifiedDomainName') or not props.get('administratorLogin'):
+                    continue
                 yield (tags['cnp-app'], tags['cnp-env']), Server(key, item['name'], props['fullyQualifiedDomainName'],
                                                                  props['administratorLogin'])
 
