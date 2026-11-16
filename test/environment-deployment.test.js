@@ -186,6 +186,17 @@ test('setup replaces an owned CNP caller instead of creating a second build work
   expect(sourceWorkflowTrees.every(tree => tree.tree.some(file => file.path === '.github/workflows/ci.yml' && file.sha === null))).toBe(true);
 });
 
+test('setup of the dev keeps the failover workflow of a prod with failover on both branches', async () => {
+  const prod = deployments.create({ environment: 'prod', appName: 'pixelcam', appPort: 8080,
+    githubRepoUrl: 'https://github.com/team/pixelcalm', ownerUserId: 'owner', failoverRequested: true });
+  await service.onboard(dep);
+  const written = trees.filter(tree => tree.repo === 'pixelcalm').flatMap(tree => tree.tree)
+    .filter(file => file.path === '.github/workflows/cnp-pixelcam.yml');
+  expect(written).toHaveLength(2);
+  expect(written.every(file => yaml.load(file.content).jobs.pipeline.with.target_cloud === 'both')).toBe(true);
+  deployments.delete(prod.id);
+});
+
 test('setup preserves custom CI files and rejects another app registered against this repository', async () => {
   existing.set('pixelcalm/.github/workflows/ci.yml', yaml.dump({ jobs: { lint: { 'runs-on': 'ubuntu-latest' } } }));
   await service.onboard(dep);
