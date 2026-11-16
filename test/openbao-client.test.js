@@ -29,6 +29,14 @@ test('reads only the requested version and returns values internally', async () 
     url: 'https://openbao.test:8200/v1/cnp-runtime/data/apps/sample-app/prod' }));
 });
 
+test('destroys only the provisional version requested by the coordinator', async () => {
+  const { client, transport } = fake();
+  await client.destroyVersion('sample-app', 'prod', 4);
+  expect(transport.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'POST',
+    url: 'https://openbao.test:8200/v1/cnp-runtime/destroy/apps/sample-app/prod', data: { versions: [4] } }));
+  await expect(client.destroyVersion('sample-app', 'prod', 0)).rejects.toThrow('Version OpenBao invalide');
+});
+
 test('rejects insecure endpoints, path traversal and unsafe values before any HTTP call', async () => {
   expect(() => new OpenBaoClient({ domain: 'gcp', address: 'http://openbao.test' })).toThrow('HTTPS');
   const { client, transport } = fake();

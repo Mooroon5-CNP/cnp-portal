@@ -53,7 +53,8 @@ class OpenBaoClient {
       caFile: process.env[`${prefix}CA_FILE`], ...dependencies });
   }
 
-  async request(method, path, data, params) {
+  async request(method, path, data, params, endpoint = 'data') {
+    if (!['data', 'destroy'].includes(endpoint)) throw new Error('Endpoint OpenBao invalide.');
     try {
       const jwt = await this.identityToken(this.audience, this.transport);
       const options = { timeout: 5000, maxRedirects: 0, httpsAgent: this.httpsAgent };
@@ -61,7 +62,7 @@ class OpenBaoClient {
       const token = login.data?.auth?.client_token;
       if (typeof token !== 'string' || !token) throw new Error('Token OpenBao absent.');
       const response = await this.transport.request({ ...options, method,
-        url: `${this.address}/v1/${this.mount}/data/${path}`, headers: { 'X-Vault-Token': token }, data, params });
+        url: `${this.address}/v1/${this.mount}/${endpoint}/${path}`, headers: { 'X-Vault-Token': token }, data, params });
       return response.data;
     } catch (error) {
       // Axios errors can embed the request (and its secret body). Never propagate them.
@@ -94,6 +95,12 @@ class OpenBaoClient {
     const version = result?.data?.version;
     if (!Number.isInteger(version) || version < 1) throw new Error(`Réponse OpenBao ${this.domain} invalide.`);
     return version;
+  }
+
+  async destroyVersion(app, environment, version) {
+    const path = safePath(app, environment);
+    if (!Number.isInteger(version) || version < 1) throw new Error('Version OpenBao invalide.');
+    await this.request('POST', path, { versions: [version] }, undefined, 'destroy');
   }
 }
 

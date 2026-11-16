@@ -31,19 +31,29 @@ function service({ model = metadata, clientFor = domain => OpenBaoClient.fromEnv
     const generation = uuid();
     const payload = { ...Object.fromEntries(entries), [GENERATION_KEY]: generation };
     const versions = {};
-    for (const domain of domains) {
-      const client = clientFor(domain);
-      let cas = 0;
-      try { cas = (await client.read(deployment.appName, deployment.environment)).version; }
-      catch (error) {
-        if (error.status !== 404) throw error;
+    const written = [];
+    try {
+      for (const domain of domains) {
+        const client = clientFor(domain);
+        let cas = 0;
+        try { cas = (await client.read(deployment.appName, deployment.environment)).version; }
+        catch (error) {
+          if (error.status !== 404) throw error;
+        }
+        versions[domain] = await client.write(deployment.appName, deployment.environment, payload, cas);
+        written.push({ domain, client, version: versions[domain] });
+        const checked = await client.read(deployment.appName, deployment.environment, versions[domain]);
+        if (checked.values[GENERATION_KEY] !== generation) throw new Error(`Version OpenBao ${domain} incohérente.`);
       }
-      versions[domain] = await client.write(deployment.appName, deployment.environment, payload, cas);
-      const checked = await client.read(deployment.appName, deployment.environment, versions[domain]);
-      if (checked.values[GENERATION_KEY] !== generation) throw new Error(`Version OpenBao ${domain} incohérente.`);
+      // Only the complete, verified set becomes visible to deployment reconciliation.
+      model.save(deployment.id, { generation, names: entries.map(([name]) => name), versions });
+    } catch (error) {
+      const cleanup = await Promise.allSettled(written.map(item => item.client.destroyVersion(
+        deployment.appName, deployment.environment, item.version)));
+      const incomplete = cleanup.flatMap((result, index) => result.status === 'rejected' ? [written[index].domain] : []);
+      if (incomplete.length) throw new Error(`Préparation OpenBao incomplète ; nettoyage provisoire impossible dans ${incomplete.join(', ')}.`);
+      throw error;
     }
-    // Only the complete, verified set becomes visible to deployment reconciliation.
-    model.save(deployment.id, { generation, names: entries.map(([name]) => name), versions });
     return { generation, names: entries.map(([name]) => name), versions };
   }
 

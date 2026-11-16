@@ -19,6 +19,7 @@ function fixture() {
       if (cas !== store.version) throw new Error('CAS conflict');
       store.version += 1; store.values = { ...values }; return store.version;
     }),
+    destroyVersion: jest.fn(async () => {}),
   }]));
   return { clients, stores, variables: service({ model: metadata, clientFor: domain => clients[domain], uuid: () => 'generation-1' }) };
 }
@@ -40,6 +41,17 @@ test('a failed AWS write never publishes a partial generation', async () => {
   const { clients, variables } = fixture();
   clients.aws.write.mockRejectedValueOnce(new Error('AWS unavailable'));
   await expect(variables.prepare(deployment, { API_URL: 'https://example.test' })).rejects.toThrow('AWS unavailable');
+  expect(metadata.save).not.toHaveBeenCalled();
+  expect(clients.gcp.destroyVersion).toHaveBeenCalledWith('sample-app', 'prod', 1);
+  expect(clients.aws.destroyVersion).not.toHaveBeenCalled();
+});
+
+test('a failed provisional cleanup is explicit and never publishes metadata', async () => {
+  const { clients, variables } = fixture();
+  clients.aws.write.mockRejectedValueOnce(new Error('AWS unavailable'));
+  clients.gcp.destroyVersion.mockRejectedValueOnce(new Error('permission denied'));
+  await expect(variables.prepare(deployment, { API_URL: 'https://example.test' }))
+    .rejects.toThrow('nettoyage provisoire impossible dans gcp');
   expect(metadata.save).not.toHaveBeenCalled();
 });
 
