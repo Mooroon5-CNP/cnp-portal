@@ -135,7 +135,9 @@ function manifests(dep, revision) {
     { name: 'DD_ENV', value: dep.environment }, { name: 'DD_SERVICE', value: dep.appName },
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
-  const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  const runtimeServiceAccount = deploymentVariables.get(dep.id)
+    ? openbaoRuntime.gcpRuntimeIdentity(dep) : config.gcp.cloudRunSa;
+  const template = { serviceAccount: runtimeServiceAccount, containers: [container] };
   if (dep.billing === 'instance') {
     // Facturation à l'instance : une instance toujours active et son CPU toujours alloué (pas de démarrage à froid).
     template.scaling = { minInstanceCount: 1 };
@@ -162,7 +164,7 @@ function manifests(dep, revision) {
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
     storage.spec.deletionPolicy = 'Orphan';
     const binding = resource('storage.gcp.upbound.io/v1beta1', 'BucketIAMMember', `${bucket}-runtime`,
-      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
+      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${runtimeServiceAccount}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
   }

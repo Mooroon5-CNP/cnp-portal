@@ -138,6 +138,16 @@ test('changing variables republishes the same successful CI revision and keeps t
   expect(claim.spec.forProvider.template.containers[0].env.some(item => item.name === 'FEATURE')).toBe(true);
 });
 
+test('GCS storage follows the dedicated runtime identity when OpenBao variables are enabled', () => {
+  variableRecords.save(dep.id, { generation: 'storage-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const files = service.manifests(dep, revision);
+  const [bucket, binding] = yaml.loadAll(files['apps/pixelcam/crossplane/dev/gcs-bucket.yaml']);
+  expect(bucket.kind).toBe('Bucket');
+  expect(binding.spec.forProvider.member).toBe('serviceAccount:app-run@test-project.iam.gserviceaccount.com');
+  const claim = yaml.load(files['apps/pixelcam/crossplane/dev/cloudrun-claim.yaml']);
+  expect(claim.spec.forProvider.template.serviceAccount).toBe('app-run@test-project.iam.gserviceaccount.com');
+});
+
 test('a successful run for an outdated source commit cannot publish dev', async () => {
   sourceHead = 'b'.repeat(40);
   expect((await service.reconcile(dep)).phase).toBe('waiting'); expect(published).toHaveLength(0);
