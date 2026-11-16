@@ -285,9 +285,15 @@ async function prepareOnboarding(dep) {
   const main = await github.getRef(source.owner, source.repo, 'main');
   await github.createBranch(source.owner, source.repo, 'prod', main);
   const workflowPath = `.github/workflows/${workflowName(dep.appName)}`;
+  // Un seul workflow par dépôt, écrit sur main ET prod. Si la prod de l'app a le failover, il doit rester en mode failover
+  // (target_cloud: both) même quand on inscrit la dev : sinon la prod perd son image AWS et la preuve des images, et sa mise
+  // en service du secours se bloque (constaté le 16/11 sur cnp-demo-gcp : dev inscrite pendant la mise en service de la prod).
+  const failoverProd = !azure.isAzure(dep) && deployments.listForUser(null).some(row => row.app_name === dep.appName
+    && row.deployment_environment === 'prod' && (row.failover_requested || failover.enabled(deployments.get(row.id))));
+  const workflowFor = failoverProd ? { ...dep, failoverRequested: true } : dep;
   for (const branch of ['main', 'prod']) {
     await commitFiles(api, source, async head => {
-      const files = { [workflowPath]: workflow(dep.appName, dep) };
+      const files = { [workflowPath]: workflow(dep.appName, workflowFor) };
       // Retirer uniquement l'ancien caller CNP possédé par la plateforme évite deux builds du même tag.
       const old = await readFile(api, source, '.github/workflows/ci.yml', head);
       if (old) {
