@@ -23,7 +23,8 @@ function secretId(deployment, variable) {
 
 class GcpVariableDelivery {
   constructor({ project, region, runtimeServiceAccount, transport = axios, accessToken = googleAccessToken }) {
-    if (!PROJECT.test(project) || !REGION.test(region) || !EMAIL.test(runtimeServiceAccount)) {
+    if (!PROJECT.test(project) || !REGION.test(region)
+      || (runtimeServiceAccount !== undefined && !EMAIL.test(runtimeServiceAccount))) {
       throw new Error('Configuration GCP des variables invalide.');
     }
     this.project = project;
@@ -47,6 +48,7 @@ class GcpVariableDelivery {
   }
 
   async ensureSecret(token, deployment, name) {
+    if (!this.runtimeServiceAccount) throw new Error('Compte GCP runtime dédié manquant.');
     const id = secretId(deployment, name);
     const resource = `/secrets/${id}`;
     let existing;
@@ -81,6 +83,7 @@ class GcpVariableDelivery {
       throw new Error('Déploiement GCP invalide pour les variables.');
     }
     if (!entries.length) return [];
+    if (!this.runtimeServiceAccount) throw new Error('Compte GCP runtime dédié manquant.');
     const token = await this.accessToken(this.transport);
     const references = [];
     for (const [name, value] of entries) {

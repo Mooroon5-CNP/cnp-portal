@@ -49,3 +49,9 @@ test('does not call Google for a deployment without variables', async () => {
   expect(await adapter.deliver(dep, {})).toEqual([]);
   expect(accessToken).not.toHaveBeenCalled();
 });
+
+test('a client without runtime identity can make cleanup requests but cannot publish variables', async () => {
+  const adapter = new GcpVariableDelivery({ project: 'test-project', region: 'europe-west9',
+    accessToken: jest.fn().mockResolvedValue('token') });
+  await expect(adapter.deliver(dep, { API_KEY: 'private-value' })).rejects.toThrow('runtime dédié manquant');
+});

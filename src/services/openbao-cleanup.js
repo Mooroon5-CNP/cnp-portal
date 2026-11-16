@@ -11,8 +11,7 @@ const { AzureVariableDelivery, federatedAccessToken, secretName } = require('./o
 
 async function gcp(deployment, names) {
   if (!names.length) return;
-  const delivery = new GcpVariableDelivery({ project: process.env.GCP_PROJECT, region: process.env.GCP_REGION,
-    runtimeServiceAccount: require('./openbao-runtime').gcpRuntimeIdentity(deployment) });
+  const delivery = new GcpVariableDelivery({ project: process.env.GCP_PROJECT, region: process.env.GCP_REGION });
   const token = await delivery.accessToken(delivery.transport);
   for (const name of names) {
     const resource = `/secrets/${secretId(deployment, name)}`;
