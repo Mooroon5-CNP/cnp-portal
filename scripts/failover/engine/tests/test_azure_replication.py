@@ -88,6 +88,16 @@ class AzurePlatformTest(unittest.TestCase):
                          [('todo', 'prod', 'fr.example', 'it.example', 'fr', 'it')])
         self.assertEqual(pairs[0].alias, 'todo-prod-db')
 
+    def test_servers_being_deleted_are_left_out_but_stopped_ones_stay(self):
+        dropping = server('cnp-sov-it-todo-prod', 'it.example', 'copy-db')
+        dropping['properties'] = {'state': 'Dropping'}
+        self.arm.servers['rg-it'] = [dropping]
+        self.assertEqual(self.platform.pairs(), [])
+        stopped = server('cnp-sov-it-todo-prod', 'it.example', 'copy-db')
+        stopped['properties']['state'] = 'Stopped'
+        self.arm.servers['rg-it'] = [stopped]
+        self.assertEqual(len(self.platform.pairs()), 1)
+
     def test_alias_read_write_with_short_ttl_and_memory(self):
         pair = self.platform.pairs()[0]
         self.assertIsNone(self.platform.alias_get(pair))
