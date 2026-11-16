@@ -212,6 +212,26 @@ describe('publication et disponibilité', () => {
     });
   });
 
+  test('avec le domaine public, « déployée » seulement quand l\'adresse répond (nom et certificat posés)', async () => {
+    const config = require('../src/config/env').config;
+    config.azure.publicDomain = 'eu.example.fr';
+    const fetchBefore = global.fetch;
+    try {
+      kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null, observedImage: `acr.azurecr.io/todo:${revision}` });
+      global.fetch = jest.fn().mockRejectedValue(new Error('certificate has expired'));
+      const waiting = await service.reconcile(dep);
+      expect(waiting.phase).toBe('deploying');
+      expect(waiting.message).toContain('certificat');
+      expect(global.fetch).toHaveBeenCalledWith('https://todo-dev.eu.example.fr/health', expect.objectContaining({ method: 'GET' }));
+      global.fetch = jest.fn().mockResolvedValue({ status: 503 });
+      const done = await service.reconcile(dep);
+      expect(done).toMatchObject({ phase: 'success', applicationUrl: 'https://todo-dev.eu.example.fr' });
+    } finally {
+      global.fetch = fetchBefore;
+      delete config.azure.publicDomain;
+    }
+  });
+
   test('un échec de création Azure remonte avec sa cause ; une API illisible ne déclare rien', async () => {
     await service.reconcile(dep);
     kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'failed', failure: 'Container App : image introuvable' });
