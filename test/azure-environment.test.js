@@ -28,6 +28,7 @@ jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
   getArgocdApplicationIfExists: jest.fn(), removeApplicationSetPath: jest.fn(),
 }));
+jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 
@@ -110,7 +111,6 @@ describe('claims par environnement', () => {
     const dev = service.manifests(dep, revision), prod = service.manifests({ ...dep, environment: 'prod' }, revision);
     const file = (files, name) => files[Object.keys(files).find(p => p.endsWith(`/${name}`))];
     expect(file(dev, 'flexibleserver-copy.yaml')).toBeUndefined();
-    expect(file(dev, 'keyvault-secrets.yaml')).toBeUndefined();
     expect(yaml.load(file(dev, 'kustomization.yaml')).resources).not.toContain('flexibleserver-copy.yaml');
 
     const copy = yaml.load(file(prod, 'flexibleserver-copy.yaml'));
@@ -127,8 +127,9 @@ describe('claims par environnement', () => {
     expect(copy.spec.forProvider.tags).toMatchObject({ 'cnp-role': 'copy-db', 'cnp-app': 'todo', 'cnp-env': 'prod' });
 
     const secrets = yaml.loadAll(file(prod, 'keyvault-secrets.yaml'));
-    expect(secrets.map(s => s.spec.forProvider.name)).toEqual(['todo-prod-pg-password']);
+    expect(secrets.map(s => s.spec.forProvider.name)).toEqual(['todo-prod-pg-password', 'todo-prod-pg-runtime-password']);
     expect(secrets[0].spec.forProvider).toMatchObject({ keyVaultId: '/subscriptions/sub-1/vault', valueSecretRef: { name: 'todo-prod-pg-password' } });
+    expect(secrets[1].spec.forProvider.valueSecretRef.name).toBe('todo-prod-pg-runtime');
     expect(yaml.load(file(prod, 'kustomization.yaml')).resources).toEqual(expect.arrayContaining(['flexibleserver-copy.yaml', 'keyvault-secrets.yaml']));
 
     // l'app de prod passe par l'alias (zone tirée de AZURE_DB_DNS_ZONE_ID) ; la dev parle à son serveur
@@ -140,7 +141,25 @@ describe('claims par environnement', () => {
   test('l\'image est la vraie révision de la CI, jamais une image de départ', () => {
     const claim = yaml.load(service.manifests(dep, revision)['apps/todo/crossplane/dev/containerapp-claim.yaml']);
     expect(claim.spec.forProvider.template.container[0].image).toBe(`acr.azurecr.io/todo:${revision}`);
-    expect(claim.spec.forProvider.secret[0].valueSecretRef.name).toBe('todo-dev-pg-password');
+    expect(claim.spec.forProvider.secret[0].valueSecretRef.name).toBe('todo-dev-pg-runtime');
+  });
+
+  test('l\'app se connecte en cnp_runtime, jamais en administrateur, en dev comme en prod ; les deux mots de passe vont au coffre', () => {
+    for (const environment of ['dev', 'prod']) {
+      const files = service.manifests({ ...dep, environment }, revision);
+      const file = name => files[Object.keys(files).find(p => p.endsWith(`/${name}`))];
+      const env = yaml.load(file('containerapp-claim.yaml')).spec.forProvider.template.container[0].env;
+      expect(env.find(e => e.name === 'DB_USER').value).toBe('cnp_runtime');
+      expect(yaml.loadAll(file('keyvault-secrets.yaml')).map(s => s.spec.forProvider.name))
+        .toEqual([`todo-${environment}-pg-password`, `todo-${environment}-pg-runtime-password`]);
+      expect(yaml.load(file('kustomization.yaml')).resources).toContain('keyvault-secrets.yaml');
+    }
+  });
+
+  test('le mot de passe de cnp_runtime est créé par l\'opérateur avant toute publication', async () => {
+    const operator = require('../src/services/failover-operations');
+    await service.onboard(dep);
+    expect(operator.run).toHaveBeenCalledWith({ action: 'azure-runtime-secret', app: 'todo', environment: 'dev' });
   });
 
   test('une révision invalide ou un nom trop long échouent avant toute génération', () => {

@@ -244,6 +244,42 @@ def promote(conn, source_reachable=True):
 
 # ------------------------------------------------------------------------------------------------------- Orchestration
 
+RUNTIME = 'cnp_runtime'
+_OWNER_KEYWORD = {'r': 'TABLE', 'p': 'TABLE', 'f': 'FOREIGN TABLE', 'v': 'VIEW', 'm': 'MATERIALIZED VIEW', 'S': 'SEQUENCE'}
+
+
+def ensure_runtime_role(conn, admin, password):
+    """Rôle applicatif, comme sur GCP (database.RUNTIME) : l'app se connecte en cnp_runtime, propriétaire de SES objets du
+    schéma public, sans aucun droit d'administration (ni CREATEDB, ni CREATEROLE, ni membre d'azure_pg_admin). Une injection
+    SQL dans l'app ne donne donc plus les droits de l'administrateur du serveur (audit du 16/11/2026).
+
+    L'administrateur est rendu MEMBRE de cnp_runtime : il garde la main sur ces objets, ce qu'exigent la publication, la
+    réplication (l'abonnement applique les changements en tant que propriétaire des tables), le recalage des séquences et les
+    migrations de schéma faites par la plateforme. Idempotent, à chaque passage ; aucun DROP, aucun REVOKE.
+    Renvoie les objets dont la propriété a été transférée (vide en régime établi)."""
+    conn.execute('SET default_transaction_read_only = off')  # le serveur de copie est en lecture seule par défaut
+    exists = conn.execute('SELECT 1 FROM pg_roles WHERE rolname=%s', (RUNTIME,)).fetchone()
+    conn.execute(sql.SQL('ALTER ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD {}' if exists else
+                         'CREATE ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD {}').format(
+        sql.Identifier(RUNTIME), sql.Literal(password)))
+    if not conn.execute('SELECT pg_has_role(%s, %s, %s)', (admin, RUNTIME, 'MEMBER')).fetchone()[0]:
+        conn.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(RUNTIME), sql.Identifier(admin)))
+    conn.execute(sql.SQL('GRANT CONNECT ON DATABASE {} TO {}').format(sql.Identifier(DATABASE), sql.Identifier(RUNTIME)))
+    conn.execute(sql.SQL('GRANT USAGE, CREATE ON SCHEMA public TO {}').format(sql.Identifier(RUNTIME)))
+    # Objets créés par l'administrateur (schéma recopié sur le serveur de copie, apps d'avant le rôle) : rendus à l'app. Les
+    # séquences liées à une colonne suivent leur table.
+    moved = []
+    for name, kind in conn.execute(
+            "SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relkind IN ('r','p','f','v','m','S') AND pg_get_userbyid(c.relowner) <> %s "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid "
+            "AND d.deptype IN ('a','i')) ORDER BY c.relkind = 'S', c.relname", (RUNTIME,)).fetchall():
+        conn.execute(sql.SQL('ALTER ' + _OWNER_KEYWORD[kind] + ' {}.{} OWNER TO {}').format(
+            sql.Identifier('public'), sql.Identifier(name), sql.Identifier(RUNTIME)))
+        moved.append(name)
+    return moved
+
+
 class Engine:
     """Les décisions, indépendantes d'Azure : `platform` fournit les paires, l'alias, le mot de passe et les réglages."""
 
@@ -457,6 +493,33 @@ class Engine:
         self.platform.alias_set(pair, standby.fqdn, {'reason': 'failover-' + reason, 'failed_over_at': str(int(self.clock()))})
         return self._report(pair, event='FAILED_OVER', active=standby.key, previous=active.key, reason=reason)
 
+    def ensure_roles(self):
+        """cnp_runtime sur chaque serveur d'app (dev et prod) et de copie. Un serveur injoignable (arrêté, en panne, base
+        pas encore créée) est simplement passé : le rôle sera posé au passage suivant. Ne touche jamais aux bases."""
+        results = []
+        for app, env, server in self.platform.app_servers():
+            record = {'app': app, 'env': env, 'server': server.key, 'role': RUNTIME}
+            try:
+                runtime = self.platform.runtime_password(app, env)
+                if runtime is None:
+                    results.append(self._log_role(record, state='RUNTIME_SECRET_MISSING'))
+                    continue
+                conn = self._open(server, self.platform.vault_secret(f'{app}-{env}-pg-password'))
+                if conn is None:
+                    results.append(self._log_role(record, state='SERVER_UNREACHABLE'))
+                    continue
+                with conn:
+                    moved = ensure_runtime_role(conn, server.user, runtime)
+                results.append(self._log_role(record, state='ROLE_READY', **({'ownership_moved': moved} if moved else {})))
+            except Exception as error:  # noqa: BLE001 — un serveur en erreur n'empêche pas les autres.
+                results.append(self._log_role(record, state='ERROR', error=type(error).__name__, detail=str(error)[:300]))
+        return results
+
+    def _log_role(self, record, **fields):
+        record = {**record, **fields}
+        self.log(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        return record
+
     def find(self, app, env='prod'):
         pair = next((p for p in self.platform.pairs() if p.app == app and p.env == env), None)
         if pair is None:
@@ -548,11 +611,11 @@ class AzurePlatform:
     def _rg(self, rg):
         return f'{self.ARM}/subscriptions/{self.subscription}/resourceGroups/{rg}'
 
-    def _servers(self, rg, role, key):
+    def _servers(self, rg, role, key, include_dev=False):
         found = self._call('GET', self._rg(rg) + '/providers/Microsoft.DBforPostgreSQL/flexibleServers?api-version=2024-08-01') or {}
         for item in found.get('value', []):
             tags = item.get('tags') or {}
-            if tags.get('cnp-role') == role and tags.get('cnp-app') and tags.get('cnp-env') and tags.get('cnp-env') != 'dev':
+            if tags.get('cnp-role') == role and tags.get('cnp-app') and tags.get('cnp-env') and (include_dev or tags.get('cnp-env') != 'dev'):
                 props = item.get('properties') or {}
                 # Serveur en cours de suppression : Azure le liste encore, sans administrateur (constaté le 16/11, une
                 # exécution plantée). Il n'appartient plus à aucune paire. Un serveur ARRÊTÉ, lui, reste listé en entier
@@ -597,11 +660,25 @@ class AzurePlatform:
                                                               'metadata': {'cnp_app': pair.app, 'cnp_env': pair.env, **meta}}})
 
     def password(self, pair):
-        url = f'https://{self.vault}.vault.azure.net/secrets/{pair.app}-{pair.env}-pg-password?api-version=7.4'
+        return self.vault_secret(f'{pair.app}-{pair.env}-pg-password')
+
+    def vault_secret(self, name, required=True):
+        url = f'https://{self.vault}.vault.azure.net/secrets/{name}?api-version=7.4'
         secret = self._call('GET', url, resource='https://vault.azure.net')
         if not secret:
-            raise RuntimeError(f'Secret {pair.app}-{pair.env}-pg-password absent du coffre.')
+            if not required:
+                return None
+            raise RuntimeError(f'Secret {name} absent du coffre.')
         return secret['value']
+
+    def runtime_password(self, app, env):
+        """Mot de passe de cnp_runtime (portail : Secret Kubernetes recopié au coffre). None pour une app d'avant le rôle."""
+        return self.vault_secret(f'{app}-{env}-pg-runtime-password', required=False)
+
+    def app_servers(self):
+        """Tous les serveurs d'app, dev compris, et de copie : (app, env, Server)."""
+        found = [(a, e, s) for (a, e), s in self._servers(self.primary_rg, 'app-db', self.primary_key, include_dev=True)]
+        return found + [(a, e, s) for (a, e), s in self._servers(self.copy_rg, 'copy-db', self.copy_key, include_dev=True)]
 
     def _server_url(self, server):
         rg = self.primary_rg if server.key == self.primary_key else self.copy_rg
@@ -650,6 +727,8 @@ def main(argv=None, platform=None):
     engine = Engine(platform or AzurePlatform(), auto=AutoPolicy.from_environ(os.environ))
     if args.command in ('reconcile', 'status'):
         results = engine.reconcile(apply=args.command == 'reconcile')
+        if args.command == 'reconcile' and hasattr(engine.platform, 'app_servers'):
+            engine.ensure_roles()  # rôle applicatif cnp_runtime : erreurs journalisées, jamais bloquantes
         domains = engine.platform.domains() if hasattr(engine.platform, 'domains') else None
         if domains is not None:
             # Noms publics des apps (azure_domains.py) : une erreur ici est journalisée et ne touche pas aux bases.

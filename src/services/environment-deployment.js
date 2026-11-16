@@ -219,7 +219,14 @@ function current(dep) {
 // Mot de passe de la base Cloud SQL d'une app de dev : créé (une seule fois) avant toute publication, car Crossplane le lit pour
 // créer l'utilisateur et Cloud Run dans Secret Manager. Par l'opérateur Python (clients Kubernetes et Secret Manager).
 async function databaseSecrets(dep, action) {
-  if (dep.database !== 'postgres' || azure.isAzure(dep)) return null;
+  if (azure.isAzure(dep)) {
+    // Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, lu par Crossplane pour la Container App et le Key Vault.
+    if (!['dev', 'prod'].includes(dep.environment)) return null;
+    const operator = require('./failover-operations');
+    return operator.run({ action: action === 'app-sql-secrets' ? 'azure-runtime-secret' : 'azure-runtime-cleanup',
+      app: dep.appName, environment: dep.environment });
+  }
+  if (dep.database !== 'postgres') return null;
   const operator = require('./failover-operations');
   return operator.run({ action, app: dep.appName, environment: dep.environment, service_account: config.gcp.cloudRunSa });
 }
@@ -483,6 +490,9 @@ async function reconcile(dep) {
       if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
+      // Azure : le mot de passe de cnp_runtime doit exister avant que Crossplane lise les claims. Relançable, sans rotation :
+      // les apps inscrites avant le rôle applicatif (16/11/2026) l'obtiennent à leur prochaine publication.
+      if (azure.isAzure(dep)) await databaseSecrets(dep, 'app-sql-secrets');
       const files = manifests(dep, revision);
       if (!azure.isAzure(dep)) {
         // Operator-managed Secret Manager references survive image promotions.

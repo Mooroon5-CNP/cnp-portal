@@ -250,6 +250,13 @@ def execute(request):
     import re
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,38}[a-z0-9]', app):
         raise ValueError('Application invalide')
+    if action in {'azure-runtime-secret', 'azure-runtime-cleanup'}:
+        # Base Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, créé avant publication, retiré à la suppression.
+        import platform_secrets
+        kube = (request.get('_clients') or (platform_secrets.Kubernetes.from_environment(request.get('kube_context')),))[0]
+        if action == 'azure-runtime-secret':
+            return platform_secrets.azure_runtime_initialize(app, request['environment'], kube)
+        return platform_secrets.azure_runtime_remove(app, request['environment'], kube)
     if action in {'app-sql-secrets', 'app-sql-cleanup'}:
         # Base Cloud SQL d'un déploiement sans failover (dev) : mot de passe de l'app, créé avant publication, retiré à la suppression.
         import platform_secrets
