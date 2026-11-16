@@ -55,6 +55,17 @@ test('a failed provisional cleanup is explicit and never publishes metadata', as
   expect(metadata.save).not.toHaveBeenCalled();
 });
 
+test('a failed update cleans the new version and preserves the version already published', async () => {
+  const { clients, stores, variables } = fixture();
+  stores.gcp.version = 1;
+  stores.gcp.values = { API_URL: 'previous', [GENERATION_KEY]: 'previous-generation' };
+  clients.aws.write.mockRejectedValueOnce(new Error('AWS unavailable'));
+  await expect(variables.prepare(deployment, { API_URL: 'next' })).rejects.toThrow('AWS unavailable');
+  expect(clients.gcp.destroyVersion).toHaveBeenCalledWith('sample-app', 'prod', 2);
+  expect(clients.gcp.destroyVersion).not.toHaveBeenCalledWith('sample-app', 'prod', 1);
+  expect(metadata.save).not.toHaveBeenCalled();
+});
+
 test('GCP without failover never accesses AWS and empty variables keep the old path', async () => {
   const { clients, variables } = fixture();
   const dev = { ...deployment, environment: 'dev', failoverRequested: false };
