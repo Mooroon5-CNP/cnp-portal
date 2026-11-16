@@ -16,6 +16,7 @@ const addresses = require('./application-address');
 const azure = require('./environment-azure');
 const failover = require('./environment-failover');
 const openbaoRuntime = require('./openbao-runtime');
+const deploymentVariables = require('../models/deployment_variables');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -414,6 +415,10 @@ async function observe(dep) {
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
 
     const release = releases.get(dep.id, run.head_sha);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && release.variable_generation !== generation) {
+      return { ...snapshot, phase: 'deploying', message: 'Mise à jour des variables en préparation.' };
+    }
     if (release?.state === 'rejected') return { ...snapshot, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') {
       return { ...snapshot, ...await readiness(dep, run.head_sha, { allowMutation: false }) };
@@ -466,7 +471,15 @@ async function reconcile(dep) {
     if (run.conclusion !== 'success') return { ...result, phase: 'failed', message: 'Le pipeline a échoué ; aucun déploiement publié.' };
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
     const revision = run.head_sha;
-    const release = releases.get(dep.id, revision);
+    let release = releases.get(dep.id, revision);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && release.variable_generation !== generation && ['published', 'rejected'].includes(release.state)) {
+      releases.resetForVariables(dep.id, revision, generation);
+      release = releases.get(dep.id, revision);
+    }
+    if (release && release.variable_generation !== generation && release.state !== 'preparing') {
+      return { ...result, phase: 'deploying', message: 'Mise à jour des variables en attente du candidat courant.' };
+    }
     if (release?.state === 'approving') return { ...result, ...await interruptedApproval(api, dep, release) };
     if (release?.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') return { ...result, ...await readiness(dep, revision) };
@@ -475,11 +488,14 @@ async function reconcile(dep) {
     const token = releases.acquire(dep.id, revision, run.id);
     if (!token) return { ...result, phase: 'deploying', message: 'Préparation GitOps en cours.' };
     const guard = async () => {
-      if (!current(dep) || !releases.owns(dep.id, revision, token) || !(await sourceIsCurrent(dep, revision))) {
+      if (!current(dep) || !releases.owns(dep.id, revision, token)
+        || (deploymentVariables.get(dep.id)?.generation || null) !== generation
+        || !(await sourceIsCurrent(dep, revision))) {
         throw new Error('Le déploiement ou sa branche a changé. Réessayez.');
       }
     };
     try {
+      releases.setVariableGeneration(dep.id, revision, token, generation);
       // Un autre processus a pu terminer entre la lecture et l'acquisition du bail.
       const fresh = releases.get(dep.id, revision);
       if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
@@ -520,7 +536,7 @@ async function reconcile(dep) {
         releases.save(dep.id, revision, token, 'published');
         return { ...result, ...await readiness(dep, revision) };
       }
-      const branch = `cnp-release/${dep.id}/${revision}`;
+      const branch = `cnp-release/${dep.id}/${revision}/${generation || 'none'}`;
       const destination = target();
       const main = await github.getRef(destination.owner, destination.repo, 'main');
       await github.createBranch(destination.owner, destination.repo, branch, main);
@@ -545,6 +561,9 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   if (dep.environment !== 'prod' || !current(dep)) throw new Error('Validation réservée à une production active.');
   const release = releases.get(dep.id, revision);
   if (!release || !['pending', 'approving'].includes(release.state)) throw new Error('Candidat non disponible.');
+  if (release.variable_generation !== (deploymentVariables.get(dep.id)?.generation || null)) {
+    throw new Error('Variables modifiées ; candidat obsolète.');
+  }
   const api = await github.getInstallationOctokit();
   const run = await latest(api, dep);
   if (!run || run.head_sha !== revision || run.conclusion !== 'success' || !(await sourceIsCurrent(dep, revision))) {

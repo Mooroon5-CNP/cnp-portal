@@ -32,7 +32,7 @@ def inject_runtime_variables(result, profile, references):
     gcp_refs = references.get('gcp')
     aws_refs = references.get('aws')
     role = references.get('aws_execution_role')
-    if (not isinstance(gcp_refs, list) or not isinstance(aws_refs, list) or not gcp_refs
+    if (not isinstance(gcp_refs, list) or not isinstance(aws_refs, list)
             or len(gcp_refs) != len(aws_refs) or not isinstance(role, str)
             or not re.fullmatch(r'arn:aws:iam::\d{12}:role/[A-Za-z0-9_+=,.@/-]+', role)):
         raise ValueError('Références runtime du secours invalides.')

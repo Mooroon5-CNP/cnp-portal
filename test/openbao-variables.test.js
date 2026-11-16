@@ -76,6 +76,15 @@ test('GCP without failover never accesses AWS and empty variables keep the old p
   expect(clients.aws.write).not.toHaveBeenCalled();
 });
 
+test('an explicit empty update publishes a new generation without old variable names', async () => {
+  const { clients, variables } = fixture();
+  const result = await variables.prepare(deployment, {}, { allowEmpty: true });
+  expect(result.names).toEqual([]);
+  expect(clients.gcp.write).toHaveBeenCalledWith('sample-app', 'prod', { [GENERATION_KEY]: 'generation-1' }, 0);
+  expect(clients.aws.write).toHaveBeenCalledWith('sample-app', 'prod', { [GENERATION_KEY]: 'generation-1' }, 0);
+  expect(metadata.save).toHaveBeenCalledWith(deployment.id, result);
+});
+
 test('reads only the recorded versions and refuses a mismatched generation', async () => {
   const { clients, variables } = fixture();
   metadata.get.mockReturnValue({ generation: 'generation-1', names: ['API_URL'], versions: { gcp: 1, aws: 1 } });

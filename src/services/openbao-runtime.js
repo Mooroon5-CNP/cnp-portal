@@ -102,7 +102,7 @@ async function failoverReferences(deployment, profile, imageRecord) {
 }
 
 function applyAzureReferences(files, deployment, prepared) {
-  if (!prepared) return files;
+  if (!prepared || !prepared.references.length) return files;
   const dir = `apps/${deployment.appName}/crossplane/${deployment.environment}`;
   const claimPath = `${dir}/containerapp-claim.yaml`;
   const namesPath = `${dir}/containerapp-secretname.yaml`;

@@ -2,7 +2,7 @@
 
 **Ordre : 2/3.** Dépend de SPEC-OPENBAO-01. Ne modifie pas la génération ni la publication de l'image CI.
 
-**Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée est codée pour GCP, Azure et le secours AWS, avec tests locaux. Restent les identités/droits cloud et la recette réelle, la mise à jour sans nouvelle CI, le retrait et nettoyage des variables, la gestion des écritures partielles et le retour arrière. La SPEC n'est pas `DONE`.
+**Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée et la mise à jour sans nouvelle image CI sont codées pour GCP, Azure et le secours AWS. Le formulaire de mise à jour remplace la liste complète ; la production ordinaire garde sa validation manager. Restent les identités/droits cloud et la recette réelle, le nettoyage après suppression, la gestion complète des écritures partielles et le retour arrière. La SPEC n'est pas `DONE`.
 
 ## Résultat fonctionnel
 

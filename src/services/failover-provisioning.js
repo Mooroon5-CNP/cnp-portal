@@ -78,7 +78,9 @@ async function pendingRevision(app, health) {
     if (!row) return null;
     const { run } = await require('./failover-ci-images').latest(deployments.get(row.id));
     if (run.status !== 'completed' || run.conclusion !== 'success') return null;
-    return run.head_sha !== profiles.runtimeRevision(app) ? run.head_sha : null;
+    const variableGeneration = require('../models/deployment_variables').get(row.id)?.generation || null;
+    return run.head_sha !== profiles.runtimeRevision(app)
+      || variableGeneration !== profiles.runtimeVariableGeneration(app) ? run.head_sha : null;
   } catch (_) { return null; }                         // GitHub indisponible : on regarde au tour suivant
 }
 function get(app) {

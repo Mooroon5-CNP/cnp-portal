@@ -17,6 +17,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS deployment_releases (
   lease_until INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (deployment_id, revision)
 )`);
+if (!db.pragma('table_info(deployment_releases)').some(column => column.name === 'variable_generation')) {
+  db.exec('ALTER TABLE deployment_releases ADD COLUMN variable_generation TEXT');
+}
 
 module.exports = {
   get(deploymentId, revision) {
@@ -24,6 +27,19 @@ module.exports = {
   },
   list(deploymentId) {
     return db.prepare('SELECT * FROM deployment_releases WHERE deployment_id = ?').all(deploymentId);
+  },
+  resetForVariables(deploymentId, revision, generation) {
+    const now = Date.now();
+    const result = db.prepare(`UPDATE deployment_releases SET state = 'preparing', variable_generation = ?,
+      pr_number = NULL, pr_url = NULL, head_sha = NULL, reviewed_by = NULL, reviewed_at = NULL
+      WHERE deployment_id = ? AND revision = ? AND lease_until < ? AND state IN ('published', 'rejected')`)
+      .run(generation, deploymentId, revision, now);
+    return result.changes === 1;
+  },
+  setVariableGeneration(deploymentId, revision, token, generation) {
+    const result = db.prepare('UPDATE deployment_releases SET variable_generation = ? WHERE deployment_id = ? AND revision = ? AND lease_token = ? AND lease_until > ?')
+      .run(generation, deploymentId, revision, token, Date.now());
+    if (!result.changes) throw new Error('Le traitement du déploiement a expiré. Réessayez.');
   },
   acquire(deploymentId, revision, runId) {
     db.prepare('INSERT OR IGNORE INTO deployment_releases (deployment_id, revision, run_id) VALUES (?, ?, ?)').run(deploymentId, revision, runId);

@@ -25,6 +25,7 @@ const argo = require('../src/clients/argocd');
 const service = require('../src/services/environment-deployment');
 const openbaoRuntime = require('../src/services/openbao-runtime');
 const releases = require('../src/models/deployment_release');
+const variableRecords = require('../src/models/deployment_variables');
 const revision = 'a'.repeat(40);
 let api, run, sourceHead, trees, published, existing, dep, prHead, mergedBy;
 
@@ -122,6 +123,19 @@ test('main CI publishes dev once and concurrent polls share the same work', asyn
   expect(published).toHaveLength(1); expect(published[0].ref).toBe('heads/main');
   expect(trees[0].tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/dev/'))).toBe(true);
   await service.reconcile(dep); expect(published).toHaveLength(1);
+});
+
+test('changing variables republishes the same successful CI revision and keeps the image', async () => {
+  await service.reconcile(dep);
+  variableRecords.save(dep.id, { generation: 'new-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  expect(await service.observe(dep)).toMatchObject({ phase: 'deploying' });
+  openbaoRuntime.references.mockResolvedValueOnce([{ name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'feature', version: '1' } } }]);
+  await service.reconcile(dep);
+  expect(published).toHaveLength(2);
+  expect(releases.get(dep.id, revision)).toMatchObject({ state: 'published', variable_generation: 'new-generation' });
+  const claim = yaml.load(trees.at(-1).tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
+  expect(claim.spec.forProvider.template.containers[0].image).toBe(`registry.test/project/apps/pixelcam:${revision}`);
+  expect(claim.spec.forProvider.template.containers[0].env.some(item => item.name === 'FEATURE')).toBe(true);
 });
 
 test('a successful run for an outdated source commit cannot publish dev', async () => {

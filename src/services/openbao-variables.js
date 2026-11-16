@@ -23,9 +23,9 @@ function validate(values) {
 }
 
 function service({ model = metadata, clientFor = domain => OpenBaoClient.fromEnvironment(domain), uuid = randomUUID } = {}) {
-  async function prepare(deployment, values) {
+  async function prepare(deployment, values, { allowEmpty = false } = {}) {
     const entries = validate(values);
-    if (!entries.length) return null;
+    if (!entries.length && !allowEmpty) return null;
     if (!deployment?.id) throw new Error('Déploiement requis pour les variables.');
     const domains = domainsForDeployment(deployment);
     const generation = uuid();

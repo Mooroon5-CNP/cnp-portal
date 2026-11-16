@@ -34,14 +34,16 @@
     return rows;
   }
 
-  function init() {
+  function init(options = {}) {
     const document = root.document;
-    const form = document.getElementById('newDeploymentForm');
+    const ids = { form: 'newDeploymentForm', list: 'deploymentVariableRows', file: 'deploymentEnvFile',
+      summary: 'deploymentVariableSummary', error: 'deploymentVariableError', add: 'addDeploymentVariable', ...options };
+    const form = document.getElementById(ids.form);
     if (!form) return;
-    const list = document.getElementById('deploymentVariableRows');
-    const file = document.getElementById('deploymentEnvFile');
-    const summary = document.getElementById('deploymentVariableSummary');
-    const error = document.getElementById('deploymentVariableError');
+    const list = document.getElementById(ids.list);
+    const file = document.getElementById(ids.file);
+    const summary = document.getElementById(ids.summary);
+    const error = document.getElementById(ids.error);
     const showError = message => { error.textContent = message || ''; error.hidden = !message; };
     const rows = () => [...list.querySelectorAll('[data-variable-row]')];
     const updateSummary = () => { summary.textContent = rows().length
@@ -63,7 +65,7 @@
       key.addEventListener('input', updateSummary);
       row.append(key, secret, remove); list.append(row); updateSummary();
     };
-    document.getElementById('addDeploymentVariable').addEventListener('click', () => add());
+    document.getElementById(ids.add).addEventListener('click', () => add());
     file.addEventListener('change', async () => {
       showError('');
       const selected = file.files?.[0];
