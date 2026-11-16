@@ -92,7 +92,7 @@ function manifests(dep, revision) {
 function fileNames() {
   // Les fichiers de copie n'existent qu'en prod ; leur absence en dev est sans effet (seuls les fichiers présents sont retirés).
   return ['containerapp-secretname.yaml', 'flexibleserver.yaml', 'flexibleserver-database.yaml', 'containerapp-claim.yaml',
-    ...azureTemplates.PROD_COPY_FILES, 'kustomization.yaml'];
+    'keyvault-secrets.yaml', ...azureTemplates.PROD_COPY_FILES, 'kustomization.yaml'];
 }
 
 /**

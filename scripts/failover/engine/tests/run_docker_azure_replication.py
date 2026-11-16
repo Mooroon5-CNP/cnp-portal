@@ -57,6 +57,18 @@ class FakePlatform:
         self.settings_calls += 1
         return []
 
+    def app_servers(self):
+        return [(self.pair.app, self.pair.env, s) for s in self.pair.servers()]
+
+    def vault_secret(self, name, required=True):
+        return PASSWORD
+
+    def runtime_password(self, app, env):
+        return RUNTIME_PASSWORD
+
+
+RUNTIME_PASSWORD = 'rUntime-' + uuid4().hex
+
 
 def main():
     token = 'cnp-azrepl-' + uuid4().hex[:10]
@@ -78,6 +90,11 @@ def main():
         def connect(server, password, dbname='appdb'):
             return psycopg.connect(host='127.0.0.1', port=ports[server.key], dbname=dbname, user='pgadmin', password=password,
                                    sslmode='disable', connect_timeout=3, autocommit=True)
+
+        def runtime(server):
+            # L'app : jamais l'administrateur (rôle applicatif cnp_runtime, comme sur GCP).
+            return psycopg.connect(host='127.0.0.1', port=ports[server.key], dbname='appdb', user='cnp_runtime',
+                                   password=RUNTIME_PASSWORD, sslmode='disable', connect_timeout=3, autocommit=True)
 
         def dump(server, password):
             def run():
@@ -104,13 +121,14 @@ def main():
         platform = FakePlatform(pair)
         logs = []
         engine = ar.Engine(platform, connect=connect, dump=dump, log=logs.append, sleep=time.sleep)
-        app = lambda: connect(pair.by_fqdn(platform.alias), PASSWORD)  # noqa: E731 — l'app passe toujours par l'alias
+        app = lambda: runtime(pair.by_fqdn(platform.alias))  # noqa: E731 — l'app passe toujours par l'alias, en cnp_runtime
         rows = lambda server: [tuple(r) for r in connect(server, PASSWORD).execute('SELECT id, title FROM todos ORDER BY id').fetchall()]  # noqa: E731
 
         def converge(expected_active, timeout=60):
             deadline = time.monotonic() + timeout
             while True:
                 result = engine.reconcile()[0]
+                engine.ensure_roles()  # comme le job : rôle applicatif après chaque réconciliation
                 if result.get('state') == 'REPLICATING' and result.get('active') == expected_active:
                     return result
                 if time.monotonic() > deadline:
@@ -128,6 +146,17 @@ def main():
         steps = []
         # 0. Avant toute table : l'alias est créé vers la France, rien n'est répliqué.
         assert engine.reconcile()[0]['state'] == 'WAITING_SCHEMA' and platform.alias == 'fr'
+        roles = {r['server']: r['state'] for r in engine.ensure_roles()}
+        assert roles == {'fr': 'ROLE_READY', 'it': 'ROLE_READY'}, roles  # la base de la copie est créée par reconcile
+        with app() as c:  # cnp_runtime : aucun droit d'administration
+            assert c.execute("SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication FROM pg_roles "
+                             "WHERE rolname = 'cnp_runtime'").fetchone()[0] is False
+            for forbidden in ('CREATE DATABASE pirate', 'CREATE ROLE pirate', 'ALTER ROLE pgadmin PASSWORD \'x\''):
+                try:
+                    c.execute(forbidden)
+                    raise AssertionError(f'cnp_runtime a pu faire : {forbidden}')
+                except psycopg.errors.InsufficientPrivilege:
+                    pass
         with app() as c:
             c.execute('CREATE TABLE todos (id serial PRIMARY KEY, title text NOT NULL)')
             c.execute("INSERT INTO todos(title) VALUES ('un'), ('deux')")
@@ -227,7 +256,7 @@ def main():
         assert [t for _, t in final][-2:] == ['avant la panne auto', 'pendant la panne auto'], final
         steps.append(('C : bascule puis retour automatiques', len(final)))
         # Aucun mot de passe dans les journaux.
-        assert not any(PASSWORD in line for line in logs)
+        assert not any(PASSWORD in line or RUNTIME_PASSWORD in line for line in logs)
         for name, detail in steps:
             print(f'OK  {name} : {detail}')
         print('Scénario Azure complet : OK')
