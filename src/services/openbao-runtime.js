@@ -9,6 +9,7 @@ const { OpenBaoClient } = require('./openbao-client');
 const { domainsForDeployment } = require('./openbao-routing');
 const { config } = require('../config/env');
 const yaml = require('js-yaml');
+const { createHash } = require('crypto');
 
 const IDENTITY = /^\/subscriptions\/[0-9a-f-]{36}\/resourceGroups\/[A-Za-z0-9_.()-]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[A-Za-z0-9_.-]+$/i;
 
@@ -20,10 +21,30 @@ function identityMap(envName, error) {
   throw new Error(error);
 }
 
+const suffix = deployment => createHash('sha256').update(`${deployment.appName}/${deployment.environment}`).digest('hex').slice(0, 20);
+const derived = () => process.env.CNP_OPENBAO_DERIVED_IDENTITIES === 'true';
+
+function awsRuntimeRole(deployment) {
+  const key = `${deployment.appName}/prod`;
+  const roles = derived() ? {} : identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
+  const account = process.env.CNP_AWS_ACCOUNT_ID;
+  const role = derived() ? (/^[0-9]{12}$/.test(account || '')
+    ? `arn:aws:iam::${account}:role/cnp-${suffix({ ...deployment, environment: 'prod' })}-exec` : null) : roles[key];
+  if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]+$/.test(role || '')
+    || Object.entries(roles).some(([other, value]) => other !== key && value === role)) {
+    throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
+  }
+  return role;
+}
+
 function azureRuntimeIdentity(deployment) {
-  const identities = identityMap('CNP_AZURE_RUNTIME_IDENTITIES', 'Identités Azure des applications invalides.');
+  const identities = derived() ? {} : identityMap('CNP_AZURE_RUNTIME_IDENTITIES', 'Identités Azure des applications invalides.');
   const key = `${deployment.appName}/${deployment.environment}`;
-  const identity = identities?.[key];
+  const subscription = process.env.AZURE_SUBSCRIPTION_ID;
+  const group = process.env.CNP_AZURE_RUNTIME_RESOURCE_GROUP;
+  const identity = derived() ? (/^[0-9a-f-]{36}$/i.test(subscription || '')
+    && /^[A-Za-z0-9_.()-]+$/.test(group || '')
+    ? `/subscriptions/${subscription}/resourceGroups/${group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cnp-${suffix(deployment)}-vars` : null) : identities?.[key];
   if (!IDENTITY.test(identity || '') || identity.toLowerCase() === config.azure.pullIdentityId?.toLowerCase()
     || Object.entries(identities).some(([other, value]) => other !== key && typeof value === 'string'
       && value.toLowerCase() === identity.toLowerCase())) {
@@ -33,9 +54,10 @@ function azureRuntimeIdentity(deployment) {
 }
 
 function gcpRuntimeIdentity(deployment) {
-  const identities = identityMap('CNP_GCP_RUNTIME_IDENTITIES', 'Identités GCP des applications invalides.');
+  const identities = derived() ? {} : identityMap('CNP_GCP_RUNTIME_IDENTITIES', 'Identités GCP des applications invalides.');
   const key = `${deployment.appName}/${deployment.environment}`;
-  const identity = identities[key];
+  const identity = derived() ? (process.env.GCP_PROJECT
+    ? `cnp-${suffix(deployment)}@${process.env.GCP_PROJECT}.iam.gserviceaccount.com` : null) : identities[key];
   const expected = new RegExp(`^[a-z][a-z0-9-]*@${String(process.env.GCP_PROJECT || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.iam\\.gserviceaccount\\.com$`);
   if (!expected.test(identity || '') || identity === config.gcp.cloudRunSa
     || Object.entries(identities).some(([other, value]) => other !== key && value === identity)) {
@@ -49,18 +71,14 @@ function assertReady(deployment) {
   for (const domain of domains) OpenBaoClient.fromEnvironment(domain);
   if (deployment.targetCluster === 'azure') {
     azureRuntimeIdentity(deployment);
-    AzureVariableDelivery.fromEnvironment();
+    AzureVariableDelivery.fromEnvironment(deployment);
     return;
   }
   if (!process.env.GCP_PROJECT || !process.env.GCP_REGION) throw new Error('Configuration GCP des variables OpenBao manquante.');
   gcpRuntimeIdentity(deployment);
   if (deployment.failoverRequested) {
-    const roles = identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
-    const key = `${deployment.appName}/prod`;
-    const role = roles[key];
-    if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]+$/.test(role || '')
-      || Object.entries(roles).some(([other, value]) => other !== key && value === role)
-      || !/^[a-z]{2}-[a-z]+-[0-9]$/.test(process.env.CNP_AWS_REGION || '')) {
+    awsRuntimeRole(deployment);
+    if (!/^[a-z]{2}-[a-z]+-[0-9]$/.test(process.env.CNP_AWS_REGION || '')) {
       throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
     }
   }
@@ -71,7 +89,7 @@ async function azureReferences(deployment) {
   const identity = azureRuntimeIdentity(deployment);
   const published = await variables.service().published(deployment);
   if (!published) return null;
-  return { identity, references: await AzureVariableDelivery.fromEnvironment().deliver(deployment, published.values.azure) };
+  return { identity, references: await AzureVariableDelivery.fromEnvironment(deployment).deliver(deployment, published.values.azure) };
 }
 
 async function failoverReferences(deployment, profile, imageRecord) {
@@ -83,12 +101,9 @@ async function failoverReferences(deployment, profile, imageRecord) {
   if (profile?.gcp?.gcp_runtime?.service_account !== serviceAccount) {
     throw new Error('Le profil failover doit utiliser le compte GCP dédié avant la publication des variables.');
   }
-  const roles = identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
-  const key = `${deployment.appName}/prod`;
-  const role = roles[key];
+  const role = awsRuntimeRole(deployment);
   const account = imageRecord?.aws?.match(/^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com\//);
   if (!account || !new RegExp(`^arn:aws:iam::${account[1]}:role/[A-Za-z0-9_+=,.@/-]+$`).test(role || '')
-    || Object.entries(roles).some(([other, value]) => other !== key && value === role)
     || !process.env.CNP_AWS_REGION || process.env.CNP_AWS_REGION !== account[2]) {
     throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
   }
@@ -148,4 +163,4 @@ async function references(deployment) {
 }
 
 module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity,
-  failoverReferences, assertReady };
+  awsRuntimeRole, failoverReferences, assertReady };

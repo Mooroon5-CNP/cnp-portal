@@ -9,6 +9,16 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VAULT = /^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/?$/;
 const VERSION = /^[0-9a-f]{32}$/i;
 
+function vaultUrlFor(deployment) {
+  if (process.env.CNP_OPENBAO_DERIVED_IDENTITIES !== 'true') return process.env.CNP_AZURE_VAULT_URL;
+  const subscription = process.env.AZURE_SUBSCRIPTION_ID;
+  if (!GUID.test(subscription || '') || !deployment?.appName || !['dev', 'prod'].includes(deployment.environment)) {
+    throw new Error('Paramètres Azure des coffres applicatifs manquants.');
+  }
+  const key = `${deployment.appName}/${deployment.environment}`;
+  return `https://cnp${subscription.replace(/-/g, '').slice(0, 8).toLowerCase()}${createHash('sha256').update(key).digest('hex').slice(0, 12)}.vault.azure.net`;
+}
+
 function secretName(deployment, variable) {
   const hash = createHash('sha256').update(variable).digest('hex').slice(0, 12);
   return `cnp-${deployment.appName}-${deployment.environment}-var-${hash}`;
@@ -46,8 +56,8 @@ class AzureVariableDelivery {
     this.accessToken = accessToken;
   }
 
-  static fromEnvironment(dependencies = {}) {
-    return new AzureVariableDelivery({ vaultUrl: process.env.CNP_AZURE_VAULT_URL,
+  static fromEnvironment(deployment, dependencies = {}) {
+    return new AzureVariableDelivery({ vaultUrl: vaultUrlFor(deployment),
       tenantId: process.env.CNP_AZURE_TENANT_ID, clientId: process.env.CNP_AZURE_PORTAL_CLIENT_ID,
       tokenFile: process.env.CNP_AZURE_FEDERATED_TOKEN_FILE, ...dependencies });
   }
@@ -92,4 +102,4 @@ class AzureVariableDelivery {
   }
 }
 
-module.exports = { AzureVariableDelivery, federatedAccessToken, secretName };
+module.exports = { AzureVariableDelivery, federatedAccessToken, secretName, vaultUrlFor };

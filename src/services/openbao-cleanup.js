@@ -28,7 +28,7 @@ async function gcp(deployment, names) {
 
 async function azure(deployment, names) {
   if (!names.length) return;
-  const delivery = AzureVariableDelivery.fromEnvironment();
+  const delivery = AzureVariableDelivery.fromEnvironment(deployment);
   const token = await federatedAccessToken({ tenantId: delivery.tenantId, clientId: delivery.clientId,
     tokenFile: delivery.tokenFile, transport: delivery.transport });
   const headers = { Authorization: `Bearer ${token}` };
