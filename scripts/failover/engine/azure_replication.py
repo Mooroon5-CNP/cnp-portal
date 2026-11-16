@@ -44,6 +44,7 @@ import urllib.request
 
 from psycopg import sql
 
+import azure_domains
 import database
 
 DATABASE = 'appdb'
@@ -513,6 +514,8 @@ class AzurePlatform:
         self.copy_rg, self.copy_key = env['COPY_RESOURCE_GROUP'], env.get('COPY_KEY', 'it')
         self.zone_rg, self.zone = env['DNS_ZONE_RESOURCE_GROUP'], env['DNS_ZONE']
         self.vault = env['VAULT_NAME']
+        # Noms publics des apps (azure_domains.py) : désactivés sans PUBLIC_DOMAIN.
+        self.public_domain, self.apps_environment = env.get('PUBLIC_DOMAIN', ''), env.get('CONTAINERAPP_ENVIRONMENT', '')
         self.client_id = env.get('UAMI_CLIENT_ID')
         self.identity_endpoint, self.identity_header = env.get('IDENTITY_ENDPOINT'), env.get('IDENTITY_HEADER')
         self.open = opener or urllib.request.urlopen
@@ -553,6 +556,11 @@ class AzurePlatform:
                 props = item['properties']
                 yield (tags['cnp-app'], tags['cnp-env']), Server(key, item['name'], props['fullyQualifiedDomainName'],
                                                                  props['administratorLogin'])
+
+    def domains(self):
+        if not (self.public_domain and self.apps_environment):
+            return None
+        return azure_domains.Domains(self._call, self._rg(self.primary_rg), self.apps_environment, self.public_domain)
 
     def pairs(self):
         copies = dict(self._servers(self.copy_rg, 'copy-db', self.copy_key))
@@ -637,6 +645,14 @@ def main(argv=None, platform=None):
     engine = Engine(platform or AzurePlatform(), auto=AutoPolicy.from_environ(os.environ))
     if args.command in ('reconcile', 'status'):
         results = engine.reconcile(apply=args.command == 'reconcile')
+        domains = engine.platform.domains() if hasattr(engine.platform, 'domains') else None
+        if domains is not None:
+            # Noms publics des apps (azure_domains.py) : une erreur ici est journalisée et ne touche pas aux bases.
+            try:
+                domains.reconcile(apply=args.command == 'reconcile')
+            except Exception as error:  # noqa: BLE001
+                print(json.dumps({'domain': domains.domain, 'state': 'ERROR', 'error': type(error).__name__,
+                                  'detail': str(error)[:300]}, ensure_ascii=False))
         return 1 if any(r.get('state') == 'ERROR' for r in results) else 0
     pair = engine.find(args.app, args.env)
     if args.command == 'switch':
