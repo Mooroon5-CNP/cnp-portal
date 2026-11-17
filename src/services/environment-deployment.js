@@ -17,6 +17,7 @@ const azure = require('./environment-azure');
 const failover = require('./environment-failover');
 const openbaoRuntime = require('./openbao-runtime');
 const deploymentVariables = require('../models/deployment_variables');
+const observedVariables = require('./openbao-observed');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -363,6 +364,17 @@ async function readiness(dep, revision, { allowMutation = true } = {}) {
   if (azure.isAzure(dep)) return azure.readiness(dep, revision);
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
+  if (observed.failure && observed.image === image(dep, revision)) {
+    return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
+  }
+  const record = deploymentVariables.get(dep.id);
+  if (record) {
+    const release = releases.get(dep.id, revision);
+    if (release?.variable_generation !== record.generation || !release.runtime_refs_json
+      || !observedVariables.gcpMatches(observed.runtimeVariables, JSON.parse(release.runtime_refs_json), record.ownedNames)) {
+      return { phase: 'deploying', message: 'Attente de l’application des références de variables dans Cloud Run.', cloudRunUrl: null };
+    }
+  }
   if (observed.ready && observed.image === image(dep, revision)) {
     if (addresses.usesNativeCloudRun(dep)) {
       // Only probe the provider's HTTPS endpoint, never an arbitrary URL or redirect.
@@ -477,7 +489,8 @@ async function reconcile(dep) {
     const revision = run.head_sha;
     let release = releases.get(dep.id, revision);
     const generation = deploymentVariables.get(dep.id)?.generation || null;
-    if (release && release.variable_generation !== generation && ['published', 'rejected'].includes(release.state)) {
+    if (release && ['published', 'rejected'].includes(release.state)
+      && (release.variable_generation !== generation || (release.state === 'published' && generation && !release.runtime_refs_json))) {
       releases.resetForVariables(dep.id, revision, generation);
       release = releases.get(dep.id, revision);
     }
@@ -506,8 +519,11 @@ async function reconcile(dep) {
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
       const files = manifests(dep, revision);
+      let runtimeRefs = null;
       if (azure.isAzure(dep)) {
-        openbaoRuntime.applyAzureReferences(files, dep, await openbaoRuntime.azureReferences(dep));
+        const prepared = await openbaoRuntime.azureReferences(dep);
+        openbaoRuntime.applyAzureReferences(files, dep, prepared);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = prepared?.references || [];
       } else {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
@@ -529,6 +545,7 @@ async function reconcile(dep) {
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
         const custom = await openbaoRuntime.references(dep);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = custom;
         const occupied = new Set([...container.env, ...runtime].map(item => item.name));
         if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
         if (custom.length) claim.spec.forProvider.template.serviceAccount = openbaoRuntime.gcpRuntimeIdentity(dep);
@@ -537,7 +554,7 @@ async function reconcile(dep) {
       }
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
-        releases.save(dep.id, revision, token, 'published');
+        releases.save(dep.id, revision, token, 'published', { runtimeRefs });
         return { ...result, ...await readiness(dep, revision) };
       }
       const branch = `cnp-release/${dep.id}/${revision}/${generation || 'none'}`;
@@ -553,7 +570,7 @@ async function reconcile(dep) {
           head: branch, base: 'main', body: `Production candidate from successful CI: ${run.html_url}\n\nApprove through CNP Portal so the GitHub App publishes the protected production path.` });
         pr = data;
       }
-      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head });
+      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head, runtimeRefs });
       return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: pr.html_url };
     } finally { releases.release(dep.id, revision, token); }
   })();

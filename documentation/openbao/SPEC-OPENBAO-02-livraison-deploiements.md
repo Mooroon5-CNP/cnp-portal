@@ -4,6 +4,8 @@
 
 **Statut : PARTIEL, ACCEPTATION À FAIRE.** La livraison initiale versionnée, la mise à jour sans nouvelle image CI, le retour à la génération précédente et le nettoyage après disparition des ressources sont codés pour GCP, Azure et le secours AWS. Le formulaire de mise à jour remplace la liste complète ; la production ordinaire garde sa validation manager. Restent les identités/droits cloud et la recette réelle ainsi que la gestion complète des écritures partielles. La SPEC n'est pas `DONE`.
 
+Pour les déploiements ordinaires GCP et Azure, le portail conserve les références attendues avec la publication et compare leurs versions à l'état observé par Crossplane avant d'afficher « déployée ». Une publication plus ancienne sans ces références est préparée à nouveau. Le chemin de secours AWS doit encore vérifier explicitement les références observées par Cloud Run et ECS ; sa vérification actuelle contrôle les images et la santé des services.
+
 ## Résultat fonctionnel
 
 Après une CI réussie, le portail prépare les variables de la version choisie pour le runtime et publie le déploiement par les chemins GitOps existants. L'application reçoit ses variables au démarrage et au redémarrage sans appeler le portail. Le portail indisponible empêche les changements et nouveaux déploiements, mais ne rend pas indisponible une application déjà provisionnée.

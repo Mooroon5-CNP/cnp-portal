@@ -138,6 +138,31 @@ test('changing variables republishes the same successful CI revision and keeps t
   expect(claim.spec.forProvider.template.containers[0].env.some(item => item.name === 'FEATURE')).toBe(true);
 });
 
+test('an unchanged image cannot report success until Cloud Run observes the new secret version', async () => {
+  variableRecords.save(dep.id, { generation: 'new-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const ref = { name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '7' } } };
+  openbaoRuntime.references.mockResolvedValueOnce([ref]);
+  await service.reconcile(dep);
+  const observed = { ready: true, image: `registry.test/project/apps/pixelcam:${revision}`,
+    url: 'https://pixelcam-dev.run.app', runtimeVariables: [{ ...ref,
+      valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '6' } } }] };
+  kubernetes.getV2ServiceStatus.mockResolvedValue(observed);
+  expect(await service.observe(dep)).toMatchObject({ phase: 'deploying' });
+  observed.runtimeVariables = [ref];
+  expect(await service.observe(dep)).toMatchObject({ phase: 'success' });
+});
+
+test('a published variable release without recorded references is republished for observation', async () => {
+  variableRecords.save(dep.id, { generation: 'existing-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const ref = { name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '7' } } };
+  openbaoRuntime.references.mockResolvedValue([ref]);
+  await service.reconcile(dep);
+  db.prepare('UPDATE deployment_releases SET runtime_refs_json = NULL WHERE deployment_id = ? AND revision = ?').run(dep.id, revision);
+  await service.reconcile(dep);
+  expect(published).toHaveLength(2);
+  expect(JSON.parse(releases.get(dep.id, revision).runtime_refs_json)).toEqual([ref]);
+});
+
 test('GCS storage follows the dedicated runtime identity when OpenBao variables are enabled', () => {
   variableRecords.save(dep.id, { generation: 'storage-generation', names: ['FEATURE'], versions: { gcp: 1 } });
   const files = service.manifests(dep, revision);
