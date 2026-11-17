@@ -250,6 +250,9 @@ function tplDatabase(appName, priv, env) {
                     spec: {
                         serviceAccountName: 'db',
                         automountServiceAccountToken: false,
+                        // TOUJOURS sur la VM serveur : son volume local-path est un dossier de ce disque. Créée sur le nœud
+                        // bonus, la base serait perdue au retrait de ce nœud par Cluster Autoscaler.
+                        nodeSelector: { 'node-role.kubernetes.io/control-plane': 'true' },
                         securityContext: { runAsNonRoot: true, runAsUser: POSTGRES_UID, runAsGroup: POSTGRES_UID,
                             fsGroup: POSTGRES_UID, seccompProfile: { type: 'RuntimeDefault' } },
                         containers: [{
@@ -311,6 +314,15 @@ function tplApp(appName, appPort, priv, env, revision) {
                 spec: {
                     serviceAccountName: 'app',
                     automountServiceAccountToken: false,
+                    // De préférence sur la machine de SA base (trafic local, latence minimale) ; en cas de manque de place,
+                    // débordement sur le nœud bonus (trafic vers la base alors chiffré par flannel WireGuard).
+                    affinity: { podAffinity: { preferredDuringSchedulingIgnoredDuringExecution: [{
+                        weight: 100,
+                        podAffinityTerm: {
+                            labelSelector: { matchLabels: { 'app.kubernetes.io/name': appName, 'cnp.io/role': 'db' } },
+                            topologyKey: 'kubernetes.io/hostname',
+                        },
+                    }] } },
                     securityContext: { runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } },
                     containers: [{
                         name: 'app',

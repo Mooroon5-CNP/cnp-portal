@@ -112,6 +112,8 @@ describe('base et secrets', () => {
     expect(sts.spec.template.spec.containers[0].image).toBe(t.POSTGRES_IMAGE);
     expect(sts.spec.template.spec.securityContext).toMatchObject({ runAsUser: 70, fsGroup: 70 });
     expect(sts.spec.volumeClaimTemplates[0].spec.storageClassName).toBe('local-path');
+    // La base ne va jamais sur le nœud bonus (son volume est local au serveur).
+    expect(sts.spec.template.spec.nodeSelector).toEqual({ 'node-role.kubernetes.io/control-plane': 'true' });
   });
 });
 
@@ -122,6 +124,12 @@ describe('application', () => {
     expect(deployment.spec.replicas).toBeUndefined();
     // Suivi en direct de l'état observé (sinon le statut du portail a 10 min de retard).
     expect(dev.find(o => o.spec.forProvider.manifest.kind === 'Deployment').spec.watch).toBe(true);
+    // L'app PRÉFÈRE la machine de sa base (préférence, pas obligation : sinon le nœud bonus ne servirait à rien).
+    const affinity = deployment.spec.template.spec.affinity.podAffinity;
+    expect(affinity.requiredDuringSchedulingIgnoredDuringExecution).toBeUndefined();
+    expect(affinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm).toEqual({
+      labelSelector: { matchLabels: { 'app.kubernetes.io/name': 'todo', 'cnp.io/role': 'db' } },
+      topologyKey: 'kubernetes.io/hostname' });
     expect(deployment.spec.template.spec.containers[0].image).toBe(`111.dkr.ecr.eu-west-3.amazonaws.com/todo:${revision}`);
     expect(inner(dev, 'HorizontalPodAutoscaler').spec).toMatchObject({ minReplicas: 1, maxReplicas: 3 });
     expect(inner(prod, 'HorizontalPodAutoscaler').spec).toMatchObject({ minReplicas: 2, maxReplicas: 5 });
