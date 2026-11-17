@@ -98,11 +98,16 @@ function objectLabels(appName, env) {
  */
 function wrap(appName, env, priv, manifest, wave) {
     const name = `${appName}-${env}-${manifest.kind.toLowerCase()}-${manifest.metadata.name}`;
+    const spec = { providerConfigRef: { name: priv.providerConfig }, forProvider: { manifest } };
+    // Deployment suivi EN DIRECT : sans watch, le provider ne relit l'objet qu'à son sondage (10 min) et l'état observé
+    // (status.atProvider.manifest) que lit le portail reste celui de l'ancienne révision (constaté le 17/11/2026 : le
+    // portail annonçait « démarrage » 10 min après une mise à jour terminée).
+    if (manifest.kind === 'Deployment') spec.watch = true;
     return {
         apiVersion: 'kubernetes.crossplane.io/v1alpha2',
         kind: 'Object',
         metadata: { name, labels: objectLabels(appName, env), annotations: { 'argocd.argoproj.io/sync-wave': String(wave) } },
-        spec: { providerConfigRef: { name: priv.providerConfig }, forProvider: { manifest } },
+        spec,
     };
 }
 
