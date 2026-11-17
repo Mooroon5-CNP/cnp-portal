@@ -43,7 +43,7 @@
             <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
             <span class="log-level-<%= log.level %>"><%= log.level %></span>
             <span class="log-service"><%= log.service %></span>
-            <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : 'badge-info' %>"><%= log.source || '—' %></span></span>
+            <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : (log.source === 'Azure' ? 'badge-purple' : 'badge-info') %>"><%= log.source || '—' %></span></span>
             <span class="obs-log-message"><%= log.message %></span>
           </div>
           <% }) %>

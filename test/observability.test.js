@@ -93,6 +93,15 @@ describe('mise en forme des logs', () => {
     ]);
   });
 
+  test('log Azure Container Apps : source « Azure »', async () => {
+    jest.spyOn(datadogClient, 'searchServiceLogs').mockResolvedValue([
+      { attributes: { timestamp: '2026-11-17T10:17:38Z', service: 'obs-beta-dev', status: 'info', message: 'scaling',
+        tags: ['source:azure.containerapps'], attributes: { azure: { ContainerAppName: 'obs-beta-dev' } } } },
+    ]);
+    const logs = await datadogService.getLogs(['obs-beta-dev']);
+    expect(logs).toEqual([expect.objectContaining({ service: 'obs-beta-dev', message: 'scaling', source: 'Azure' })]);
+  });
+
   test('entrée de requête HTTP Cloud Run', () => {
     expect(datadogService.messageOf({ attributes: { data: { httpRequest: { requestMethod: 'GET', requestUrl: '/x', status: 200 } } } }))
       .toBe('GET /x 200');

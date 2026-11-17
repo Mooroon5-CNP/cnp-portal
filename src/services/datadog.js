@@ -98,6 +98,15 @@ function levelOf(attributes) {
 }
 
 // Le nom de l'app d'un log : Cloud Run → `service` ; ECS → préfixe du flux de logs.
+// Où tournait l'app quand elle a écrit le log : Cloud Run (GCP), ECS (AWS) ou Container Apps (Azure).
+function sourceOf(attributes) {
+  const tags = String(attributes.tags || '');
+  if (attributes.attributes?.aws) return 'ECS';
+  if (tags.includes('source:gcp.cloud.run')) return 'Cloud Run';
+  if (attributes.attributes?.azure || tags.includes('source:azure.containerapps')) return 'Azure';
+  return attributes.source || '';
+}
+
 function serviceOf(attributes, allowed) {
   if (allowed.has(attributes.service)) return attributes.service;
   const stream = attributes.attributes?.aws?.awslogs?.logStream || '';
@@ -121,7 +130,7 @@ async function getLogs(services, { window = resolveWindow(), level = null, searc
       timestamp: a.timestamp || null,
       level: levelOf(a),
       service: serviceOf(a, allowed),
-      source: a.attributes?.aws ? 'ECS' : (String(a.tags || '').includes('source:gcp.cloud.run') ? 'Cloud Run' : (a.source || '')),
+      source: sourceOf(a),
       message: messageOf(a),
     };
   })

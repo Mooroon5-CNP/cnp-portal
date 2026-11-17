@@ -11,7 +11,7 @@
       <div class="page-header">
         <div>
           <div class="page-title">Logs</div>
-          <div class="page-subtitle">Logs des applications de votre équipe — Cloud Run (GCP) et ECS (AWS), via Datadog</div>
+          <div class="page-subtitle">Logs des applications de votre équipe — Cloud Run (GCP), ECS (AWS) et Azure, via Datadog</div>
         </div>
         <% if (can('observability:access:request')) { %>
         <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès Datadog</button>
@@ -42,7 +42,7 @@
           <% } else { %>
             <div class="log-line obs-log-line obs-log-head">
               <span>Date</span><span>Niveau</span><span>Application</span>
-              <span title="Où tournait l'application quand elle a écrit ce log : Cloud Run (GCP, normal) ou ECS (AWS, secours après une bascule)">Source ⓘ</span>
+              <span title="Où tournait l'application quand elle a écrit ce log : Cloud Run (GCP), ECS (AWS, secours après une bascule) ou Azure (Container Apps)">Source ⓘ</span>
               <span>Message</span>
             </div>
             <% logs.forEach(log => { %>
@@ -50,7 +50,7 @@
               <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
               <span class="log-level-<%= log.level %>"><%= log.level %></span>
               <span class="log-service"><%= log.service %></span>
-              <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : 'badge-info' %>"><%= log.source || '—' %></span></span>
+              <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : (log.source === 'Azure' ? 'badge-purple' : 'badge-info') %>"><%= log.source || '—' %></span></span>
               <span class="obs-log-message"><%= log.message %></span>
             </div>
             <% }) %>

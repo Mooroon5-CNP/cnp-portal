@@ -96,12 +96,25 @@
         </div>
       </div>
 
-      <% const silent = metrics.filter(m => !m.cloudRun && !m.ecs); %>
-      <% if (silent.length > 0) { %>
+      <%
+        const azure = new Set(services.filter(s => s.cloud === 'azure').map(s => s.service));
+        const silent = metrics.filter(m => !m.cloudRun && !m.ecs);
+        const silentAzure = silent.filter(m => azure.has(m.service));
+        const silentOther = silent.filter(m => !azure.has(m.service));
+      %>
+      <% if (silentOther.length > 0) { %>
+      <div class="card mb-6">
+        <div class="card-body text-muted" style="font-size:13px;">
+          Sans métrique sur la période : <%= silentOther.map(m => m.service).join(', ') %>.
+          Les métriques Cloud Run arrivent avec quelques minutes de retard et seulement quand l'app reçoit du trafic.
+        </div>
+      </div>
+      <% } %>
+      <% if (silentAzure.length > 0) { %>
       <div class="card">
         <div class="card-body text-muted" style="font-size:13px;">
-          Sans métrique sur la période : <%= silent.map(m => m.service).join(', ') %>.
-          Les métriques Cloud Run arrivent avec quelques minutes de retard et seulement quand l'app reçoit du trafic.
+          Applications Azure : <%= silentAzure.map(m => m.service).join(', ') %>.
+          Le portail n'affiche pas encore les métriques Azure Container Apps : consultez leurs logs, ou Datadog pour les métriques.
         </div>
       </div>
       <% } %>
