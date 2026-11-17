@@ -169,7 +169,8 @@ function getMissingAzureVars(azure = config.azure) {
 
 // Cloud privé k3s (cnp, Runbook/CLOUD-PRIVE-K3S.md) : sortie Terraform `portal_environment` de cnp/aws/private/.
 // Le registre et le domaine n'ont pas de valeur par défaut (valeurs d'infrastructure) ; la ProviderConfig et l'émetteur
-// ont celle de la plateforme (PRIVATE_CERT_ISSUER=letsencrypt-staging pour une recette sans quota Let's Encrypt).
+// ont celle de la plateforme. Garder letsencrypt-prod : avec letsencrypt-staging, le certificat n'est pas reconnu par la
+// vérification de l'adresse (environment-private.readiness) et le portail n'annoncerait jamais « déployée ».
 config.private = {
   ecrRegistry:    process.env.PRIVATE_ECR_REGISTRY,
   appsDomain:     process.env.PRIVATE_APPS_DOMAIN,
