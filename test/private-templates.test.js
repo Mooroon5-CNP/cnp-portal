@@ -150,6 +150,8 @@ describe('application', () => {
     const dev = all('dev'); const prod = all('prod');
     const deployment = inner(dev, 'Deployment');
     expect(deployment.spec.replicas).toBeUndefined();
+    // Suivi en direct de l'état observé (sinon le statut du portail a 10 min de retard).
+    expect(dev.find(o => o.spec.forProvider.manifest.kind === 'Deployment').spec.watch).toBe(true);
     expect(deployment.spec.template.spec.containers[0].image).toBe(`111.dkr.ecr.eu-west-3.amazonaws.com/todo:${revision}`);
     expect(inner(dev, 'HorizontalPodAutoscaler').spec).toMatchObject({ minReplicas: 1, maxReplicas: 3 });
     expect(inner(prod, 'HorizontalPodAutoscaler').spec).toMatchObject({ minReplicas: 2, maxReplicas: 5 });
