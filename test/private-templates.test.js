@@ -169,6 +169,7 @@ describe('application', () => {
     expect(inner(objects, 'Deployment').spec.template.spec.securityContext).toMatchObject({
       runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
     });
+    expect(container.readinessProbe.timeoutSeconds).toBe(5);
   });
 
   test('révision invalide, nom réservé ou registre absent : refus avant toute génération', () => {
