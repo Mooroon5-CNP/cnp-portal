@@ -136,6 +136,7 @@ describe('application', () => {
     expect(inner(objects, 'Middleware').spec.redirectScheme.scheme).toBe('https');
     const container = inner(objects, 'Deployment').spec.template.spec.containers[0];
     expect(container.readinessProbe.httpGet.path).toBe('/health');
+    expect(container.readinessProbe.timeoutSeconds).toBe(5);
   });
 
   test('révision invalide, nom réservé ou registre absent : refus avant toute génération', () => {

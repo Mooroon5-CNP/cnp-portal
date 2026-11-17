@@ -329,7 +329,9 @@ function tplApp(appName, appPort, priv, env, revision) {
                         securityContext: restrictedContainer(),
                         resources: APP_RESOURCES,
                         // Contrat commun aux tiers : /health ne répond 200 que si la base est joignable et inscriptible.
-                        readinessProbe: { httpGet: { path: '/health', port: 'http' }, periodSeconds: 10, failureThreshold: 3 },
+                        // Délai de 5 s (1 s par défaut) : sous charge, /health (requête à la base) dépasse 1 s avec le CPU
+                        // limité, et des pods sains sortaient du trafic (recette HPA du 17/11 : 1 à 2 prêts sur 5).
+                        readinessProbe: { httpGet: { path: '/health', port: 'http' }, timeoutSeconds: 5, periodSeconds: 10, failureThreshold: 3 },
                         livenessProbe: { tcpSocket: { port: 'http' }, initialDelaySeconds: 20, periodSeconds: 20 },
                     }],
                 },
