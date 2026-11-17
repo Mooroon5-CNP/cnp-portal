@@ -51,6 +51,8 @@
                     <code><%= applicationUrl %></code>
                     <% if (deployment.targetCluster === 'azure') { %>
                       <div class="form-hint">Adresse par défaut d’Azure (domaine de l’environnement Container Apps). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
+                    <% } else if (deployment.targetCluster === 'private-aws' && environmentStatus?.phase !== 'success') { %>
+                      <div class="form-hint">Adresse du cloud privé (k3s). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
                     <% } else if (environmentStatus?.phase === 'success' && environmentStatus.applicationUrl === applicationUrl) { %>
                       <div class="form-hint">Adresse HTTPS vérifiée pour la version déployée.</div>
                     <% } else { %>
