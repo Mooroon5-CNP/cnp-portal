@@ -65,7 +65,7 @@ describe('isolation', () => {
 
   test('réseau en refus par défaut ; ouvertures limitées au DNS, à Traefik vers l\'app et à l\'app vers sa base', () => {
     const policies = all('dev').map(o => o.spec.forProvider.manifest).filter(m => m.kind === 'NetworkPolicy');
-    expect(policies.map(p => p.metadata.name).sort()).toEqual(['app-vers-base', 'base-depuis-app', 'dns', 'refus-par-defaut', 'traefik-vers-app']);
+    expect(policies.map(p => p.metadata.name).sort()).toEqual(['app-vers-base', 'base-depuis-app', 'dns', 'refus-par-defaut', 'traefik-vers-acme', 'traefik-vers-app']);
     expect(policies.find(p => p.metadata.name === 'refus-par-defaut').spec).toEqual({ podSelector: {}, policyTypes: ['Ingress', 'Egress'] });
     // Aucune ouverture par plage d'adresses (donc ni Internet ni l'IMDS 169.254.169.254).
     expect(JSON.stringify(policies)).not.toContain('ipBlock');

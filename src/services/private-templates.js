@@ -158,6 +158,14 @@ function tplPolicies(appName, priv, env) {
                 from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
                     podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
                 ports: [{ protocol: 'TCP', port: 'http' }] }] } },
+        // Validation HTTP-01 de Let's Encrypt : cert-manager crée son pod de réponse DANS le namespace de l'app. Sans cette
+        // ouverture, le refus par défaut le rend injoignable (502) et le certificat n'est jamais émis (constaté le 17/11/2026
+        // au premier déploiement de cnp-demo-prive).
+        { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: 'traefik-vers-acme', namespace: ns },
+            spec: { podSelector: { matchLabels: { 'acme.cert-manager.io/http01-solver': 'true' } }, policyTypes: ['Ingress'], ingress: [{
+                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+                    podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
+                ports: [{ protocol: 'TCP', port: 8089 }] }] } },
         { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: 'app-vers-base', namespace: ns },
             spec: { podSelector: role('app'), policyTypes: ['Egress'], egress: [{
                 to: [{ podSelector: role('db') }], ports: [{ protocol: 'TCP', port: DB_PORT }] }] } },
