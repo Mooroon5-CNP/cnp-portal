@@ -40,7 +40,20 @@ function service({ model = metadata, clientFor = domain => OpenBaoClient.fromEnv
         catch (error) {
           if (error.status !== 404) throw error;
         }
-        versions[domain] = await client.write(deployment.appName, deployment.environment, payload, cas);
+        try {
+          versions[domain] = await client.write(deployment.appName, deployment.environment, payload, cas);
+        } catch (error) {
+          // A lost HTTP response can follow a successful KV write. The unique
+          // generation marker lets us recover its version without writing again.
+          let observed;
+          try { observed = await client.read(deployment.appName, deployment.environment); }
+          catch (_) { /* The original write error remains the useful cause. */ }
+          if (!observed || observed.version <= cas
+            || observed.values[GENERATION_KEY] !== generation
+            || Object.keys(observed.values).length !== Object.keys(payload).length
+            || Object.entries(payload).some(([name, value]) => observed.values[name] !== value)) throw error;
+          versions[domain] = observed.version;
+        }
         written.push({ domain, client, version: versions[domain] });
         const checked = await client.read(deployment.appName, deployment.environment, versions[domain]);
         if (checked.values[GENERATION_KEY] !== generation) throw new Error(`Version OpenBao ${domain} incohérente.`);

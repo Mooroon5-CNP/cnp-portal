@@ -46,6 +46,32 @@ test('a failed AWS write never publishes a partial generation', async () => {
   expect(clients.aws.destroyVersion).not.toHaveBeenCalled();
 });
 
+test('recovers a write whose response was lost after OpenBao stored the generation', async () => {
+  const { clients, stores, variables } = fixture();
+  clients.aws.write.mockImplementationOnce(async (_app, _environment, values, cas) => {
+    stores.aws.version = cas + 1; stores.aws.values = { ...values };
+    throw new Error('response lost');
+  });
+  const result = await variables.prepare(deployment, { FEATURE: 'on' });
+  expect(result.versions).toEqual({ gcp: 1, aws: 1 });
+  expect(metadata.save).toHaveBeenCalledWith(deployment.id, result);
+  expect(clients.aws.destroyVersion).not.toHaveBeenCalled();
+});
+
+test('cleans a recovered provisional write when a later check fails', async () => {
+  const { clients, stores, variables } = fixture();
+  clients.aws.write.mockImplementationOnce(async (_app, _environment, values, cas) => {
+    stores.aws.version = cas + 1; stores.aws.values = { ...values };
+    throw new Error('response lost');
+  });
+  clients.aws.read.mockImplementationOnce(async () => { throw Object.assign(new Error('missing'), { status: 404 }); })
+    .mockImplementationOnce(async () => ({ version: 1, values: { FEATURE: 'on', [GENERATION_KEY]: 'generation-1' } }))
+    .mockImplementationOnce(async () => ({ version: 1, values: { FEATURE: 'on', [GENERATION_KEY]: 'wrong' } }));
+  await expect(variables.prepare(deployment, { FEATURE: 'on' })).rejects.toThrow('incohérente');
+  expect(clients.aws.destroyVersion).toHaveBeenCalledWith('sample-app', 'prod', 1);
+  expect(metadata.save).not.toHaveBeenCalled();
+});
+
 test('a failed provisional cleanup is explicit and never publishes metadata', async () => {
   const { clients, variables } = fixture();
   clients.aws.write.mockRejectedValueOnce(new Error('AWS unavailable'));
