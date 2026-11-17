@@ -538,6 +538,23 @@ async function getAzureObject(api, group, version, plural, name) {
   }
 }
 
+/**
+ * Cloud privé k3s : Object de provider-kubernetes d'un environnement (labels posés par private-templates.objectLabels),
+ * résumés par privateAppStatusFrom. Droit requis : rôle cnp-portal-private-read (cnp, gcp/11-portal.tf).
+ */
+async function getPrivateAppStatus(appName, environment, { expectedImage } = {}) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  const { objectLabels, privateAppStatusFrom } = require('../services/private-templates');
+  const selector = Object.entries(objectLabels(appName, environment)).map(([k, v]) => `${k}=${v}`).join(',');
+  try {
+    const { body } = await api.listClusterCustomObject('kubernetes.crossplane.io', 'v1alpha2', 'objects',
+      undefined, undefined, undefined, undefined, selector);
+    return privateAppStatusFrom(body.items || [], { expectedImage });
+  } catch (err) {
+    handleError(err, `getPrivateAppStatus(${appName}-${environment})`);
+  }
+}
+
 async function getAzureAppStatus(appName, { serverName, databaseName, containerAppName }) {
   const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
   try {
@@ -686,6 +703,7 @@ module.exports = {
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
   getCleanupResource, CLEANUP_KINDS,
+  getPrivateAppStatus,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

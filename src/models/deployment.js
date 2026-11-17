@@ -125,7 +125,8 @@ module.exports = {
         const id = uuidv4();
         const now = new Date().toISOString();
         const enc = configRepoToken ? encryptToken(configRepoToken) : null;
-        const cluster = ['aws', 'azure'].includes(targetCluster) ? targetCluster : 'gcp';
+        // « aws » = ancien chemin ECS ; « private-aws » = cloud privé k3s (jamais confondus : voir le cadrage cnp).
+        const cluster = ['aws', 'azure', 'private-aws'].includes(targetCluster) ? targetCluster : 'gcp';
         insertStmt.run(id, appName, githubRepoUrl, appPort || null, enc, ownerUserId, ownerTeamId || null, 'configuring', persistentStorage ? 1 : 0, cluster, environment, now, now);
         if (failoverRequested) db.prepare('UPDATE deployments SET failover_requested=1 WHERE id=?').run(id);
         if (database !== null && database !== 'postgres') throw new Error('Base inconnue.');

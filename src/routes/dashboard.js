@@ -13,6 +13,7 @@ const { readDashboardSources } = require('../services/dashboard-sources');
 const applicationAddress = require('../services/application-address');
 const failover = require('../services/environment-failover');
 const { azureAppUrl } = require('../services/azure-templates');
+const { privateAppUrl } = require('../services/private-templates');
 
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -76,10 +77,11 @@ router.get('/', requireAuth, async (req, res) => {
       let url = null;
       try {
         if (dep.targetCluster === 'azure') url = env ? azureAppUrl(dep.appName, config.azure, env) : null;
+        else if (dep.targetCluster === 'private-aws') url = env ? privateAppUrl(dep.appName, config.private, env) : null;
         else if (!env || applicationAddress.usesNativeCloudRun(dep)) url = dep.cloudRunUrl || null;
         else url = applicationAddress.url(dep);
       } catch (_) { url = null; }
-      const cloud = dep.targetCluster === 'azure' ? 'Azure'
+      const cloud = dep.targetCluster === 'azure' ? 'Azure' : dep.targetCluster === 'private-aws' ? 'Privé (k3s)'
         : (dep.failoverRequested || failover.enabled(dep)) ? 'GCP, secours AWS' : 'GCP';
       return {
         name:   row.app_name,
