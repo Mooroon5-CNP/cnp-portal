@@ -89,6 +89,47 @@ NAMES = {
 TASK_FAMILY = r'cnp-failover-platform-(bootstrap|worker)'
 
 
+def aws_runtime_variables_match(expected, containers):
+    """Require the exact AWS pins before promoting an ECS task definition."""
+    if not isinstance(expected, dict) or not isinstance(containers, list) or len(containers) != 1:
+        return False
+    owned = expected.get('ownedNames')
+    aws_expected = expected.get('aws')
+    aws_secrets = containers[0].get('secrets')
+    if not all(isinstance(value, list) for value in (owned, aws_expected, aws_secrets)):
+        return False
+    if len(set(owned)) != len(owned) or any(not isinstance(name, str) for name in owned):
+        return False
+    aws_now = {item.get('name'): item for item in aws_secrets if isinstance(item, dict)}
+    names = [item.get('name') for item in aws_expected if isinstance(item, dict)]
+    if len(names) != len(aws_expected) or len(set(names)) != len(names) or any(name not in owned for name in names):
+        return False
+    if any((name in aws_now) != (name in names) for name in owned):
+        return False
+    return all(item.get('valueFrom') and aws_now.get(item['name'], {}).get('valueFrom') == item['valueFrom']
+               for item in aws_expected)
+
+
+def runtime_variables_match(expected, cloudrun, containers):
+    """Compare the published pins with the provider's running Cloud Run and ECS configuration."""
+    if not aws_runtime_variables_match(expected, containers):
+        return False
+    gcp_expected, owned = expected.get('gcp'), expected.get('ownedNames')
+    gcp_env = (cloudrun.get('template') or {}).get('containers', [{}])[0].get('env')
+    if not isinstance(gcp_expected, list) or not isinstance(gcp_env, list):
+        return False
+    gcp_now = {item.get('name'): item for item in gcp_env if isinstance(item, dict)}
+    names = [item.get('name') for item in gcp_expected if isinstance(item, dict)]
+    if len(names) != len(gcp_expected) or len(set(names)) != len(names) or any(name not in owned for name in names):
+        return False
+    if any((name in gcp_now) != (name in names) for name in owned):
+        return False
+    return all(item.get('valueSource', {}).get('secretKeyRef', {}).get('secret')
+                and item.get('valueSource', {}).get('secretKeyRef', {}).get('version')
+                and gcp_now.get(item['name'], {}).get('valueSource', {}).get('secretKeyRef') == item['valueSource']['secretKeyRef']
+                for item in gcp_expected)
+
+
 def google_session(session=None):
     """Identifiants par défaut de l'environnement (Workload Identity dans le cluster)."""
     if session is None:
@@ -291,6 +332,11 @@ def execute(request):
         task = tasks[0] if tasks else None
         observed = (task or {}).get('status', {}).get('atProvider', {})
         registered = bool(task) and ready(task) and images['aws'] in (observed.get('containerDefinitions') or '')
+        if registered and request.get('runtime_variables') is not None:
+            try:
+                registered = aws_runtime_variables_match(request['runtime_variables'], json.loads(observed['containerDefinitions']))
+            except (ValueError, TypeError, KeyError):
+                registered = False
         arn = observed.get('arn') or ''
         if not registered or not re.fullmatch(rf'arn:aws:ecs:{re.escape(AWS_REGION)}:{re.escape(AWS_ACCOUNT)}:task-definition/[A-Za-z0-9_-]+:\d+', arn):
             return {'verified': False, 'message': 'En attente de la nouvelle définition de tâche chez AWS.'}
@@ -319,13 +365,18 @@ def execute(request):
             target_ready &= bool(targets) and all(value['TargetHealth']['State'] == 'healthy' for value in targets)
         images = request.get('images')
         images_ready = not images
-        if images and services:
+        variable_expectation = request.get('runtime_variables')
+        variables_ready = variable_expectation is None
+        if (images or variable_expectation is not None) and services:
             containers = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']['containerDefinitions']
             primary_image = cloudrun.get('template', {}).get('containers', [{}])[0].get('image')
-            images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
-        return {'verified': primary_ready and standby_ready and target_ready and images_ready,
+            if images:
+                images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
+            if variable_expectation is not None:
+                variables_ready = runtime_variables_match(variable_expectation, cloudrun, containers)
+        return {'verified': primary_ready and standby_ready and target_ready and images_ready and variables_ready,
             'primary_ready': primary_ready, 'standby_ready': standby_ready, 'target_ready': target_ready,
-            'images_ready': images_ready, 'observed_at': int(time.time())}
+            'images_ready': images_ready, 'variables_ready': variables_ready, 'observed_at': int(time.time())}
     if action == 'health':
         import boto3, urllib.request, ssl, botocore
         from botocore.config import Config
