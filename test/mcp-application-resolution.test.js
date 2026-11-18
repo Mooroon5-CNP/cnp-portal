@@ -1,7 +1,7 @@
 'use strict';
 
 const { createApplicationResolver } = require('../apps/orchestrator/src/generation/application');
-const env = { GENAI_ENABLED: 'true', GENAI_API_KEY: 'not-a-real-key', GENAI_MODEL: 'test-model' };
+const env = { MCP_MISTRAL_ENABLED: 'true', REPORT_MODEL_API_KEY: 'not-a-real-key', MCP_MISTRAL_MODEL: 'mistral-test-model' };
 const applications = [{ applicationId: 'app-2-dancingduck', name: 'Dancing Duck', privateKey: 'never-forward' }];
 
 test('semantic matching receives only the message and minimal authorized catalog', async () => {
@@ -25,10 +25,10 @@ test('low-confidence and out-of-catalog suggestions keep clarification pending',
 });
 
 test('disabled semantic AI needs no credentials and does not generate', () => {
-  expect(createApplicationResolver({ env: { GENAI_ENABLED: 'false' } })).toBeUndefined();
+  expect(createApplicationResolver({ env: { MCP_MISTRAL_ENABLED: 'false' } })).toBeUndefined();
 });
 
 test('an enabled but incomplete configuration fails without exposing credentials', async () => {
-  const resolve = createApplicationResolver({ env: { GENAI_ENABLED: 'true' } });
+  const resolve = createApplicationResolver({ env: { MCP_MISTRAL_ENABLED: 'true' } });
   await expect(resolve({ message: 'le canard', applications })).rejects.toThrow('GENAI_NOT_CONFIGURED');
 });

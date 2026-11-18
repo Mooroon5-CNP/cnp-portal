@@ -18,7 +18,7 @@ ils restent à revalider sur la combinaison actuelle. Voir
 | `/logs` | Logs bornés, datés, expurgés, avec pagination/troncature | Credentials Datadog et tags corrects |
 | `/finops` | Analyse d’une application et d’un environnement | Métriques nécessaires ; sinon `INSUFFICIENT_DATA` |
 | Clarifications | Application et environnement demandés en plusieurs tours | Pas de choix implicite de l’environnement |
-| Description naturelle et synthèse | Résolution d’un nom comme « le canard » et reformulation | Configuration `GENAI_*` ; qualité réelle à vérifier |
+| Description naturelle et synthèse | Résolution d’un nom comme « le canard » et reformulation | Accès Scaleway Mistral du portail ; qualité réelle à vérifier |
 | FinOps équipe / facturation | Spécifications rédigées | Pas encore implémenté ; coûts V1 toujours `null` |
 
 Une source absente reste absente. La clé IA ne fournit ni métriques CPU/mémoire,
@@ -94,12 +94,13 @@ secrets runtime. Ne jamais les copier dans un chat, une capture ou un fichier su
 | Runtime Cloud Run via Crossplane | `KUBE_API_URL`, `KUBE_TOKEN`, `KUBE_CA_CERT` | Image observée et conditions du service |
 | Logs Datadog | `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE` | Recherche sur `service:<applicationId> env:<dev|prod>` |
 | Métriques FinOps | Datadog + `MCP_CPU_PERCENT_METRIC`, `MCP_MEMORY_PERCENT_METRIC` | Pourcentages 0–100 avec couverture observée |
-| Jev | `TYPESAFE_ENABLED`, `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`, `TYPESAFE_TIMEOUT_MS` | Classification des demandes libres ambiguës |
-| Génération | `GENAI_ENABLED`, `GENAI_API_KEY`, `GENAI_MODEL`, optionnel `GENAI_BASE_URL` | Synthèse et résolution sémantique autorisée |
+| Scaleway Mistral | `REPORT_MODEL_API_KEY`, `SCW_DEFAULT_PROJECT_ID`, `VOICE_DEPLOYMENT_ANALYSIS_MODEL` ; optionnel `MCP_MISTRAL_MODEL` | Classification des demandes ambiguës, synthèse et résolution des noms d’application |
 | Facturation | Aucun adaptateur connecté en V1 | Coûts inconnus, jamais inventés |
 
-Le launcher reprend les `TYPESAFE_*` de MCP-CNP avec priorité aux valeurs du
-portail. `CLOUD_ENV_FILE` sélectionne les paramètres cloud importés. Voir le
+Le chat utilise le Gateway Scaleway et la clé déjà configurée dans le `.env` local. Seuls les
+modèles dont l’identifiant commence par `mistral-` sont acceptés. `MCP_MISTRAL_ENABLED=false`
+désactive la synthèse et la résolution sémantique ; `MCP_ROUTING_MODE=local` évite
+aussi les appels IA pour le routage. `CLOUD_ENV_FILE` sélectionne les paramètres cloud importés. Voir le
 [guide cloud](Cloud/README.md) et les
 [changements reproductibles](Cloud/UpdatedCloudThings.md) lors d’un changement
 de compte, projet ou région.
@@ -151,23 +152,24 @@ Le contexte est conservé par conversation pendant 15 minutes, au plus 20 demand
 pendantes. Une nouvelle commande remplace l’intention précédente. Un environnement
 absent est demandé ; le serveur ne le choisit pas pour l’utilisateur.
 
-Les noms exacts et commandes fonctionnent sans IA. En mode hybride, Jev intervient
+Les noms exacts et commandes fonctionnent sans IA. En mode hybride, Mistral intervient
 pour les demandes libres ambiguës ; s’il ne répond pas, aucun outil qu’il aurait
 sélectionné n’est exécuté. La résolution « le canard » ne reçoit que les noms et
 identifiants autorisés. Sa proposition est revalidée ; une ambiguïté reste ouverte.
 
-Pour activer la génération, configurer côté portail puis redémarrer :
+Pour activer la génération, renseigner les accès Scaleway dans le `.env` du portail,
+puis redémarrer :
 
 ```dotenv
-GENAI_ENABLED=true
-GENAI_BASE_URL=https://api.openai.com/v1
-GENAI_API_KEY=<clé locale>
-GENAI_MODEL=<modèle accessible compatible Responses et sorties structurées>
+REPORT_MODEL_API_KEY=<clé Scaleway existante>
+SCW_DEFAULT_PROJECT_ID=<identifiant du projet Scaleway>
+VOICE_DEPLOYMENT_ANALYSIS_MODEL=mistral-small-3.2-24b-instruct-2506
+MCP_MISTRAL_ENABLED=true
 ```
 
-La requête utilise Responses avec `store=false`, sans outils d’écriture. Les
+La requête utilise Scaleway `/chat/completions`, sans outils d’écriture. Les
 identités, cookies et credentials ne sont pas envoyés au modèle. Une panne de
-synthèse conserve les résultats structurés. Les tests simulés du SDK ne prouvent
+synthèse conserve les résultats structurés. Les tests simulés ne prouvent
 ni l’accès réel au modèle, ni sa qualité sémantique.
 
 ## Interpréter les preuves dev/prod
@@ -225,7 +227,7 @@ Aucun réconciliateur de déploiement, changement cloud ou appel IA payant n’e
 Les credentials ne sont pas imprimés et la base est supprimée à la fin.
 
 La commande `test:live-sources -- <app> --sources-only` permet aussi de lire les
-sources, sans Jev/génération ; elle vérifie dev uniquement et ne remplace pas la
+sources, sans appel Mistral ; elle vérifie dev uniquement et ne remplace pas la
 recette multi-environnements authentifiée.
 
 ### Résultats observés le 26 octobre 2026
