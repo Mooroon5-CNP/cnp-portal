@@ -18,6 +18,7 @@ const yaml = require('js-yaml');
 const DUMP = { lineWidth: -1, noRefs: true };
 const DB_NAME = 'appdb';
 const DB_ADMIN = 'pgadmin';
+const RUNTIME_USER = 'cnp_runtime';
 const SECRET_KEY_NAME = 'db-password'; // nom du secret côté Container App
 const CROSSPLANE_NAMESPACE = 'crossplane-system';
 const STARTER_IMAGE = 'mcr.microsoft.com/k8se/quickstart:latest';
@@ -67,16 +68,31 @@ function azureNames(appName, azure, env) {
         throw new Error(`Nom d'application trop long pour Azure avec un environnement (${appName.length} > ${MAX_APP_NAME_WITH_ENV}) : ${appName}`);
     }
     const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-${env}-${azure.nameSuffix}`;
-    if (server.length > 63) {
-        throw new Error(`Nom de serveur PostgreSQL trop long (${server.length} > 63) : ${server}`);
+    // Serveur de copie (prod seulement) : même nom, clé de la région de copie à la place de celle du calcul.
+    const copyServer = `${azure.namePrefix}-${azure.copyRegionKey || 'it'}-${appName}-${env}-${azure.nameSuffix}`;
+    for (const name of [server, copyServer]) {
+        if (name.length > 63) throw new Error(`Nom de serveur PostgreSQL trop long (${name.length} > 63) : ${name}`);
     }
+    const serverHost = `${server}.postgres.database.azure.com`;
+    // Prod : l'app passe par un ALIAS DNS par app (CNAME <app>-prod-db dans la zone privée PostgreSQL), tenu par le moteur
+    // de réplication (cnp-portal/scripts/failover/engine/azure_replication.py) : il désigne le serveur actif, France ou
+    // copie, et une bascule ne réécrit que lui. Dev : le serveur directement (pas de copie, rien à basculer).
+    const zone = String(azure.dbDnsZoneId || '').split('/').pop();
+    const alias = `${appName}-${env}-db.${zone}`;
     return {
         server,
+        copyServer,
         database: `${appName}-${env}-appdb`,
         passwordSecret: `${appName}-${env}-pg-password`,
+        // Rôle applicatif cnp_runtime (comme sur GCP) : Secret Kubernetes créé par le portail (platform_secrets.py), recopié
+        // dans la Container App et dans le Key Vault, où le job de réplication le lit pour créer le rôle sur les serveurs.
+        runtimeSecret: `${appName}-${env}-pg-runtime`,
+        runtimeVaultSecret: `${appName}-${env}-pg-runtime-password`,
         nameSecret: `${appName}-${env}-containerapp-secretname`,
         containerApp: `${appName}-${env}`,
-        host: `${server}.postgres.database.azure.com`,
+        serverHost,
+        alias,
+        host: env === 'prod' ? alias : serverHost,
     };
 }
 
@@ -118,7 +134,7 @@ function tplAzureFlexibleServer(appName, azure, env) {
     return header(
         `Serveur PostgreSQL de l'app ${appName} (tier souveraineté, Azure), créé par Crossplane via le portail.\n` +
         `Un serveur par app et par environnement : son administrateur ne voit que les bases de cette app. Tag cnp-env=${tagEnv}` +
-        `${tagEnv === 'dev' ? ' : non copié en Irlande' : ' : repris par le job de copie vers l\'Irlande'}.\n` +
+        `${tagEnv === 'dev' ? ' : non copié' : ' : répliqué vers son serveur de copie (flexibleserver-copy.yaml) ; l\'app y accède par l\'alias ${n.alias}'}.\n` +
         `Le mot de passe est généré dans le Secret ${n.passwordSecret} (${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
@@ -181,7 +197,7 @@ function tplAzureContainerApp(appName, appPort, azure, env, revision) {
                 registry: [{ server: azure.acrLoginServer, identity: azure.pullIdentityId }],
                 secret: [{
                     nameSecretRef: { name: n.nameSecret, namespace: CROSSPLANE_NAMESPACE, key: 'name' },
-                    valueSecretRef: { name: n.passwordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                    valueSecretRef: { name: n.runtimeSecret || n.passwordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
                 }],
                 ingress: {
                     externalEnabled: true,
@@ -210,7 +226,8 @@ function tplAzureContainerApp(appName, appPort, azure, env, revision) {
                             envVar('DB_HOST', n.host),
                             envVar('DB_PORT', 5432),
                             envVar('DB_NAME', DB_NAME),
-                            envVar('DB_USER', DB_ADMIN),
+                            // L'app n'a jamais l'administrateur du serveur : cnp_runtime, propriétaire de ses tables seulement.
+                            envVar('DB_USER', n.runtimeSecret ? RUNTIME_USER : DB_ADMIN),
                             { name: 'DB_PASSWORD', secretName: SECRET_KEY_NAME },
                         ],
                     }],
@@ -227,7 +244,85 @@ function tplAzureContainerApp(appName, appPort, azure, env, revision) {
     ) + yaml.dump(doc, DUMP);
 }
 
-function tplAzureKustomization() {
+/**
+ * Serveur de COPIE de la base de prod (décision du 15/11/2026 : un serveur de copie par app, comme la RDS de secours
+ * par app côté AWS). Dans la région de copie (Italie), créé en même temps que le serveur de l'app (vague 0).
+ *
+ * MÊME administrateur et MÊME mot de passe que le serveur de l'app (le Secret généré par celui-ci) : depuis le 16/11/2026
+ * la copie est une réplication logique, et une bascule ne fait que réécrire l'alias DNS de l'app ; l'app doit pouvoir se
+ * connecter au serveur de copie avec son secret inchangé. Crossplane attend que le Secret existe (il est écrit dès la
+ * première réconciliation du serveur de l'app, avant même sa création côté Azure) : les deux serveurs restent en parallèle.
+ * Le moteur de réplication le retrouve par ses tags (cnp-role=copy-db, cnp-app, cnp-env). Il disparaît avec la prod.
+ */
+function tplAzureCopyServer(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
+    const doc = {
+        apiVersion: 'dbforpostgresql.azure.upbound.io/v1beta1',
+        kind: 'FlexibleServer',
+        metadata: { name: n.copyServer, annotations: { 'argocd.argoproj.io/sync-wave': '0' } },
+        spec: {
+            forProvider: {
+                location: azure.copyLocation,
+                resourceGroupName: azure.copyResourceGroup,
+                version: '16',
+                skuName: 'B_Standard_B1ms',
+                storageMb: 32768,
+                autoGrowEnabled: false,
+                delegatedSubnetId: azure.copyDbSubnetId,
+                privateDnsZoneId: azure.dbDnsZoneId,
+                publicNetworkAccessEnabled: false,
+                administratorLogin: DB_ADMIN,
+                autoGeneratePassword: false,
+                administratorPasswordSecretRef: { name: n.passwordSecret, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                backupRetentionDays: 7,
+                geoRedundantBackupEnabled: false,
+                tags: {
+                    'cnp-role': 'copy-db', 'cnp-app': appName, 'cnp-env': env,
+                    'managed-by': 'crossplane', project: 'cnp', tier: 'souverainete',
+                },
+            },
+            providerConfigRef: { name: 'default' },
+        },
+    };
+    return header(
+        `Serveur de COPIE de la base de l'app ${appName} (${env}), dans la région de copie (${azure.copyLocation}).\n` +
+        'Réplique logique du serveur actif (moteur azure_replication.py) ; l\'alias DNS de l\'app désigne l\'un ou l\'autre.\n' +
+        `Même administrateur et même mot de passe que le serveur de l'app (Secret ${n.passwordSecret}, ${CROSSPLANE_NAMESPACE}).`
+    ) + yaml.dump(doc, DUMP);
+}
+
+/**
+ * Mots de passe recopiés dans le Key Vault, où le job de réplication les lit : celui de l'administrateur (« <app>-<env>-pg-password »,
+ * le même sur les deux serveurs de prod) et celui du rôle applicatif (« <app>-<env>-pg-runtime-password »). Ils vivent dans des
+ * Secrets Kubernetes, que le job (qui tourne dans Azure) ne peut pas lire. Dev et prod : le job crée cnp_runtime partout.
+ * Vague 1 : les mots de passe existent dès la création du serveur.
+ */
+function tplAzureKeyVaultSecrets(appName, azure, env) {
+    const n = azureNames(appName, azure, env);
+    const secret = (name, source) => ({
+        apiVersion: 'keyvault.azure.upbound.io/v1beta1',
+        kind: 'Secret',
+        metadata: { name, annotations: { 'argocd.argoproj.io/sync-wave': '1' } },
+        spec: {
+            forProvider: {
+                name,
+                keyVaultId: azure.keyVaultId,
+                valueSecretRef: { name: source, namespace: CROSSPLANE_NAMESPACE, key: 'password' },
+                tags: { 'cnp-app': appName, 'cnp-env': env, 'managed-by': 'crossplane' },
+            },
+            providerConfigRef: { name: 'default' },
+        },
+    });
+    return header(
+        `Mot de passe PostgreSQL de l'app ${appName} (${env}) dans le Key Vault, pour le moteur de réplication (lecture seule).`
+    ) + yaml.dump(secret(n.passwordSecret, n.passwordSecret), DUMP) + '---\n'
+        + yaml.dump(secret(n.runtimeVaultSecret, n.runtimeSecret), DUMP);
+}
+
+// Fichiers propres à la prod : copie de la base dans la région de copie.
+const PROD_COPY_FILES = ['flexibleserver-copy.yaml'];
+
+function tplAzureKustomization(env) {
     return yaml.dump({
         apiVersion: 'kustomize.config.k8s.io/v1beta1',
         kind: 'Kustomization',
@@ -236,19 +331,24 @@ function tplAzureKustomization() {
             'flexibleserver.yaml',
             'flexibleserver-database.yaml',
             'containerapp-claim.yaml',
+            ...(ENVIRONMENTS.includes(env) ? ['keyvault-secrets.yaml'] : []),
+            ...(env === 'prod' ? PROD_COPY_FILES : []),
         ],
     }, DUMP);
 }
 
 /** Fichiers écrits dans le config-repo : { chemin relatif à apps/<app>/crossplane : contenu }. */
 function azureCrossplaneFiles(appName, appPort, azure, env, revision) {
-    return {
+    const files = {
         'containerapp-secretname.yaml': tplAzureSecretName(appName, azure, env),
         'flexibleserver.yaml': tplAzureFlexibleServer(appName, azure, env),
         'flexibleserver-database.yaml': tplAzureDatabase(appName, azure, env),
         'containerapp-claim.yaml': tplAzureContainerApp(appName, appPort, azure, env, revision),
-        'kustomization.yaml': tplAzureKustomization(),
     };
+    if (ENVIRONMENTS.includes(env)) files['keyvault-secrets.yaml'] = tplAzureKeyVaultSecrets(appName, azure, env);
+    if (env === 'prod') files['flexibleserver-copy.yaml'] = tplAzureCopyServer(appName, azure, env);
+    files['kustomization.yaml'] = tplAzureKustomization(env);
+    return files;
 }
 
 /** Chemins du config-repo créés pour une app Azure (suppression à l'offboarding). */
@@ -298,10 +398,17 @@ function azureRepoVariables(azure) {
 }
 
 /**
- * URL publique d'une app Azure (domaine par défaut de l'environnement Container Apps). Avec `env`, le nom de la
- * Container App est « <app>-<env> » (chemin dev/prod) ; sans `env`, c'est le nom de l'app (ancien chemin).
+ * URL publique d'une app Azure. Avec `env`, le nom de la Container App est « <app>-<env> » (chemin dev/prod) ; sans
+ * `env`, c'est le nom de l'app (ancien chemin).
+ * Avec AZURE_PUBLIC_DOMAIN (eu.mooroon5.fr depuis le 16/11/2026, zone Azure : azure/15-public-dns.tf du dépôt cnp), les
+ * apps dev/prod sont servies sous <app>.<domaine> (prod) et <app>-dev.<domaine> (dev). Le nom et son certificat géré
+ * sont posés par le job de réplication (scripts/failover/engine/azure_domains.py) quelques minutes après la création de
+ * la Container App ; l'adresse par défaut de l'environnement reste valable.
  */
 function azureAppUrl(appName, azure, env) {
+    if ((env === 'dev' || env === 'prod') && azure.publicDomain) {
+        return `https://${env === 'prod' ? appName : `${appName}-dev`}.${azure.publicDomain}`;
+    }
     if (!azure.environmentDomain) return null;
     const containerApp = (env === 'dev' || env === 'prod') ? `${appName}-${env}` : appName;
     return `https://${containerApp}.${azure.environmentDomain}`;
@@ -311,4 +418,5 @@ module.exports = {
     ENVIRONMENTS, MAX_APP_NAME_WITH_ENV, validateAzureAppName, azureNames, azureCrossplaneFiles, azureConfigRepoPaths,
     tplAzureCiWorkflow, azureRepoVariables, azureAppUrl,
     tplAzureFlexibleServer, tplAzureDatabase, tplAzureSecretName, tplAzureContainerApp, tplAzureKustomization,
+    tplAzureCopyServer, tplAzureKeyVaultSecrets, PROD_COPY_FILES,
 };

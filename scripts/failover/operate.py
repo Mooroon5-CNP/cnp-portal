@@ -70,11 +70,11 @@ def bootstrap_operations(action, introspected):
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
 # l'environnement (pod du portail, sinon poste de l'opérateur et `kube_context` du profil).
 PROJECT = os.environ.get('GCP_PROJECT', 'cnp-terraform-512313')
-AWS_ACCOUNT = os.environ.get('CNP_AWS_ACCOUNT_ID', '804210702561')
+AWS_ACCOUNT = os.environ.get('CNP_AWS_ACCOUNT_ID', '626278345026')
 AWS_REGION = os.environ.get('CNP_AWS_REGION', 'eu-west-3')
 GCP_REGION = os.environ.get('GCP_REGION', 'europe-west9')
 BASE_DOMAIN = os.environ.get('APPLICATIONS_BASE_DOMAIN', 'apps.mooroon5.fr')
-ALB_DNS = os.environ.get('CNP_AWS_ALB_DNS_NAME', 'cnp-alb-1733646164.eu-west-3.elb.amazonaws.com')
+ALB_DNS = os.environ.get('CNP_AWS_ALB_DNS_NAME', 'cnp-alb-1261477539.eu-west-3.elb.amazonaws.com')
 # Ressources Crossplane observées (cluster-scoped). La version est celle que le cluster préfère, comme le faisait `kubectl get`.
 OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-gcp-db'),
             ('rds', 'rds.aws.upbound.io', 'instances', '{app}-prod-db'),
@@ -296,6 +296,13 @@ def execute(request):
     import re
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,38}[a-z0-9]', app):
         raise ValueError('Application invalide')
+    if action in {'azure-runtime-secret', 'azure-runtime-cleanup'}:
+        # Base Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, créé avant publication, retiré à la suppression.
+        import platform_secrets
+        kube = (request.get('_clients') or (platform_secrets.Kubernetes.from_environment(request.get('kube_context')),))[0]
+        if action == 'azure-runtime-secret':
+            return platform_secrets.azure_runtime_initialize(app, request['environment'], kube)
+        return platform_secrets.azure_runtime_remove(app, request['environment'], kube)
     if action in {'app-sql-secrets', 'app-sql-cleanup'}:
         # Base Cloud SQL d'un déploiement sans failover (dev) : mot de passe de l'app, créé avant publication, retiré à la suppression.
         import platform_secrets

@@ -126,9 +126,18 @@ const config = {
     nameSuffix:        process.env.AZURE_NAME_SUFFIX,
     environmentId:     process.env.AZURE_CONTAINERAPP_ENVIRONMENT_ID,
     environmentDomain: process.env.AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN,
+    // Zone publique des apps (eu.mooroon5.fr) ; vide : adresse par défaut de l'environnement Container Apps.
+    publicDomain:      process.env.AZURE_PUBLIC_DOMAIN,
     pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
     dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
     dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,
+    // Copie de la base de PROD : un serveur de copie par app, dans la région de copie (Italie depuis le 15/11/2026),
+    // et les mots de passe recopiés dans le Key Vault pour le job de copie (azure/10-db-copy-job-v2.tf).
+    copyRegionKey:     process.env.AZURE_COPY_REGION_KEY || 'it',
+    copyLocation:      process.env.AZURE_COPY_LOCATION,
+    copyResourceGroup: process.env.AZURE_COPY_RESOURCE_GROUP,
+    copyDbSubnetId:    process.env.AZURE_COPY_DB_SUBNET_ID,
+    keyVaultId:        process.env.AZURE_KEY_VAULT_ID,
   },
 };
 
@@ -145,6 +154,10 @@ const AZURE_REQUIRED = {
   pullIdentityId: 'AZURE_ACRPULL_IDENTITY_ID',
   dbSubnetId: 'AZURE_DB_SUBNET_ID',
   dbDnsZoneId: 'AZURE_DB_DNS_ZONE_ID',
+  copyLocation: 'AZURE_COPY_LOCATION',
+  copyResourceGroup: 'AZURE_COPY_RESOURCE_GROUP',
+  copyDbSubnetId: 'AZURE_COPY_DB_SUBNET_ID',
+  keyVaultId: 'AZURE_KEY_VAULT_ID',
 };
 
 /** Variables Azure manquantes (noms des variables d'environnement). Vide = déploiement Azure possible. */
@@ -154,4 +167,22 @@ function getMissingAzureVars(azure = config.azure) {
     .map(([, envName]) => envName);
 }
 
-module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED };
+// Cloud privé k3s (cnp, Runbook/CLOUD-PRIVE-K3S.md) : sortie Terraform `portal_environment` de cnp/aws/private/.
+// Le registre et le domaine n'ont pas de valeur par défaut (valeurs d'infrastructure) ; la ProviderConfig et l'émetteur
+// ont celle de la plateforme (PRIVATE_CERT_ISSUER=letsencrypt-staging pour une recette sans quota Let's Encrypt).
+config.private = {
+  ecrRegistry:    process.env.PRIVATE_ECR_REGISTRY,
+  appsDomain:     process.env.PRIVATE_APPS_DOMAIN,
+  providerConfig: process.env.PRIVATE_PROVIDER_CONFIG || 'cnp-prive',
+  certIssuer:     process.env.PRIVATE_CERT_ISSUER || 'letsencrypt-prod',
+};
+const PRIVATE_REQUIRED = { ecrRegistry: 'PRIVATE_ECR_REGISTRY', appsDomain: 'PRIVATE_APPS_DOMAIN' };
+
+/** Variables du cloud privé manquantes. Vide = déploiement sur k3s possible. */
+function getMissingPrivateVars(priv = config.private) {
+  return Object.entries(PRIVATE_REQUIRED)
+    .filter(([key]) => !priv[key] || String(priv[key]).trim() === '')
+    .map(([, envName]) => envName);
+}
+
+module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED, getMissingPrivateVars, PRIVATE_REQUIRED };

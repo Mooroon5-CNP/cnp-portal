@@ -1,0 +1,16 @@
+# Moteur de réplication et de bascule des bases de prod Azure (azure_replication.py), exécuté par un Container Apps Job.
+#
+# Base postgres:16 et non python : la reconstruction d'une copie lit le schéma avec pg_dump, qui doit être au moins de la
+# version des serveurs (16, posée par le portail). Python vient de Debian, psycopg de PyPI (requirements.txt, figé).
+# Construire pour Azure : docker build --platform linux/amd64 -f Dockerfile.azure -t <acr>/cnp-azure-replication:<version> .
+FROM postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements.txt ./
+RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+COPY postgres_contract.py database.py replication_tls.py azure_replication.py azure_domains.py ./
+USER 10001
+ENTRYPOINT ["/opt/venv/bin/python", "azure_replication.py"]
+CMD ["status"]

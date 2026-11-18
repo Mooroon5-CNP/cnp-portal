@@ -85,7 +85,7 @@ Bibliothèques : `requirements.platform.txt`. Identités : celles de l'environne
 `kube_context` du profil hors cluster).
 
 **Droits à donner à l'identité du portail (L1) :**
-- AWS, sur `arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/*` : `CreateSecret`, `TagResource`, `DescribeSecret`,
+- AWS, sur `arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/*` : `CreateSecret`, `TagResource`, `DescribeSecret`,
   `GetSecretValue`, `PutSecretValue` (plus `sts:GetCallerIdentity`) ;
 - GCP, projet `cnp-terraform-512313` : `secretmanager.secrets.{create,get,getIamPolicy,setIamPolicy}`, `secretmanager.versions.{add,list,access}` ;
 - Kubernetes : `get` et `create` sur `secrets` dans `crossplane-system` (pas `update`, `patch` ni `delete`).

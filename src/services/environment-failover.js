@@ -404,7 +404,9 @@ function readiness(dep) {
     // Servie par AWS : le voyant dit si GCP est revenu, et donc si le retour manuel peut être lancé.
     const gcp = health.result.state === 'AWS_ACTIVE' ? require('./failover-provisioning').gcpStatus(dep.appName) : null;
     return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif : l’application est servie par AWS.' : 'Application déployée ; secours vérifié et disponible.',
-      applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state,
+      // cloudRunUrl : la page du déploiement compare ce champ à l'adresse affichée et se recharge s'ils diffèrent ; absent ici,
+      // elle se rechargeait toutes les ~8 s une fois la prod en service (constaté le 15/11/2026). Même valeur, comme pour Azure.
+      applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, cloudRunUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state,
       ...(gcp ? { gcpAvailable: gcp.available && gcp.fresh, gcpMessage: gcp.message } : {}) };
   }
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`

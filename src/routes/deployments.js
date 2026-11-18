@@ -21,6 +21,7 @@ const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
 const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
+const { privateAppUrl } = require('../services/private-templates');
 const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
 const { valuesFromForm } = require('../services/deployment-variable-input');
 const openbaoVariables = require('../services/openbao-variables');
@@ -29,7 +30,7 @@ const deploymentReleases = require('../models/deployment_release');
 const openbaoRuntime = require('../services/openbao-runtime');
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
-const SUPPORTED_CLOUDS = ['gcp', 'azure'];
+const SUPPORTED_CLOUDS = ['gcp', 'azure', 'private-aws'];
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -284,6 +285,8 @@ const STACKS = {
     'azure-postgres': { targetCluster: 'azure' },
     'gcp-sqlite': { targetCluster: 'gcp', persistentStorage: 'on' },
     'gcp-postgres': { targetCluster: 'gcp', database: 'postgres' },
+    // Cloud privé : k3s sur une VM dédiée (cnp, aws/private), PostgreSQL dans le namespace de l'app.
+    'private-postgres': { targetCluster: 'private-aws' },
 };
 function fromStack(body) {
     const stack = STACKS[body.stack];
@@ -305,9 +308,10 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
     // Mode de facturation de Cloud Run : « usage » (défaut, mise à l'échelle à zéro) ou « instance » (une instance toujours active).
-    const billing = req.body.billing === 'instance' && targetCluster !== 'azure' ? 'instance' : 'usage';
+    const billing = req.body.billing === 'instance' && !['azure', 'private-aws'].includes(targetCluster) ? 'instance' : 'usage';
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
-    const hasPersistentStorage = targetCluster !== 'azure'
+    // Cloud privé : la donnée est dans le PostgreSQL du namespace de l'app.
+    const hasPersistentStorage = !['azure', 'private-aws'].includes(targetCluster)
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
     if (!appName || !githubRepoUrl) {
@@ -349,7 +353,7 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
 
     if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
-        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP, Azure et le cloud privé sont supportés pour le moment.');
         return res.redirect('/deployments');
     }
 
@@ -372,12 +376,13 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     // Reject a known database mismatch BEFORE recording or provisioning anything.
     try {
         const selected = hasPersistentStorage ? 'sqlite'
-            : (database || failoverRequested || targetCluster === 'azure') ? 'postgres' : null;
+            : (database || failoverRequested || ['azure', 'private-aws'].includes(targetCluster)) ? 'postgres' : null;
         await repositoryDatabase.assertCompatible(parsed, { environment,
             selected });
     } catch (error) {
         req.session.deploymentDraft = { appName, githubRepoUrl, appPort: port, environment,
-            stack: req.body.stack || (hasPersistentStorage ? 'gcp-sqlite' : targetCluster === 'azure' ? 'azure-postgres' : 'gcp-postgres'),
+            stack: req.body.stack || (hasPersistentStorage ? 'gcp-sqlite' : targetCluster === 'azure' ? 'azure-postgres'
+                : targetCluster === 'private-aws' ? 'private-postgres' : 'gcp-postgres'),
             ownerTeamId: resolvedTeamId, billing, error: error.message };
         req.flash('error', error.message);
         return res.redirect('/deployments');
@@ -679,7 +684,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
     let ingressUrl = null;
     // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
-    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp' && dep.targetCluster !== 'azure') {
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && !['gcp', 'azure', 'private-aws'].includes(dep.targetCluster)) {
         // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
@@ -776,6 +781,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         // domaine par défaut de l'environnement Container Apps.
         applicationUrl: dep.targetCluster === 'azure' && usesEnvironment(dep)
             ? azureAppUrl(dep.appName, config.azure, dep.environment)
+            : dep.targetCluster === 'private-aws' && usesEnvironment(dep)
+            ? privateAppUrl(dep.appName, config.private, dep.environment)
             : applicationAddress.usesNativeCloudRun(dep)
                 ? selectedStatus?.applicationUrl || null : applicationAddress.url(dep),
         runs,

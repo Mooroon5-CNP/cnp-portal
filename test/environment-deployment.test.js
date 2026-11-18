@@ -239,6 +239,28 @@ test('setup replaces an owned CNP caller instead of creating a second build work
   expect(sourceWorkflowTrees.every(tree => tree.tree.some(file => file.path === '.github/workflows/ci.yml' && file.sha === null))).toBe(true);
 });
 
+test('setup of the dev keeps the failover workflow of a prod with failover on both branches', async () => {
+  const previousAccount = process.env.CNP_AWS_ACCOUNT_ID;
+  const previousRegion = process.env.CNP_AWS_REGION;
+  process.env.CNP_AWS_ACCOUNT_ID = '123456789012';
+  process.env.CNP_AWS_REGION = 'eu-west-3';
+  try {
+    const prod = deployments.create({ environment: 'prod', appName: 'pixelcam', appPort: 8080,
+      githubRepoUrl: 'https://github.com/team/pixelcalm', ownerUserId: 'owner', failoverRequested: true });
+    await service.onboard(dep);
+    const written = trees.filter(tree => tree.repo === 'pixelcalm').flatMap(tree => tree.tree)
+      .filter(file => file.path === '.github/workflows/cnp-pixelcam.yml');
+    expect(written).toHaveLength(2);
+    expect(written.every(file => yaml.load(file.content).jobs.pipeline.with.target_cloud === 'both')).toBe(true);
+    deployments.delete(prod.id);
+  } finally {
+    if (previousAccount === undefined) delete process.env.CNP_AWS_ACCOUNT_ID;
+    else process.env.CNP_AWS_ACCOUNT_ID = previousAccount;
+    if (previousRegion === undefined) delete process.env.CNP_AWS_REGION;
+    else process.env.CNP_AWS_REGION = previousRegion;
+  }
+});
+
 test('setup preserves custom CI files and rejects another app registered against this repository', async () => {
   existing.set('pixelcalm/.github/workflows/ci.yml', yaml.dump({ jobs: { lint: { 'runs-on': 'ubuntu-latest' } } }));
   await service.onboard(dep);
@@ -429,12 +451,14 @@ test('production setup also leaves the legacy parent absent and uses only its pr
   expect(applied.spec.template.metadata.name).toBe('{{path[1]}}-prod');
   expect(applied.spec.generators[0].git.directories).toEqual([{ path: 'apps/pixelcam/crossplane/prod' }]);
   expect(trees.filter(tree => tree.repo === 'config').every(tree => !tree.tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml'))).toBe(true);
-  const dispatch = api.request.mock.calls.find(([route]) => route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches');
-  expect(dispatch).toEqual(['POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
-    { owner: 'team', repo: 'pixelcalm', workflow_id: 'cnp-pixelcam.yml', ref: 'main' }]);
+  const devTrigger = trees.find(tree => tree.repo === 'pixelcalm' && tree.tree.some(file => file.path === '.cnp-platform-dev'));
+  expect(devTrigger).toBeDefined();
+  expect(devTrigger.tree.find(file => file.path === '.cnp-platform-dev').content).toContain('CNP dev');
   const prodTrigger = api.request.mock.calls.findIndex(([route, args]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}' && args.ref === 'heads/prod' && args.repo === 'pixelcalm');
-  const dispatchIndex = api.request.mock.calls.indexOf(dispatch);
-  expect(dispatchIndex).toBeGreaterThan(prodTrigger);
+  const devTriggerIndex = api.request.mock.calls.findIndex(([route, args]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}' && args.ref === 'heads/main' && args.repo === 'pixelcalm'
+    && Number(args.sha.split('-')[1]) === trees.indexOf(devTrigger) + 1);
+  expect(devTriggerIndex).toBeGreaterThan(prodTrigger);
+  expect(api.request.mock.calls.some(([route]) => route.endsWith('/dispatches'))).toBe(false);
 });
 
 test('production setup starts a dev CI for the new main head after a skipped configuration commit', async () => {
@@ -451,8 +475,7 @@ test('production setup starts a dev CI for the new main head after a skipped con
   run = { ...run, head_branch: 'main' };
   const dev = deployments.get(devId);
   expect((await service.reconcile(dev)).phase).toBe('waiting');
-  expect(api.request).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
-    { owner: 'team', repo: 'pixelcalm', workflow_id: 'cnp-pixelcam.yml', ref: 'main' });
+  expect(trees.some(tree => tree.repo === 'pixelcalm' && tree.tree.some(file => file.path === '.cnp-platform-dev'))).toBe(true);
   run = { ...run, id: 11, head_sha: mainHead };
   expect(await service.reconcile(dev)).toMatchObject({ phase: 'deploying', revision: mainHead, runId: 11 });
 });

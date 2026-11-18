@@ -239,9 +239,10 @@
                     <div class="form-group">
                       <label for="stack">Hébergement et données</label>
                       <select name="stack" id="stack" onchange="onStackChange()" required>
-                        <option value="gcp-postgres" <%= !draft.stack || draft.stack === 'gcp-postgres' ? 'selected' : '' %>>GCP Cloud SQL (PostgreSQL)</option>
+                        <option value="gcp-postgres" <%= !draft.stack || draft.stack === 'gcp-postgres' ? 'selected' : '' %>>GCP Cloud SQL (PostgreSQL) — en prod : secours automatique sur AWS</option>
                         <option value="gcp-sqlite" <%= draft.stack === 'gcp-sqlite' ? 'selected' : '' %>>GCP GCS (SQLite)</option>
-                        <option value="azure-postgres" <%= draft.stack === 'azure-postgres' ? 'selected' : '' %>>Azure souveraineté (PostgreSQL)</option>
+                        <option value="azure-postgres" <%= draft.stack === 'azure-postgres' ? 'selected' : '' %>>Azure souveraineté UE (PostgreSQL) — en prod : base répliquée en Italie</option>
+                        <option value="private-postgres" <%= draft.stack === 'private-postgres' ? 'selected' : '' %>>Cloud privé — Kubernetes (k3s), PostgreSQL</option>
                       </select>
                       <div class="form-hint" id="stackHint"></div>
                       <div class="form-hint">Au clic sur Déployer, le portail vérifie les indices SQLite/PostgreSQL du dépôt avant toute création.</div>
@@ -361,10 +362,13 @@
                 // Choix unique « hébergement et données » : l'aide explique ce que la plateforme crée, et le secours vers AWS
                 // en prod pour GCP Cloud SQL. La facturation ne concerne que Cloud Run (GCP).
                 const STACK_HINTS = {
-                  'gcp-postgres': { dev: 'Cloud Run et une base PostgreSQL 15 dédiée (Cloud SQL), donnée à l’application par DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Supprimée avec l’application.',
+                  'gcp-postgres': { dev: 'Cloud Run et une base PostgreSQL 15 dédiée (Cloud SQL), donnée à l’application par DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Supprimée avec l’application. Pas de secours en dev.',
                     prod: 'Cloud Run et PostgreSQL (Cloud SQL), avec secours automatique vers AWS : la base est répliquée en continu et l’application bascule seule si GCP tombe.' },
                   'gcp-sqlite': { dev: 'Cloud Run avec un bucket GCS monté sur /data pour une base SQLite (les données survivent aux redémarrages).' },
-                  'azure-postgres': { dev: 'Container Apps et un serveur PostgreSQL dédié, hébergés dans l’Union européenne.' },
+                  'azure-postgres': { dev: 'Container Apps et un serveur PostgreSQL dédié, hébergés dans l’Union européenne (France). Pas de copie de la base en dev.',
+                    prod: 'Container Apps et PostgreSQL en France, avec une copie de la base répliquée en continu en Italie : si le serveur France tombe, l’application bascule seule sur la copie (environ 2 min), puis revient seule en France. Tout reste dans l’Union européenne.' },
+                  'private-postgres': { dev: 'Cluster Kubernetes (k3s) opéré par la plateforme sur une machine dédiée : un namespace isolé (quotas, réseau fermé), PostgreSQL 16 dans ce namespace, HTTPS automatique. 1 à 3 instances selon la charge. Pas de sauvegarde de la base.',
+                    prod: 'Cluster Kubernetes (k3s) opéré par la plateforme sur une machine dédiée : namespace isolé, PostgreSQL 16 dédié, HTTPS automatique, 2 à 5 instances selon la charge. Pas de copie ni de sauvegarde de la base, pas de bascule.' },
                 };
                 function onStackChange() {
                   const stack = document.getElementById('stack').value;

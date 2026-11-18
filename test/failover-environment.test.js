@@ -32,11 +32,11 @@ beforeEach(() => {
   profile.gcp.gcp_runtime.subnetwork = 'projects/cnp-terraform-512313/regions/europe-west9/subnetworks/gcp-subnet-1';
   Object.assign(profile.aws, { database_security_group_id: 'sg-0123456789abcdef0', listener_priority: 23456, master_password_secret: `cnp-${APP}-sql`,
     database_ca_pem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' });
-  profile.automation = { ...profile.automation, regime: 'platform', worker_image: '', ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:804210702561:cluster/cnp-cluster',
+  profile.automation = { ...profile.automation, regime: 'platform', worker_image: '', ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:626278345026:cluster/cnp-cluster',
     bootstrap_task_definition: 'cnp-failover-platform-bootstrap', worker_task_definition: 'cnp-failover-platform-worker' };
   // Références produites par initialize-secrets (régime plateforme : quatre secrets AWS et le secret runtime GCP).
   const credentials = { aws_secret_arns: Object.fromEntries(['bootstrap', 'source-admin', 'runtime', 'target-admin'].map(role => [role,
-    `arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/${APP}/${role}-Ab1234`])),
+    `arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/${APP}/${role}-Ab1234`])),
     gcp_runtime_secret: `projects/cnp-terraform-512313/secrets/${APP}-prod-runtime` };
   input = { profile, credentials, secrets: { app: APP, initialized: true, gcp_password_version: '1' }, observations: {} };
   service.configure(APP, input, manager);
@@ -241,6 +241,8 @@ test('la disponibilité refuse les preuves d’un ancien profil et les dates fut
   expect(service.readiness(dep).phase).toBe('deploying');
   db.prepare('UPDATE failover_operations SET input_hash=? WHERE id=?').run(currentHash, 'health-proof');
   expect(service.readiness(dep).phase).toBe('success');
+  // La page du déploiement se recharge si cloudRunUrl ne correspond pas à l'adresse affichée : les deux doivent être présents.
+  expect(service.readiness(dep)).toMatchObject({ applicationUrl: `https://${APP}.apps.mooroon5.fr`, cloudRunUrl: `https://${APP}.apps.mooroon5.fr` });
   db.prepare('UPDATE failover_operations SET result=? WHERE id=?').run(JSON.stringify({ verified: true, observed_at: Date.now() / 1000 + 600 }), 'health-proof');
   expect(service.readiness(dep).phase).toBe('deploying');
 });

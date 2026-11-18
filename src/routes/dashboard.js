@@ -10,6 +10,10 @@ const deploymentModel = require('../models/deployment');
 const teamService = require('../services/teams');
 const { config } = require('../config/env');
 const { readDashboardSources } = require('../services/dashboard-sources');
+const applicationAddress = require('../services/application-address');
+const failover = require('../services/environment-failover');
+const { azureAppUrl } = require('../services/azure-templates');
+const { privateAppUrl } = require('../services/private-templates');
 
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -64,16 +68,26 @@ router.get('/', requireAuth, async (req, res) => {
     };
 
     // Build per-app summary for the "Mes Applications" panel.
-    const baseDomain = config.cluster.baseDomain;
-    const myAppsList = myDeployments.slice(0, 8).map(dep => {
-      const isGcp = (dep.target_cluster || 'gcp') === 'gcp';
-      const url = isGcp
-        ? (dep.cloud_run_url || null)
-        : (baseDomain && baseDomain !== 'cnp.example.com' ? `http://${dep.app_name}-dev.${baseDomain}` : null);
+    // Même adresse que la page du déploiement (routes/deployments.js) : Azure dev/prod par azureAppUrl (eu.mooroon5.fr),
+    // GCP dev/prod par l'adresse applicative (apps.mooroon5.fr), Cloud Run natif et ancien chemin par l'URL enregistrée.
+    // Avant le 16/11, seul cloud_run_url était lu : les déploiements dev/prod affichaient « URL en attente » une fois actifs.
+    const myAppsList = myDeployments.slice(0, 8).map(row => {
+      const dep = deploymentModel.get(row.id) || {};
+      const env = ['dev', 'prod'].includes(dep.environment) ? dep.environment : null;
+      let url = null;
+      try {
+        if (dep.targetCluster === 'azure') url = env ? azureAppUrl(dep.appName, config.azure, env) : null;
+        else if (dep.targetCluster === 'private-aws') url = env ? privateAppUrl(dep.appName, config.private, env) : null;
+        else if (!env || applicationAddress.usesNativeCloudRun(dep)) url = dep.cloudRunUrl || null;
+        else url = applicationAddress.url(dep);
+      } catch (_) { url = null; }
+      const cloud = dep.targetCluster === 'azure' ? 'Azure' : dep.targetCluster === 'private-aws' ? 'Privé (k3s)'
+        : (dep.failoverRequested || failover.enabled(dep)) ? 'GCP, secours AWS' : 'GCP';
       return {
-        name:   dep.app_name,
-        status: dep.onboarding_status,
-        isGcp,
+        name:   row.app_name,
+        environment: env,
+        status: row.onboarding_status,
+        cloud,
         url,
       };
     });

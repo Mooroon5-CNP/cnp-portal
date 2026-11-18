@@ -14,6 +14,7 @@ const argo = require('../clients/argocd');
 const routing = require('./application-routing');
 const addresses = require('./application-address');
 const azure = require('./environment-azure');
+const priv = require('./environment-private');
 const failover = require('./environment-failover');
 const openbaoRuntime = require('./openbao-runtime');
 const deploymentVariables = require('../models/deployment_variables');
@@ -26,6 +27,7 @@ function validate(environment, appName, targetCluster) {
   if (!Object.hasOwn(branches, environment)) throw new Error('Environnement invalide : dev ou prod attendu.');
   if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(appName)) throw new Error('Nom invalide : 2 à 40 caractères, lettres minuscules, chiffres et tirets.');
   if (targetCluster === 'azure') azure.validate(appName);
+  if (targetCluster === priv.TARGET) priv.validate(appName);
 }
 function target() {
   const [owner, repo] = (config.github.configRepoName || 'Mooroon5-CNP/config-repo').split('/');
@@ -39,6 +41,7 @@ function workflowName(appName) { return `cnp-${appName}.yml`; }
 function image(dep, revision) { return `${config.github.registryUrl || config.gcp.imageRegistry}/${dep.appName}:${revision}`; }
 function workflow(appName, dep = {}) {
   if (azure.isAzure(dep)) return azure.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
+  if (priv.isPrivate(dep)) return priv.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
   const document = { name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] }, workflow_dispatch: {} },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
@@ -125,6 +128,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
   if (azure.isAzure(dep)) return azure.manifests(dep, revision);
+  if (priv.isPrivate(dep)) return priv.manifests(dep, revision);
   if (dep.failoverRequested && !failover.enabled(dep)) throw new Error('Profil de secours de cette application absent.');
   if (failover.enabled(dep)) return failover.manifests(dep);
   const { name, path } = identity(dep);
@@ -226,7 +230,16 @@ function current(dep) {
 // Mot de passe de la base Cloud SQL d'une app de dev : créé (une seule fois) avant toute publication, car Crossplane le lit pour
 // créer l'utilisateur et Cloud Run dans Secret Manager. Par l'opérateur Python (clients Kubernetes et Secret Manager).
 async function databaseSecrets(dep, action) {
-  if (dep.database !== 'postgres' || azure.isAzure(dep)) return null;
+  // Cloud privé : mots de passe générés dans k3s (private-templates.tplSecrets), rien à préparer ni à nettoyer ici.
+  if (priv.isPrivate(dep)) return null;
+  if (azure.isAzure(dep)) {
+    // Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, lu par Crossplane pour la Container App et le Key Vault.
+    if (!['dev', 'prod'].includes(dep.environment)) return null;
+    const operator = require('./failover-operations');
+    return operator.run({ action: action === 'app-sql-secrets' ? 'azure-runtime-secret' : 'azure-runtime-cleanup',
+      app: dep.appName, environment: dep.environment });
+  }
+  if (dep.database !== 'postgres') return null;
   const operator = require('./failover-operations');
   return operator.run({ action, app: dep.appName, environment: dep.environment, service_account: config.gcp.cloudRunSa });
 }
@@ -235,6 +248,7 @@ async function prepareOnboarding(dep) {
   validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
   if (azure.isAzure(dep)) azure.assertConfigured();
+  if (priv.isPrivate(dep)) priv.assertConfigured();
   await databaseSecrets(dep, 'app-sql-secrets');
   const api = await github.getInstallationOctokit();
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
@@ -282,7 +296,8 @@ async function prepareOnboarding(dep) {
   await github.checkActionsEnabled(source.owner, source.repo);
   await github.setRepoSecret(source.owner, source.repo, 'CONFIG_REPO_TOKEN', config.github.configRepoToken);
   // Variables lues par le pipeline du cloud : WIF/Artifact Registry pour GCP, identité fédérée et ACR pour Azure.
-  const repoVariables = azure.isAzure(dep)
+  // Cloud privé : pipeline.yml en cible « aws » (rôle OIDC fixe vers l'ECR), aucune variable.
+  const repoVariables = priv.isPrivate(dep) ? [] : azure.isAzure(dep)
     ? azure.repoVariables()
     : [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]];
   for (const [keyName, value] of repoVariables) {
@@ -292,9 +307,15 @@ async function prepareOnboarding(dep) {
   const main = await github.getRef(source.owner, source.repo, 'main');
   await github.createBranch(source.owner, source.repo, 'prod', main);
   const workflowPath = `.github/workflows/${workflowName(dep.appName)}`;
+  // Un seul workflow par dépôt, écrit sur main ET prod. Si la prod de l'app a le failover, il doit rester en mode failover
+  // (target_cloud: both) même quand on inscrit la dev : sinon la prod perd son image AWS et la preuve des images, et sa mise
+  // en service du secours se bloque (constaté le 16/11 sur cnp-demo-gcp : dev inscrite pendant la mise en service de la prod).
+  const failoverProd = !azure.isAzure(dep) && !priv.isPrivate(dep) && deployments.listForUser(null).some(row => row.app_name === dep.appName
+    && row.deployment_environment === 'prod' && (row.failover_requested || failover.enabled(deployments.get(row.id))));
+  const workflowFor = failoverProd ? { ...dep, failoverRequested: true } : dep;
   for (const branch of ['main', 'prod']) {
     await commitFiles(api, source, async head => {
-      const files = { [workflowPath]: workflow(dep.appName, dep) };
+      const files = { [workflowPath]: workflow(dep.appName, workflowFor) };
       // Retirer uniquement l'ancien caller CNP possédé par la plateforme évite deux builds du même tag.
       const old = await readFile(api, source, '.github/workflows/ci.yml', head);
       if (old) {
@@ -331,11 +352,10 @@ async function prepareOnboarding(dep) {
   await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
   if (dep.environment === 'prod') {
-    // Configurer le workflow prod peut avancer main avec [skip ci] après la CI dev.
-    // Une exécution explicite sur la tête de main évite de laisser dev en attente.
-    await api.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
-      ...source, workflow_id: workflowName(dep.appName), ref: 'main',
-    });
+    // La configuration du workflow sur main utilise [skip ci]. Un nouveau commit
+    // déclenche la CI dev via push, avec la permission Contents: write de l'App.
+    await commitFiles(api, source, { '.cnp-platform-dev': `CNP dev\n${new Date().toISOString()}\n` },
+      `ci(${dep.appName}): deploy dev after prod onboarding`, 'main');
   }
 }
 
@@ -362,6 +382,7 @@ async function sourceIsCurrent(dep, revision) {
 
 async function readiness(dep, revision, { allowMutation = true } = {}) {
   if (azure.isAzure(dep)) return azure.readiness(dep, revision);
+  if (priv.isPrivate(dep)) return priv.readiness(dep, revision);
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
   if (observed.failure && observed.image === image(dep, revision)) {
@@ -518,13 +539,16 @@ async function reconcile(dep) {
       if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
+      // Azure : le mot de passe de cnp_runtime doit exister avant que Crossplane lise les claims. Relançable, sans rotation :
+      // les apps inscrites avant le rôle applicatif (16/11/2026) l'obtiennent à leur prochaine publication.
+      if (azure.isAzure(dep)) await databaseSecrets(dep, 'app-sql-secrets');
       const files = manifests(dep, revision);
       let runtimeRefs = null;
       if (azure.isAzure(dep)) {
         const prepared = await openbaoRuntime.azureReferences(dep);
         openbaoRuntime.applyAzureReferences(files, dep, prepared);
         if (deploymentVariables.get(dep.id)) runtimeRefs = prepared?.references || [];
-      } else {
+      } else if (!priv.isPrivate(dep)) {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
@@ -632,8 +656,9 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
   }
   const { path, name } = identity(dep);
   const onAzure = azure.isAzure(dep);
+  const onPrivate = priv.isPrivate(dep);
   const files = {};
-  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  const claimFiles = onAzure ? azure.fileNames() : onPrivate ? priv.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
   for (const file of cleanupFiles) {
     if (!/^[a-zA-Z0-9_.-]+\.ya?ml$/.test(file)) throw new Error('Fichier de nettoyage hors du dossier de l’environnement.');
     if (!claimFiles.includes(file)) claimFiles.push(file);
@@ -642,7 +667,7 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
   let hasRuntime = false;
-  if (!onAzure) {
+  if (!onAzure && !onPrivate) {
     const application = await kubernetes.getArgocdApplicationIfExists(name);
     hasRuntime = Object.keys(files).length > 0 || application
       || releases.list(dep.id).some(release => release.state === 'published');
@@ -684,8 +709,11 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
     }
     return result;
   }, `chore(${dep.appName}): remove ${dep.environment}`);
-  // Le dossier est sorti de Git : son chemin quitte aussi la liste explicite de l'ApplicationSet de cet environnement.
-  if (!onAzure) await kubernetes.removeApplicationSetPath(`crossplane-autodiscovery-${dep.environment}`, `apps/${dep.appName}/crossplane/${dep.environment}`);
+  // Le dossier est sorti de Git : son chemin quitte aussi la liste explicite de l'ApplicationSet de cet environnement, pour
+  // Azure comme pour GCP. Laissé dans la liste (Azure l'était jusqu'au 16/11/2026), l'ApplicationSet (create-update,
+  // preserveResourcesOnDeletion) recrée l'Application 30 s après la cascade, sans finalizer : la cascade s'arrête et les
+  // serveurs PostgreSQL et secrets restent, facturés (constaté le 16/11 sur cnp-test-azure prod, fini à la main).
+  await kubernetes.removeApplicationSetPath(`crossplane-autodiscovery-${dep.environment}`, `apps/${dep.appName}/crossplane/${dep.environment}`);
   // Azure : la cascade vient APRÈS le retrait des fichiers (ordre inverse de GCP, voir environment-azure.confirmTeardown).
   // Tant que le dossier est dans Git, l'ApplicationSet dev (preserveResourcesOnDeletion) retire le finalizer posé et
   // recrée l'Application : les ressources Azure restaient orphelines (constaté le 29/10/2026). L'API Kubernetes, car
@@ -693,6 +721,12 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
   if (onAzure) {
     await kubernetes.cascadeDeleteArgocdApplication(name);
     await azure.confirmTeardown(dep);
+  }
+  // Cloud privé : même ordre qu'Azure. La cascade supprime les Object ; le provider supprime alors le namespace dans k3s
+  // (base, volume et mots de passe compris).
+  if (onPrivate) {
+    await kubernetes.cascadeDeleteArgocdApplication(name);
+    await priv.confirmTeardown(dep);
   }
   // GCP : la cascade vient APRÈS le retrait du dossier et de son chemin dans l'ApplicationSet, comme pour Azure. Faite avant
   // (ancien ordre), l'ApplicationSet (create-update, preserveResourcesOnDeletion) recréait l'Application 30 s plus tard, sans
@@ -702,7 +736,7 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
   // Failover : les ressources sont déjà détruites ; l'Application est retirée pour la même raison (l'ApplicationSet ne
   // supprime jamais d'Application). Retirée avant, alors que le dossier existait encore, le contrôleur ne l'a plus recréée au
   // redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
-  if (!onAzure && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
+  if (!onAzure && !onPrivate && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
   // Base Cloud SQL de dev : ses manifestes sont retirés avec le reste (vagues Argo : Cloud Run, puis base et utilisateur, puis
   // instance) ; ses deux secrets partent ensuite.
   await databaseSecrets(dep, 'app-sql-cleanup');

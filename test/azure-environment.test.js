@@ -10,6 +10,7 @@ jest.mock('../src/config/env', () => {
     ciClientId: 'client-1', acrLoginServer: 'acr.azurecr.io', resourceGroup: 'rg-1', nameSuffix: 'abc123',
     environmentId: '/subscriptions/sub-1/env', environmentDomain: 'env.example.io', pullIdentityId: '/subscriptions/sub-1/uami',
     dbSubnetId: '/subscriptions/sub-1/subnet', dbDnsZoneId: '/subscriptions/sub-1/dns',
+  copyRegionKey: 'it', copyLocation: 'italynorth', copyResourceGroup: 'rg-it', copyDbSubnetId: '/subscriptions/sub-1/subnet-it', keyVaultId: '/subscriptions/sub-1/vault',
   };
   return {
     config: {
@@ -25,8 +26,9 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
 jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
-  getArgocdApplicationIfExists: jest.fn(),
+  getArgocdApplicationIfExists: jest.fn(), removeApplicationSetPath: jest.fn(),
 }));
+jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 
@@ -103,14 +105,63 @@ describe('claims par environnement', () => {
     expect(parse(dev, 'flexibleserver.yaml').spec.forProvider.tags['cnp-env']).toBe('dev');
     expect(parse(prod, 'flexibleserver.yaml').spec.forProvider.tags['cnp-env']).toBe('prod');
     // aucun nom de ressource Crossplane ni de secret n'est partagé entre les deux environnements
-    const names = files => Object.values(files).map(c => yaml.load(c)).filter(d => d.kind !== 'Kustomization').map(d => `${d.kind}/${d.metadata.name}`);
+    const names = files => Object.values(files).flatMap(c => yaml.loadAll(c)).filter(d => d.kind !== 'Kustomization').map(d => `${d.kind}/${d.metadata.name}`);
     expect(names(dev).filter(n => names(prod).includes(n))).toEqual([]);
+  });
+
+  test('prod seulement : un serveur de copie par app en Italie, même mot de passe, app sur l\'alias DNS', () => {
+    const dev = service.manifests(dep, revision), prod = service.manifests({ ...dep, environment: 'prod' }, revision);
+    const file = (files, name) => files[Object.keys(files).find(p => p.endsWith(`/${name}`))];
+    expect(file(dev, 'flexibleserver-copy.yaml')).toBeUndefined();
+    expect(yaml.load(file(dev, 'kustomization.yaml')).resources).not.toContain('flexibleserver-copy.yaml');
+
+    const copy = yaml.load(file(prod, 'flexibleserver-copy.yaml'));
+    expect(copy.metadata.name).toBe('cnp-sov-it-todo-prod-abc123');
+    expect(copy.metadata.annotations['argocd.argoproj.io/sync-wave']).toBe('0');
+    // même administrateur, même mot de passe (le Secret généré par le serveur de l'app) : la bascule ne touche que l'alias
+    expect(copy.spec.forProvider).toMatchObject({
+      location: 'italynorth', resourceGroupName: 'rg-it', delegatedSubnetId: '/subscriptions/sub-1/subnet-it',
+      privateDnsZoneId: '/subscriptions/sub-1/dns', publicNetworkAccessEnabled: false, autoGeneratePassword: false,
+      administratorLogin: 'pgadmin',
+      administratorPasswordSecretRef: { name: 'todo-prod-pg-password', namespace: 'crossplane-system', key: 'password' },
+    });
+    expect(yaml.load(file(prod, 'flexibleserver.yaml')).spec.forProvider.administratorPasswordSecretRef.name).toBe('todo-prod-pg-password');
+    expect(copy.spec.forProvider.tags).toMatchObject({ 'cnp-role': 'copy-db', 'cnp-app': 'todo', 'cnp-env': 'prod' });
+
+    const secrets = yaml.loadAll(file(prod, 'keyvault-secrets.yaml'));
+    expect(secrets.map(s => s.spec.forProvider.name)).toEqual(['todo-prod-pg-password', 'todo-prod-pg-runtime-password']);
+    expect(secrets[0].spec.forProvider).toMatchObject({ keyVaultId: '/subscriptions/sub-1/vault', valueSecretRef: { name: 'todo-prod-pg-password' } });
+    expect(secrets[1].spec.forProvider.valueSecretRef.name).toBe('todo-prod-pg-runtime');
+    expect(yaml.load(file(prod, 'kustomization.yaml')).resources).toEqual(expect.arrayContaining(['flexibleserver-copy.yaml', 'keyvault-secrets.yaml']));
+
+    // l'app de prod passe par l'alias (zone tirée de AZURE_DB_DNS_ZONE_ID) ; la dev parle à son serveur
+    const dbHost = files => yaml.load(file(files, 'containerapp-claim.yaml')).spec.forProvider.template.container[0].env.find(e => e.name === 'DB_HOST').value;
+    expect(dbHost(prod)).toBe('todo-prod-db.dns');
+    expect(dbHost(dev)).toBe('cnp-sov-fr-todo-dev-abc123.postgres.database.azure.com');
   });
 
   test('l\'image est la vraie révision de la CI, jamais une image de départ', () => {
     const claim = yaml.load(service.manifests(dep, revision)['apps/todo/crossplane/dev/containerapp-claim.yaml']);
     expect(claim.spec.forProvider.template.container[0].image).toBe(`acr.azurecr.io/todo:${revision}`);
-    expect(claim.spec.forProvider.secret[0].valueSecretRef.name).toBe('todo-dev-pg-password');
+    expect(claim.spec.forProvider.secret[0].valueSecretRef.name).toBe('todo-dev-pg-runtime');
+  });
+
+  test('l\'app se connecte en cnp_runtime, jamais en administrateur, en dev comme en prod ; les deux mots de passe vont au coffre', () => {
+    for (const environment of ['dev', 'prod']) {
+      const files = service.manifests({ ...dep, environment }, revision);
+      const file = name => files[Object.keys(files).find(p => p.endsWith(`/${name}`))];
+      const env = yaml.load(file('containerapp-claim.yaml')).spec.forProvider.template.container[0].env;
+      expect(env.find(e => e.name === 'DB_USER').value).toBe('cnp_runtime');
+      expect(yaml.loadAll(file('keyvault-secrets.yaml')).map(s => s.spec.forProvider.name))
+        .toEqual([`todo-${environment}-pg-password`, `todo-${environment}-pg-runtime-password`]);
+      expect(yaml.load(file('kustomization.yaml')).resources).toContain('keyvault-secrets.yaml');
+    }
+  });
+
+  test('le mot de passe de cnp_runtime est créé par l\'opérateur avant toute publication', async () => {
+    const operator = require('../src/services/failover-operations');
+    await service.onboard(dep);
+    expect(operator.run).toHaveBeenCalledWith({ action: 'azure-runtime-secret', app: 'todo', environment: 'dev' });
   });
 
   test('une révision invalide ou un nom trop long échouent avant toute génération', () => {
@@ -215,6 +266,26 @@ describe('publication et disponibilité', () => {
     } finally { spy.mockRestore(); }
   });
 
+  test('avec le domaine public, « déployée » seulement quand l\'adresse répond (nom et certificat posés)', async () => {
+    const config = require('../src/config/env').config;
+    config.azure.publicDomain = 'eu.example.fr';
+    const fetchBefore = global.fetch;
+    try {
+      kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null, observedImage: `acr.azurecr.io/todo:${revision}` });
+      global.fetch = jest.fn().mockRejectedValue(new Error('certificate has expired'));
+      const waiting = await service.reconcile(dep);
+      expect(waiting.phase).toBe('deploying');
+      expect(waiting.message).toContain('certificat');
+      expect(global.fetch).toHaveBeenCalledWith('https://todo-dev.eu.example.fr/health', expect.objectContaining({ method: 'GET' }));
+      global.fetch = jest.fn().mockResolvedValue({ status: 503 });
+      const done = await service.reconcile(dep);
+      expect(done).toMatchObject({ phase: 'success', applicationUrl: 'https://todo-dev.eu.example.fr' });
+    } finally {
+      global.fetch = fetchBefore;
+      delete config.azure.publicDomain;
+    }
+  });
+
   test('un échec de création Azure remonte avec sa cause ; une API illisible ne déclare rien', async () => {
     await service.reconcile(dep);
     kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'failed', failure: 'Container App : image introuvable' });
@@ -262,12 +333,17 @@ describe('suppression', () => {
     expect(routing.sync).not.toHaveBeenCalled();
     const removal = trees.at(-1).tree.filter(file => file.path.startsWith('apps/todo/crossplane/prod/'));
     expect(removal.map(file => file.path.split('/').pop()).sort()).toEqual(
-      ['containerapp-claim.yaml', 'containerapp-secretname.yaml', 'flexibleserver-database.yaml', 'flexibleserver.yaml', 'kustomization.yaml']);
+      ['containerapp-claim.yaml', 'containerapp-secretname.yaml', 'flexibleserver-copy.yaml', 'flexibleserver-database.yaml',
+        'flexibleserver.yaml', 'keyvault-secrets.yaml', 'kustomization.yaml']);
     expect(removal.every(file => file.sha === null)).toBe(true);
     // Azure : la cascade vient APRÈS le retrait des fichiers. Tant que le dossier est dans Git, l'ApplicationSet dev
     // (preserveResourcesOnDeletion) retire le finalizer posé et recrée l'Application : ressources orphelines.
     const sourceDelete = api.request.mock.calls.findIndex(([route, args]) => route === 'POST /repos/{owner}/{repo}/git/trees' && args.tree.some(file => file.sha === null));
     expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(api.request.mock.invocationCallOrder[sourceDelete]);
+    // …et après le retrait de son chemin de l'ApplicationSet : sinon il recrée l'Application sans finalizer et la cascade
+    // s'arrête (serveurs et secrets orphelins, constaté le 16/11/2026).
+    expect(kubernetes.removeApplicationSetPath).toHaveBeenCalledWith('crossplane-autodiscovery-prod', 'apps/todo/crossplane/prod');
+    expect(kubernetes.cascadeDeleteArgocdApplication.mock.invocationCallOrder[0]).toBeGreaterThan(kubernetes.removeApplicationSetPath.mock.invocationCallOrder[0]);
   });
 
   test('un échec de la cascade remonte, pour que la suppression puisse être rejouée', async () => {

@@ -17,9 +17,9 @@ from render_aws_prod_example import resource, write_files
 PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
 GCP_REGION = os.environ.get("GCP_REGION", "europe-west9")
 BASE_DOMAIN = os.environ.get("APPLICATIONS_BASE_DOMAIN", "apps.mooroon5.fr")
-ALB_DNS = os.environ.get("CNP_AWS_ALB_DNS_NAME", "cnp-alb-1733646164.eu-west-3.elb.amazonaws.com")
+ALB_DNS = os.environ.get("CNP_AWS_ALB_DNS_NAME", "cnp-alb-1261477539.eu-west-3.elb.amazonaws.com")
 ALB_ZONE = os.environ.get("CNP_AWS_ALB_ZONE_ID", "Z3Q77PNBQS71R4")
-ZONE = os.environ.get("CNP_AWS_ROUTE53_ZONE_ID", "Z03070463OHUIPXFTWDYQ")
+ZONE = os.environ.get("CNP_AWS_ROUTE53_ZONE_ID", "Z0043335ESJGO8F4BE96")
 
 
 def validate(config):

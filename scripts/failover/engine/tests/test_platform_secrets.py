@@ -70,7 +70,7 @@ class FakeAWS:
         if Name in self.secrets:
             raise error("ResourceExistsException")
         self.writes += 1
-        self.secrets[Name] = {"ARN": f"arn:aws:secretsmanager:eu-west-3:804210702561:secret:{Name}-AbCd12", "Tags": Tags, "value": SecretString}
+        self.secrets[Name] = {"ARN": f"arn:aws:secretsmanager:eu-west-3:626278345026:secret:{Name}-AbCd12", "Tags": Tags, "value": SecretString}
         if self.lose_response:
             raise error("RequestTimeout")
         return {"ARN": self.secrets[Name]["ARN"]}
@@ -457,3 +457,34 @@ class AppSqlSecretsTests(unittest.TestCase):
         self.assertEqual(result["removed"], [self.GCP, f"{ps.NAMESPACE}/cnp-weather-api-dev-sql"])
         self.assertEqual((kube.secrets, gsm.secrets), ({}, {}))
         self.assertEqual(ps.app_sql_remove("weather-api", "dev", kube, gsm), {"removed": []})     # déjà supprimé
+
+
+class AzureRuntimeSecretTests(unittest.TestCase):
+    """Base Azure (dev et prod) : mot de passe de cnp_runtime, créé une fois, jamais remplacé, retiré à la suppression."""
+
+    def test_created_once_then_reused(self):
+        kube = FakeKube()
+        for environment in ("dev", "prod"):
+            self.assertEqual(ps.azure_runtime_initialize("todo", environment, kube),
+                             {"kubernetes_secret": f"todo-{environment}-pg-runtime", "initialized": True})
+        before = deepcopy(kube.secrets)
+        ps.azure_runtime_initialize("todo", "prod", kube)                                    # rejouable, sans rotation
+        self.assertEqual(kube.secrets, before)
+        self.assertEqual(kube.creates, 2)
+        self.assertEqual(set(kube.secrets["todo-prod-pg-runtime"]["data"]), {"password"})
+
+    def test_foreign_secret_and_bad_environment_are_refused(self):
+        kube = FakeKube()
+        kube.secrets["todo-dev-pg-runtime"] = {"metadata": {"labels": {}}, "data": {"password": "eA=="}}
+        with self.assertRaises(ValueError):
+            ps.azure_runtime_initialize("todo", "dev", kube)
+        with self.assertRaises(ValueError):
+            ps.azure_runtime_remove("todo", "dev", kube)
+        with self.assertRaises(ValueError):
+            ps.azure_runtime_names("todo", "staging")
+
+    def test_removal(self):
+        kube = FakeKube()
+        ps.azure_runtime_initialize("todo", "dev", kube)
+        self.assertEqual(ps.azure_runtime_remove("todo", "dev", kube), {"removed": [f"{ps.NAMESPACE}/todo-dev-pg-runtime"]})
+        self.assertEqual(ps.azure_runtime_remove("todo", "dev", kube), {"removed": []})

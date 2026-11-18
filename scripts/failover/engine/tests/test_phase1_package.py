@@ -19,11 +19,11 @@ def profile():
     gc['app_name'] = app
     gc['credentials_secret_name'] = f'cnp-{app}-sql'
     gc['gcp_runtime']['password_secret'] = f'projects/{gcp.PROJECT}/secrets/{app}-prod-runtime'
-    aw['runtime_secret_arn'] = f'arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/{app}/runtime-AbCd12'
+    aw['runtime_secret_arn'] = f'arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/{app}/runtime-AbCd12'
     aw['database_ca_pem'] = gc['gcp_runtime']['database_ca_pem']
     return {'gcp': gc, 'aws': aw, 'automation': {
-        'worker_image': '804210702561.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:'+'a'*64,
-        'ecs_cluster_arn': 'arn:aws:ecs:eu-west-3:804210702561:cluster/fixture',
+        'worker_image': '626278345026.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:'+'a'*64,
+        'ecs_cluster_arn': 'arn:aws:ecs:eu-west-3:626278345026:cluster/fixture',
         'ecs_security_group_id': 'sg-0123456789abcdef0', 'public_subnet_ids': ['subnet-0123456789abcdef0', 'subnet-1123456789abcdef0'],
         'subscription_ca_path_on_rds': '/server/fixture-ca.pem',
         'kube_context': f'gke_{gcp.PROJECT}_europe-west9-b_main-production-cluster', 'regime': 'platform', **prepare.PLATFORM_TASKS}}
@@ -50,7 +50,7 @@ def observations():
 
 def outputs():
     app=profile()['gcp']['app_name']
-    return {'aws_secret_arns':{'value':{role:f'arn:aws:secretsmanager:eu-west-3:804210702561:secret:cnp/failover/{app}/{role}-AbCd12'
+    return {'aws_secret_arns':{'value':{role:f'arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/{app}/{role}-AbCd12'
             for role in ['bootstrap','source-admin','runtime','target-admin']}},
         'gcp_runtime_secret':{'value':f'projects/{gcp.PROJECT}/secrets/{app}-prod-runtime'}}
 

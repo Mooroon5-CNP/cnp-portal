@@ -340,11 +340,19 @@ test('le suivi donne l’étape en clair, le temps écoulé et estimé, et signa
   workflow.start('weather-api', manager);
   const start = Date.now();
   let value = workflow.progress('weather-api', start + 30000);
-  expect(value).toMatchObject({ label: 'Création des secrets', elapsed: 30, estimate: 60, totalElapsed: 30, slow: false });
+  expect(value).toMatchObject({ label: 'Création des secrets', elapsed: 30, estimate: 45, totalElapsed: 30, slow: false });
   expect(value.totalEstimate).toBeGreaterThan(30 * 60);                   // le parcours complet dure de l'ordre d'une demi-heure
   value = workflow.progress('weather-api', start + 5 * 60000);
   expect(value).toMatchObject({ elapsed: 300, slow: true });            // plus du double de l'habitude
   expect(value.totalEstimate).toBeGreaterThan(value.totalElapsed);      // le reste ne devient jamais négatif
+  // Mesuré le 14-15/11/2026 : 44 min de bout en bout, dont ~18 min de création des bases à l'étape 3.
+  const planned = workflow.progress('weather-api', start).totalEstimate;
+  expect(planned).toBeGreaterThan(40 * 60); expect(planned).toBeLessThan(50 * 60);
+  db.prepare("UPDATE failover_provisioning SET step=2, step_started_at=? WHERE app='weather-api'").run(new Date(start).toISOString());
+  value = workflow.progress('weather-api', start + 15 * 60000);
+  expect(value).toMatchObject({ label: 'Création des bases Cloud SQL et RDS', estimate: 1080, slow: false });
+  db.prepare("UPDATE failover_provisioning SET step=10, step_started_at=? WHERE app='weather-api'").run(new Date(start).toISOString());
+  expect(workflow.progress('weather-api', start)).toMatchObject({ label: 'Attente de la synchronisation Argo CD', estimate: 120 });
   profiles.profileFor.mockReturnValue(null);
   expect(workflow.progress('weather-api', start).label).toBeUndefined(); // profil absent : avancement brut, sans durée
 });
