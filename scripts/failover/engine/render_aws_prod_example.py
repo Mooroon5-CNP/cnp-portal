@@ -121,6 +121,11 @@ def bootstrap(config):
                          "deletionProtection": True, "skipFinalSnapshot": False,
                          "finalSnapshotIdentifier": name + "-final",
                          "backupRetentionPeriod": config.get("backup_retention_period", 7),
+                         # Journal PostgreSQL exporté vers CloudWatch (/aws/rds/instance/<app>-prod-db/postgresql), que
+                         # l'intégration Datadog abonne d'elle-même (source rds) et range sous le service de l'app
+                         # (pipeline de cnp/aws/17-datadog-ecs-logs.tf) : l'utilisateur voit aussi les logs de sa base
+                         # de secours. Modifiable à chaud, sans redémarrage (18/11/2026).
+                         "enabledCloudwatchLogsExports": ["postgresql"],
                          "dbSubnetGroupNameRef": {"name": name + "-subnets"},
                          "parameterGroupNameRef": {"name": name + "-pg15"},
                          "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 0)

@@ -53,6 +53,8 @@ class AwsExampleTests(unittest.TestCase):
         db = files["rds-instance.yaml"]["spec"]
         self.assertFalse(db["forProvider"]["publiclyAccessible"])
         self.assertTrue(db["forProvider"]["deletionProtection"])
+        # Journal PostgreSQL vers CloudWatch, puis Datadog sous le service de l'app.
+        self.assertEqual(db["forProvider"]["enabledCloudwatchLogsExports"], ["postgresql"])
         self.assertEqual(db["deletionPolicy"], "Orphan")
 
     def test_rds_starts_with_cloud_sql_and_after_its_prerequisites(self):
