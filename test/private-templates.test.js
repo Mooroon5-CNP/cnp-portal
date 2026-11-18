@@ -113,6 +113,22 @@ describe('base et secrets', () => {
     expect(sts.spec.template.spec.securityContext).toMatchObject({ runAsUser: 70, fsGroup: 70 });
     expect(sts.spec.volumeClaimTemplates[0].spec.storageClassName).toBe('local-path');
   });
+
+  test('logs PostgreSQL lus par le pipeline postgresql de Datadog (vrai niveau), service <app>-<env>-db', () => {
+    const sts = inner(all('prod'), 'StatefulSet');
+    const conf = JSON.parse(sts.spec.template.metadata.annotations['ad.datadoghq.com/postgres.logs']);
+    expect(conf).toEqual([{ source: 'postgresql', service: 'todo-prod-db' }]);
+  });
+});
+
+describe('observabilité', () => {
+  test('service Datadog de l\'app = <app>-<env>, comme Cloud Run, ECS et Azure (page Logs du portail)', () => {
+    for (const env of ['dev', 'prod']) {
+      const labels = inner(all(env), 'Deployment').spec.template.metadata.labels;
+      expect(labels).toMatchObject({ 'tags.datadoghq.com/service': `todo-${env}`, 'tags.datadoghq.com/env': env,
+        'tags.datadoghq.com/version': revision });
+    }
+  });
 });
 
 describe('application', () => {
