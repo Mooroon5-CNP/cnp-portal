@@ -8,13 +8,19 @@ const revision = 'a'.repeat(40);
 const digest = `sha256:${'b'.repeat(64)}`;
 const dep = { id: 'deployment', appName: 'telemetry-api', environment: 'prod', githubRepoUrl: 'https://github.com/team/telemetry' };
 let record, run, artifacts, api;
+const previousAws = { account: process.env.CNP_AWS_ACCOUNT_ID, region: process.env.CNP_AWS_REGION };
+beforeAll(() => { process.env.CNP_AWS_ACCOUNT_ID = '123456789012'; process.env.CNP_AWS_REGION = 'eu-west-3'; });
+afterAll(() => {
+  if (previousAws.account === undefined) delete process.env.CNP_AWS_ACCOUNT_ID; else process.env.CNP_AWS_ACCOUNT_ID = previousAws.account;
+  if (previousAws.region === undefined) delete process.env.CNP_AWS_REGION; else process.env.CNP_AWS_REGION = previousAws.region;
+});
 function zip(value) {
   return execFileSync('python3', ['-c', "import io,sys,zipfile; b=io.BytesIO(); z=zipfile.ZipFile(b,'w'); z.writestr('cnp-images.json',sys.stdin.buffer.read()); z.close(); sys.stdout.buffer.write(b.getvalue())"], { input: JSON.stringify(value) });
 }
 beforeEach(() => {
   record = { app: dep.appName, revision, digest,
     gcp: `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/${dep.appName}@${digest}`,
-    aws: `626278345026.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${digest}` };
+    aws: `123456789012.dkr.ecr.eu-west-3.amazonaws.com/${dep.appName}@${digest}` };
   run = { id: 10, head_sha: revision, head_branch: 'prod', status: 'completed', conclusion: 'success' };
   artifacts = [{ id: 1, name: `cnp-failover-images-${revision}`, expired: false, size_in_bytes: 1000 }];
   api = { request: jest.fn(async route => {

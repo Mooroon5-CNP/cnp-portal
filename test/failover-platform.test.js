@@ -6,6 +6,7 @@ jest.mock('../src/config/env', () => ({ config: { github: { configRepoName: 'Moo
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn() }));
 jest.mock('../src/services/environment-deployment', () => ({ commitFiles: jest.fn() }));
 jest.mock('../src/models/deployment', () => ({ listForUser: jest.fn() }));
+jest.mock('../src/models/deployment_variables', () => ({ get: jest.fn(() => null) }));
 jest.mock('child_process', () => ({ ...jest.requireActual('child_process'), execFile: jest.fn() }));
 const fs = require('fs');
 const os = require('os');

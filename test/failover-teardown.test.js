@@ -4,6 +4,7 @@ jest.mock('../src/services/environment-failover', () => ({ enabled: jest.fn(() =
 jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start: jest.fn() }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn() }));
 jest.mock('../src/services/environment-deployment', () => ({ commitFiles: jest.fn(), remove: jest.fn() }));
+jest.mock('../src/services/openbao-cleanup', () => ({ cleanup: jest.fn().mockResolvedValue() }));
 jest.mock('../src/models/deployment', () => ({ get: jest.fn(), delete: jest.fn() }));
 jest.mock('../src/models/deletion_request', () => ({ deleteByDeployment: jest.fn() }));
 // Le vrai retrait de route est testé avec le routage partagé ; ici, on vérifie qu'il est demandé pour cette app, en prod.
@@ -81,6 +82,7 @@ test('le parcours complet libère, retire, attend la disparition, nettoie puis o
   row = await step(); row = await step(); expect(tasks.at(-1).action).toBe('teardown-cleanup'); succeed();
   row = await step(); row = await step();                               // oubli
   expect(deployment.remove).toHaveBeenCalledWith(dep, { afterFailoverTeardown: true });
+  expect(require('../src/services/openbao-cleanup').cleanup).toHaveBeenCalledWith(dep);
   expect(deployments.delete).toHaveBeenCalledWith('dep-1');
   expect(teardown.get('weather-api').state).toBe('completed');            // et ne se relance pas
   await step(); expect(deployment.remove).toHaveBeenCalledTimes(1);

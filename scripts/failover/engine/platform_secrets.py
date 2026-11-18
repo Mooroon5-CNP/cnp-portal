@@ -14,14 +14,15 @@ Le chemin historique du pilote (`initialize_secrets.py`, pile Terraform `credent
 """
 import base64
 import json
+import os
 import re
 import secrets
 from uuid import NAMESPACE_URL, uuid5
 
-ACCOUNT = "626278345026"
-PROJECT = "cnp-terraform-512313"
-REGION = "eu-west-3"
-GCP_LOCATION = "europe-west9"
+ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "626278345026")
+PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
+REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
+GCP_LOCATION = os.environ.get("GCP_REGION", "europe-west9")
 NAMESPACE = "crossplane-system"
 MANAGED_BY = "cnp-platform"
 # Les quatre premières sont celles du pilote (même contenu du conteneur bootstrap, lu tel quel par bootstrap.py).

@@ -132,6 +132,7 @@ async function forget(row) {
   const deployments = require('../models/deployment');
   const dep = deployments.get(row.deployment_id);
   if (dep) await require('./environment-deployment').remove(dep, { afterFailoverTeardown: true });
+  if (dep) await require('./openbao-cleanup').cleanup(dep);
   db.transaction(() => {
     for (const [table, column] of [['failover_candidates', 'app_name'], ['failover_operations', 'app'], ['failover_profiles', 'app_name'],
       ['failover_provisioning', 'app']]) {

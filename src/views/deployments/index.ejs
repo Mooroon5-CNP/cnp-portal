@@ -135,7 +135,7 @@
               <div id="newDeploymentModal"
                 class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center;">
                 <div
-                  style="background:var(--surface);width:600px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+                  style="background:var(--surface);width:600px;max-height:90vh;overflow:auto;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
                   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                     <h3 style="margin:0;">Nouveau déploiement</h3>
                     <button id="closeNewDeployment" class="btn btn-ghost">Fermer</button>
@@ -146,7 +146,47 @@
                     Kubernetes. Vous n'avez rien d'autre à faire.
                   </div>
 
-                  <form action="/deployments" method="POST">
+                  <div id="deploymentModeChoice" role="group" aria-label="Mode de déploiement">
+                    <p>Comment souhaitez-vous préparer votre déploiement ?</p>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+                      <button type="button" id="chooseManualDeployment" class="btn btn-primary">Remplir le formulaire manuellement</button>
+                      <button type="button" id="chooseAgentDeployment" class="btn btn-secondary">Déployer avec un agent</button>
+                    </div>
+                  </div>
+
+                  <section id="agentDeploymentFlow" hidden aria-label="Questions pour préparer le déploiement">
+                    <div id="agentIdentityStep">
+                      <p>Commencez par saisir le dépôt et le nom de votre application. Ces informations ne sont pas demandées à la voix.</p>
+                      <div class="form-group"><label for="agentGithubRepoUrl">URL du dépôt GitHub</label>
+                        <input type="url" id="agentGithubRepoUrl" placeholder="https://github.com/org/mon-app" required></div>
+                      <div class="form-group"><label for="agentAppName">Nom de l’application</label>
+                        <input type="text" id="agentAppName" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" maxlength="63" placeholder="mon-app" required></div>
+                      <button type="button" id="agentStartQuestions" class="btn btn-primary">Continuer vers les questions</button>
+                    </div>
+                    <div id="agentQuestionsStep" hidden>
+                    <p>Répondez à votre rythme. Vous pourrez réécouter et remplacer chaque enregistrement. Ne prononcez aucun mot de passe, jeton ou autre secret.</p>
+                    <div id="agentQuestionProgress" class="form-hint" aria-live="polite"></div>
+                    <h4 id="agentQuestionText"></h4>
+                    <p id="agentRecordingStatus" role="status" aria-live="polite"></p>
+                    <audio id="agentAnswerPlayback" controls hidden></audio>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">
+                      <button type="button" id="agentRecordStart" class="btn btn-primary">Enregistrer ma réponse</button>
+                      <button type="button" id="agentRecordStop" class="btn btn-secondary" hidden>Arrêter l’enregistrement</button>
+                      <button type="button" id="agentPreviousQuestion" class="btn btn-secondary">Question précédente</button>
+                      <button type="button" id="agentNextQuestion" class="btn btn-secondary">Question suivante</button>
+                    </div>
+                    <p class="form-hint">Les réponses restent dans ce navigateur jusqu’au clic sur « Pré-remplir mon formulaire ». Ce clic envoie les enregistrements pour transcription et analyse.</p>
+                    <button type="button" id="agentPrefill" class="btn btn-primary">Pré-remplir mon formulaire</button>
+                    <div id="agentPrefillStatus" class="form-hint" role="status" aria-live="polite" style="margin-top:10px;"></div>
+                    <button type="button" id="agentBackToIdentity" class="btn btn-ghost">Modifier le dépôt ou le nom</button>
+                    </div>
+                    <button type="button" id="agentBackToModes" class="btn btn-ghost">Choisir un autre mode</button>
+                  </section>
+
+                  <form id="newDeploymentForm" action="/deployments" method="POST" hidden>
+                    <div id="agentPrefillNotice" class="flash flash-success" hidden>Votre formulaire a été pré-rempli à partir de vos réponses. Vérifiez les informations, puis validez pour déployer votre application.</div>
+                    <div id="agentRecommendations" class="form-hint" hidden aria-live="polite"></div>
+                    <button type="button" id="manualBackToModes" class="btn btn-ghost">Choisir un autre mode</button>
                     <% if (draft.error) { %><div class="flash flash-error" role="alert"><%= draft.error %></div><% } %>
                     <div class="form-group">
                       <label for="githubRepoUrl">URL du repo GitHub</label>
@@ -224,6 +264,18 @@
                       <div class="form-hint">Réglé au déploiement ; pour en changer, redéployer l’application.</div>
                     </div>
 
+                    <div class="form-group">
+                      <label>Variables d'environnement de l'application (facultatif)</label>
+                      <div class="form-hint">Ajoutez des variables une par une ou importez un fichier .env. Leur destination OpenBao suit automatiquement l'hébergement choisi ; GCP Cloud SQL en production prépare aussi le secours AWS.</div>
+                      <div id="deploymentVariableRows"></div>
+                      <button type="button" id="addDeploymentVariable" class="btn btn-secondary btn-sm">Ajouter une variable</button>
+                      <label for="deploymentEnvFile" style="display:block;margin-top:12px;">Importer un fichier .env</label>
+                      <input type="file" id="deploymentEnvFile" accept=".env,.local,text/plain">
+                      <div id="deploymentVariableSummary" class="form-hint" aria-live="polite">Aucune variable ajoutée.</div>
+                      <div id="deploymentVariableError" class="flash flash-error" role="alert" hidden></div>
+                      <div class="form-hint">Les valeurs restent masquées et devront être ressaisies si le formulaire est refusé.</div>
+                    </div>
+
                     <div style="display:flex;gap:10px;margin-top:16px;">
                       <button type="submit" id="deploySubmitBtn" class="btn btn-primary">Déployer</button>
                       <button type="button" id="cancelNewDeployment" class="btn btn-secondary">Annuler</button>
@@ -292,13 +344,16 @@
                 </div>
               </div>
 
+              <script src="/js/deployment-variables.js"></script>
+              <script src="/js/deployment-voice.js"></script>
               <script>
+                window.CNPDeploymentVariables.init();
                 const openBtn = document.getElementById('openNewDeployment');
                 const modal = document.getElementById('newDeploymentModal');
                 const closeBtn = document.getElementById('closeNewDeployment');
                 const cancelBtn = document.getElementById('cancelNewDeployment');
-                function showModal() { modal.style.display = 'flex'; }
-                function hideModal() { modal.style.display = 'none'; }
+                function showModal() { modal.style.display = 'flex'; window.CNPDeploymentVoice.open(<%= locals.deploymentDraft ? 'true' : 'false' %>); }
+                function hideModal() { window.CNPDeploymentVoice.close(); modal.style.display = 'none'; }
                 <% if (locals.deploymentDraft) { %>showModal();<% } %>
                 if (openBtn) openBtn.addEventListener('click', showModal);
                 if (closeBtn) closeBtn.addEventListener('click', hideModal);
@@ -321,6 +376,7 @@
                   const hints = STACK_HINTS[stack] || {};
                   document.getElementById('stackHint').textContent = hints[environment] || hints.dev || '';
                   document.getElementById('billingGroup').style.display = stack.startsWith('gcp-') ? '' : 'none';
+                  document.getElementById('billing').required = stack.startsWith('gcp-');
                 }
                 document.getElementById('environment').addEventListener('change', onStackChange);
                 onStackChange();

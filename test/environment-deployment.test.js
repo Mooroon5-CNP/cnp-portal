@@ -11,6 +11,8 @@ jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getPro
 
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), hasOwnedRoute: jest.fn().mockResolvedValue(true), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
+jest.mock('../src/services/openbao-runtime', () => ({ references: jest.fn().mockResolvedValue([]),
+  gcpRuntimeIdentity: jest.fn().mockReturnValue('app-run@test-project.iam.gserviceaccount.com') }));
 
 jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
@@ -21,7 +23,9 @@ const github = require('../src/clients/github');
 const kubernetes = require('../src/clients/kubernetes');
 const argo = require('../src/clients/argocd');
 const service = require('../src/services/environment-deployment');
+const openbaoRuntime = require('../src/services/openbao-runtime');
 const releases = require('../src/models/deployment_release');
+const variableRecords = require('../src/models/deployment_variables');
 const revision = 'a'.repeat(40);
 let api, run, sourceHead, trees, published, existing, dep, prHead, mergedBy;
 
@@ -40,6 +44,7 @@ beforeEach(() => {
   run = { id: 10, head_sha: revision, head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/10' };
   sourceHead = revision; trees = []; published = []; existing = new Map(); prHead = 'commit-1'; mergedBy = null;
   api = { request: jest.fn(async (route, args) => {
+    if (route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches') return { status: 204 };
     if (route.includes('/actions/workflows/')) return { data: { workflow_runs: [run] } };
     if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
       if (!existing.has(`${args.repo}/${args.path}`)) throw Object.assign(new Error('not found'), { status: 404 });
@@ -120,6 +125,54 @@ test('main CI publishes dev once and concurrent polls share the same work', asyn
   await service.reconcile(dep); expect(published).toHaveLength(1);
 });
 
+test('changing variables republishes the same successful CI revision and keeps the image', async () => {
+  await service.reconcile(dep);
+  variableRecords.save(dep.id, { generation: 'new-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  expect(await service.observe(dep)).toMatchObject({ phase: 'deploying' });
+  openbaoRuntime.references.mockResolvedValueOnce([{ name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'feature', version: '1' } } }]);
+  await service.reconcile(dep);
+  expect(published).toHaveLength(2);
+  expect(releases.get(dep.id, revision)).toMatchObject({ state: 'published', variable_generation: 'new-generation' });
+  const claim = yaml.load(trees.at(-1).tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
+  expect(claim.spec.forProvider.template.containers[0].image).toBe(`registry.test/project/apps/pixelcam:${revision}`);
+  expect(claim.spec.forProvider.template.containers[0].env.some(item => item.name === 'FEATURE')).toBe(true);
+});
+
+test('an unchanged image cannot report success until Cloud Run observes the new secret version', async () => {
+  variableRecords.save(dep.id, { generation: 'new-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const ref = { name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '7' } } };
+  openbaoRuntime.references.mockResolvedValueOnce([ref]);
+  await service.reconcile(dep);
+  const observed = { ready: true, image: `registry.test/project/apps/pixelcam:${revision}`,
+    url: 'https://pixelcam-dev.run.app', runtimeVariables: [{ ...ref,
+      valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '6' } } }] };
+  kubernetes.getV2ServiceStatus.mockResolvedValue(observed);
+  expect(await service.observe(dep)).toMatchObject({ phase: 'deploying' });
+  observed.runtimeVariables = [ref];
+  expect(await service.observe(dep)).toMatchObject({ phase: 'success' });
+});
+
+test('a published variable release without recorded references is republished for observation', async () => {
+  variableRecords.save(dep.id, { generation: 'existing-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const ref = { name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '7' } } };
+  openbaoRuntime.references.mockResolvedValue([ref]);
+  await service.reconcile(dep);
+  db.prepare('UPDATE deployment_releases SET runtime_refs_json = NULL WHERE deployment_id = ? AND revision = ?').run(dep.id, revision);
+  await service.reconcile(dep);
+  expect(published).toHaveLength(2);
+  expect(JSON.parse(releases.get(dep.id, revision).runtime_refs_json)).toEqual([ref]);
+});
+
+test('GCS storage follows the dedicated runtime identity when OpenBao variables are enabled', () => {
+  variableRecords.save(dep.id, { generation: 'storage-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  const files = service.manifests(dep, revision);
+  const [bucket, binding] = yaml.loadAll(files['apps/pixelcam/crossplane/dev/gcs-bucket.yaml']);
+  expect(bucket.kind).toBe('Bucket');
+  expect(binding.spec.forProvider.member).toBe('serviceAccount:app-run@test-project.iam.gserviceaccount.com');
+  const claim = yaml.load(files['apps/pixelcam/crossplane/dev/cloudrun-claim.yaml']);
+  expect(claim.spec.forProvider.template.serviceAccount).toBe('app-run@test-project.iam.gserviceaccount.com');
+});
+
 test('a successful run for an outdated source commit cannot publish dev', async () => {
   sourceHead = 'b'.repeat(40);
   expect((await service.reconcile(dep)).phase).toBe('waiting'); expect(published).toHaveLength(0);
@@ -187,14 +240,25 @@ test('setup replaces an owned CNP caller instead of creating a second build work
 });
 
 test('setup of the dev keeps the failover workflow of a prod with failover on both branches', async () => {
-  const prod = deployments.create({ environment: 'prod', appName: 'pixelcam', appPort: 8080,
-    githubRepoUrl: 'https://github.com/team/pixelcalm', ownerUserId: 'owner', failoverRequested: true });
-  await service.onboard(dep);
-  const written = trees.filter(tree => tree.repo === 'pixelcalm').flatMap(tree => tree.tree)
-    .filter(file => file.path === '.github/workflows/cnp-pixelcam.yml');
-  expect(written).toHaveLength(2);
-  expect(written.every(file => yaml.load(file.content).jobs.pipeline.with.target_cloud === 'both')).toBe(true);
-  deployments.delete(prod.id);
+  const previousAccount = process.env.CNP_AWS_ACCOUNT_ID;
+  const previousRegion = process.env.CNP_AWS_REGION;
+  process.env.CNP_AWS_ACCOUNT_ID = '123456789012';
+  process.env.CNP_AWS_REGION = 'eu-west-3';
+  try {
+    const prod = deployments.create({ environment: 'prod', appName: 'pixelcam', appPort: 8080,
+      githubRepoUrl: 'https://github.com/team/pixelcalm', ownerUserId: 'owner', failoverRequested: true });
+    await service.onboard(dep);
+    const written = trees.filter(tree => tree.repo === 'pixelcalm').flatMap(tree => tree.tree)
+      .filter(file => file.path === '.github/workflows/cnp-pixelcam.yml');
+    expect(written).toHaveLength(2);
+    expect(written.every(file => yaml.load(file.content).jobs.pipeline.with.target_cloud === 'both')).toBe(true);
+    deployments.delete(prod.id);
+  } finally {
+    if (previousAccount === undefined) delete process.env.CNP_AWS_ACCOUNT_ID;
+    else process.env.CNP_AWS_ACCOUNT_ID = previousAccount;
+    if (previousRegion === undefined) delete process.env.CNP_AWS_REGION;
+    else process.env.CNP_AWS_REGION = previousRegion;
+  }
 });
 
 test('setup preserves custom CI files and rejects another app registered against this repository', async () => {
@@ -387,6 +451,33 @@ test('production setup also leaves the legacy parent absent and uses only its pr
   expect(applied.spec.template.metadata.name).toBe('{{path[1]}}-prod');
   expect(applied.spec.generators[0].git.directories).toEqual([{ path: 'apps/pixelcam/crossplane/prod' }]);
   expect(trees.filter(tree => tree.repo === 'config').every(tree => !tree.tree.some(file => file.path === 'apps/pixelcam/crossplane/kustomization.yaml'))).toBe(true);
+  const devTrigger = trees.find(tree => tree.repo === 'pixelcalm' && tree.tree.some(file => file.path === '.cnp-platform-dev'));
+  expect(devTrigger).toBeDefined();
+  expect(devTrigger.tree.find(file => file.path === '.cnp-platform-dev').content).toContain('CNP dev');
+  const prodTrigger = api.request.mock.calls.findIndex(([route, args]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}' && args.ref === 'heads/prod' && args.repo === 'pixelcalm');
+  const devTriggerIndex = api.request.mock.calls.findIndex(([route, args]) => route === 'PATCH /repos/{owner}/{repo}/git/refs/{ref}' && args.ref === 'heads/main' && args.repo === 'pixelcalm'
+    && Number(args.sha.split('-')[1]) === trees.indexOf(devTrigger) + 1);
+  expect(devTriggerIndex).toBeGreaterThan(prodTrigger);
+  expect(api.request.mock.calls.some(([route]) => route.endsWith('/dispatches'))).toBe(false);
+});
+
+test('production setup starts a dev CI for the new main head after a skipped configuration commit', async () => {
+  production();
+  const mainHead = 'b'.repeat(40);
+  await service.onboard(dep);
+  const devId = deployments.create({ environment: 'dev', appName: 'pixelcam', appPort: 8080,
+    githubRepoUrl: 'https://github.com/team/pixelcalm', persistentStorage: true, ownerUserId: 'owner' }).id;
+  deployments.updateOnboardingStatus(devId, 'ready');
+  const token = releases.acquire(devId, '__registration__', 0);
+  releases.save(devId, '__registration__', token, 'registered');
+  releases.release(devId, '__registration__', token);
+  sourceHead = mainHead;
+  run = { ...run, head_branch: 'main' };
+  const dev = deployments.get(devId);
+  expect((await service.reconcile(dev)).phase).toBe('waiting');
+  expect(trees.some(tree => tree.repo === 'pixelcalm' && tree.tree.some(file => file.path === '.cnp-platform-dev'))).toBe(true);
+  run = { ...run, id: 11, head_sha: mainHead };
+  expect(await service.reconcile(dev)).toMatchObject({ phase: 'deploying', revision: mainHead, runId: 11 });
 });
 
 test('missing environment project or orphaned legacy application prevents setup before source writes', async () => {
@@ -561,14 +652,36 @@ test('runtime secret configuration rejects plaintext values before publication',
   expect(published).toHaveLength(0);
 });
 
+test('OpenBao references are pinned in the GCP claim only after successful CI', async () => {
+  openbaoRuntime.references.mockResolvedValueOnce([{ name: 'API_KEY',
+    valueSource: { secretKeyRef: { secret: 'cnp-pixelcam-dev-var-abcdef123456', version: '7' } } }]);
+  await service.reconcile(dep);
+  const claimTree = trees.find(tree => tree.repo === 'config' && tree.tree.some(file => file.path.endsWith('cloudrun-claim.yaml')));
+  const claim = yaml.load(claimTree.tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
+  expect(claim.spec.forProvider.template.containers[0].env).toContainEqual({ name: 'API_KEY',
+    valueSource: { secretKeyRef: { secret: 'cnp-pixelcam-dev-var-abcdef123456', version: '7' } } });
+  expect(claim.spec.forProvider.template.serviceAccount).toBe('app-run@test-project.iam.gserviceaccount.com');
+  expect(JSON.stringify(claimTree)).not.toContain('private-value');
+});
+
 test('le failover publie la provenance seulement après succès du pipeline prod', () => {
+  const previousAccount = process.env.CNP_AWS_ACCOUNT_ID;
+  const previousRegion = process.env.CNP_AWS_REGION;
+  process.env.CNP_AWS_ACCOUNT_ID = '123456789012';
+  process.env.CNP_AWS_REGION = 'eu-west-3';
+  try {
   const doc = yaml.load(service.workflow('telemetry-api', { appName: 'telemetry-api', environment: 'prod', failoverRequested: true, appPort: 8080 }));
   expect(doc.jobs.pipeline.with.target_cloud).toBe('both');
   expect(doc.jobs.pipeline.with.gitops_mode).toBe('portal');
   expect(doc.jobs['failover-images'].needs).toEqual(['pipeline']);
   expect(doc.jobs['failover-images'].if).toContain("needs.pipeline.result == 'success'");
   expect(doc.jobs['failover-images'].steps[0].env.CNP_DIGEST).toBe('${{ needs.pipeline.outputs.image_digest }}');
+  expect(doc.jobs['failover-images'].steps[0].env.CNP_AWS_REGISTRY).toBe('123456789012.dkr.ecr.eu-west-3.amazonaws.com');
   expect(yaml.load(service.workflow('ordinary-app')).jobs['failover-images']).toBeUndefined();
+  } finally {
+    if (previousAccount === undefined) delete process.env.CNP_AWS_ACCOUNT_ID; else process.env.CNP_AWS_ACCOUNT_ID = previousAccount;
+    if (previousRegion === undefined) delete process.env.CNP_AWS_REGION; else process.env.CNP_AWS_REGION = previousRegion;
+  }
 });
 
 test('an old Cloud Run revision failure is not attributed to the newly published image', async () => {

@@ -443,6 +443,7 @@ function observedServiceStatus(body) {
     ready,
     url: observed.uri || null,
     image: template?.containers?.[0]?.image || null,
+    runtimeVariables: Array.isArray(template?.containers?.[0]?.env) ? template.containers[0].env : null,
     failure: readyCondition?.state === 'CONDITION_FAILED' ? readyCondition.message || 'Révision Cloud Run en échec.' : null,
   };
 }
@@ -509,10 +510,19 @@ function azureObservedImage(containerApp) {
   return container?.image || null;
 }
 
+function azureObservedVariables(containerApp) {
+  const observed = containerApp?.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+  return { env: Array.isArray(container?.env) ? container.env : null,
+    secrets: Array.isArray(observed.secret) ? observed.secret : null };
+}
+
 function azureAppStatusFrom({ server, database, containerApp }) {
   const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
   if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
-    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp) };
+    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp),
+      observedVariables: azureObservedVariables(containerApp) };
   }
   // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
   // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de

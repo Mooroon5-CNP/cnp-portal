@@ -18,6 +18,9 @@ const yaml = require('js-yaml');
 const { config, getMissingAzureVars } = require('../config/env');
 const kubernetes = require('../clients/kubernetes');
 const azureTemplates = require('./azure-templates');
+const deploymentVariables = require('../models/deployment_variables');
+const releases = require('../models/deployment_release');
+const observedVariables = require('./openbao-observed');
 
 const isAzure = dep => !!dep && dep.targetCluster === 'azure';
 
@@ -128,6 +131,14 @@ async function readiness(dep, revision) {
   if (status.phase === 'failed') return { phase: 'failed', message: `Azure : ${status.failure}`, cloudRunUrl: null };
   if (status.phase === 'ready') {
     if (status.observedImage === imageRef(dep, revision)) {
+      const record = deploymentVariables.get(dep.id);
+      if (record) {
+        const release = releases.get(dep.id, revision);
+        if (release?.variable_generation !== record.generation || !release.runtime_refs_json
+          || !observedVariables.azureMatches(status.observedVariables, JSON.parse(release.runtime_refs_json), record.ownedNames)) {
+          return { phase: 'deploying', message: 'Attente de l’application des références de variables dans Azure Container Apps.', cloudRunUrl: null };
+        }
+      }
       if (config.azure.publicDomain && url && !(await publicAddressAnswers(url))) {
         return { phase: 'deploying', message: 'Container App prête ; nom public et certificat en cours de pose (5 à 10 min).', cloudRunUrl: null };
       }

@@ -97,7 +97,7 @@ secrets runtime. Ne jamais les copier dans un chat, une capture ou un fichier su
 | Scaleway Mistral | `REPORT_MODEL_API_KEY`, `SCW_DEFAULT_PROJECT_ID`, `VOICE_DEPLOYMENT_ANALYSIS_MODEL` ; optionnel `MCP_MISTRAL_MODEL` | Classification des demandes ambiguës, synthèse et résolution des noms d’application |
 | Facturation | Aucun adaptateur connecté en V1 | Coûts inconnus, jamais inventés |
 
-Le chat utilise le Gateway Scaleway et la clé déjà configurée dans le `.env` local. Seuls les
+Le chat réutilise le Gateway Scaleway et la clé d’analyse du portail. Seuls les
 modèles dont l’identifiant commence par `mistral-` sont acceptés. `MCP_MISTRAL_ENABLED=false`
 désactive la synthèse et la résolution sémantique ; `MCP_ROUTING_MODE=local` évite
 aussi les appels IA pour le routage. `CLOUD_ENV_FILE` sélectionne les paramètres cloud importés. Voir le
@@ -157,8 +157,8 @@ pour les demandes libres ambiguës ; s’il ne répond pas, aucun outil qu’il 
 sélectionné n’est exécuté. La résolution « le canard » ne reçoit que les noms et
 identifiants autorisés. Sa proposition est revalidée ; une ambiguïté reste ouverte.
 
-Pour activer la génération, renseigner les accès Scaleway dans le `.env` du portail,
-puis redémarrer :
+Pour activer la génération, conserver les accès Scaleway déjà utilisés par l’analyse
+vocale dans le `.env` du portail, puis redémarrer :
 
 ```dotenv
 REPORT_MODEL_API_KEY=<clé Scaleway existante>

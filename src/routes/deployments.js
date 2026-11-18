@@ -23,6 +23,11 @@ const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
 const { privateAppUrl } = require('../services/private-templates');
 const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
+const { valuesFromForm } = require('../services/deployment-variable-input');
+const openbaoVariables = require('../services/openbao-variables');
+const deploymentVariables = require('../models/deployment_variables');
+const deploymentReleases = require('../models/deployment_release');
+const openbaoRuntime = require('../services/openbao-runtime');
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
 const SUPPORTED_CLOUDS = ['gcp', 'azure', 'private-aws'];
@@ -81,6 +86,17 @@ function canRetryConfiguration(user, dep) {
     return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
         && !dep.onboardingError?.startsWith('Nettoyage partiel')
         && (user.role === 'manager' || user.id === dep.ownerUserId);
+}
+
+function assertVariableChangeAllowed(dep) {
+    if (!usesEnvironment(dep) || dep.onboardingStatus !== 'ready') throw new Error('Environnement indisponible pour la mise à jour.');
+    if (dep.failoverRequested && require('../services/failover-provisioning').get(dep.appName)?.state !== 'completed') {
+        throw new Error('Terminez la mise en service du failover avant de modifier ses variables.');
+    }
+    if (deploymentReleases.list(dep.id).some(release => ['pending', 'approving'].includes(release.state)
+        || (release.state === 'preparing' && release.lease_until > Date.now()))) {
+        throw new Error('Publication en cours : attendez sa fin avant de modifier les variables.');
+    }
 }
 
 async function environmentStatus(dep) {
@@ -341,6 +357,13 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    let variableValues;
+    try { variableValues = valuesFromForm(req.body); }
+    catch (error) {
+        req.flash('error', error.message);
+        return res.redirect('/deployments');
+    }
+
     // Un nom d'application partagé entre environnements garde les mêmes droits d'accès.
     const visibleIds = new Set(deploymentModel.listForUser(req.user).map(row => row.id));
     if (deploymentModel.listForUser(null).some(row => row.app_name === appName && !visibleIds.has(row.id))) {
@@ -365,6 +388,15 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
         return res.redirect('/deployments');
     }
 
+    if (Object.keys(variableValues).length) {
+        try { openbaoRuntime.assertReady({ appName, environment, targetCluster: targetCluster || 'gcp', failoverRequested,
+            persistentStorage: hasPersistentStorage }); }
+        catch (error) {
+            req.flash('error', `Variables indisponibles : ${error.message}`);
+            return res.redirect('/deployments');
+        }
+    }
+
     // Only record the deployment after the read-only compatibility check succeeds.
     let dep;
     try {
@@ -385,6 +417,16 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
+    }
+
+    if (Object.keys(variableValues).length) {
+        try { await openbaoVariables.service().prepare(dep, variableValues); }
+        catch (error) {
+            deploymentVariables.remove(dep.id);
+            deploymentModel.delete(dep.id);
+            req.flash('error', `Variables non préparées : ${error.message} Ressaisissez leurs valeurs avant de réessayer.`);
+            return res.redirect('/deployments');
+        }
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
@@ -726,6 +768,10 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        variableNames: deploymentVariables.get(dep.id)?.names || [],
+        canRestoreVariables: (deploymentVariables.get(dep.id)?.history.length || 0) > 1,
+        canEditVariables: usesEnvironment(dep) && dep.onboardingStatus === 'ready'
+            && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
         deletionDraft,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
         canRetryPipeline: can(req.user, 'cicd:trigger-pipeline') && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
@@ -754,6 +800,41 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         user: req.user,
         can: (p) => can(req.user, p),
     });
+});
+
+router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && req.user.id !== dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé');
+    }
+    try {
+        assertVariableChangeAllowed(dep);
+        const values = valuesFromForm(req.body);
+        if (Object.keys(values).length || deploymentVariables.get(dep.id)) openbaoRuntime.assertReady(dep);
+        if (!Object.keys(values).length && !deploymentVariables.get(dep.id)) {
+            req.flash('success', 'Aucune variable à modifier.');
+        } else {
+            await openbaoVariables.service().prepare(dep, values, { allowEmpty: true });
+            req.flash('success', 'Variables enregistrées ; publication GitOps en cours.');
+        }
+    } catch (err) { req.flash('error', err.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+router.post('/:id/variables/restore', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && req.user.id !== dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé');
+    }
+    try {
+        assertVariableChangeAllowed(dep);
+        openbaoRuntime.assertReady(dep);
+        await openbaoVariables.service().restorePrevious(dep);
+        req.flash('success', 'Version précédente préparée ; publication GitOps en cours.');
+    } catch (err) { req.flash('error', err.message); }
+    return res.redirect(`/deployments/${dep.id}`);
 });
 
 // Une validation manager publie exactement le candidat de production sélectionné.

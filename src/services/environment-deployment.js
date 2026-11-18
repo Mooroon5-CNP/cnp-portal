@@ -16,6 +16,9 @@ const addresses = require('./application-address');
 const azure = require('./environment-azure');
 const priv = require('./environment-private');
 const failover = require('./environment-failover');
+const openbaoRuntime = require('./openbao-runtime');
+const deploymentVariables = require('../models/deployment_variables');
+const observedVariables = require('./openbao-observed');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -49,19 +52,21 @@ function workflow(appName, dep = {}) {
     } },
   };
   if (dep.failoverRequested || failover.enabled(dep)) {
+    const awsRegistry = require('./failover-ci-images').awsRegistry();
     document.jobs['failover-images'] = {
       needs: ['pipeline'], 'runs-on': 'ubuntu-latest',
       if: "${{ github.ref == 'refs/heads/prod' && needs.pipeline.result == 'success' }}",
       steps: [{ name: 'Record immutable images', env: {
         CNP_APP: appName, CNP_REVISION: '${{ github.sha }}', CNP_DIGEST: '${{ needs.pipeline.outputs.image_digest }}',
         CNP_GCP_REGISTRY: config.github.registryUrl || config.gcp.imageRegistry,
+        CNP_AWS_REGISTRY: awsRegistry,
       }, run: `python3 - <<'PY'
 import json, os, re
 assert re.fullmatch(r'sha256:[a-f0-9]{64}', os.environ['CNP_DIGEST'])
 app, digest = os.environ['CNP_APP'], os.environ['CNP_DIGEST']
 record = {'app': app, 'revision': os.environ['CNP_REVISION'], 'digest': digest,
     'gcp': os.environ['CNP_GCP_REGISTRY'] + '/' + app + '@' + digest,
-    'aws': '626278345026.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
+    'aws': os.environ['CNP_AWS_REGISTRY'] + '/' + app + '@' + digest}
 with open('cnp-images.json', 'w') as file: json.dump(record, file)
 PY` }, { uses: 'actions/upload-artifact@v4', with: {
         name: 'cnp-failover-images-${{ github.sha }}', path: 'cnp-images.json', 'if-no-files-found': 'error', 'retention-days': 30,
@@ -135,7 +140,9 @@ function manifests(dep, revision) {
     { name: 'DD_ENV', value: dep.environment }, { name: 'DD_SERVICE', value: dep.appName },
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
-  const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  const runtimeServiceAccount = deploymentVariables.get(dep.id)
+    ? openbaoRuntime.gcpRuntimeIdentity(dep) : config.gcp.cloudRunSa;
+  const template = { serviceAccount: runtimeServiceAccount, containers: [container] };
   if (dep.billing === 'instance') {
     // Facturation à l'instance : une instance toujours active et son CPU toujours alloué (pas de démarrage à froid).
     template.scaling = { minInstanceCount: 1 };
@@ -162,7 +169,7 @@ function manifests(dep, revision) {
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
     storage.spec.deletionPolicy = 'Orphan';
     const binding = resource('storage.gcp.upbound.io/v1beta1', 'BucketIAMMember', `${bucket}-runtime`,
-      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
+      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${runtimeServiceAccount}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
   }
@@ -344,6 +351,12 @@ async function prepareOnboarding(dep) {
   }, `chore(${dep.appName}): register ${dep.environment}`);
   await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
+  if (dep.environment === 'prod') {
+    // La configuration du workflow sur main utilise [skip ci]. Un nouveau commit
+    // déclenche la CI dev via push, avec la permission Contents: write de l'App.
+    await commitFiles(api, source, { '.cnp-platform-dev': `CNP dev\n${new Date().toISOString()}\n` },
+      `ci(${dep.appName}): deploy dev after prod onboarding`, 'main');
+  }
 }
 
 function onboard(dep) {
@@ -372,6 +385,17 @@ async function readiness(dep, revision, { allowMutation = true } = {}) {
   if (priv.isPrivate(dep)) return priv.readiness(dep, revision);
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
+  if (observed.failure && observed.image === image(dep, revision)) {
+    return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
+  }
+  const record = deploymentVariables.get(dep.id);
+  if (record) {
+    const release = releases.get(dep.id, revision);
+    if (release?.variable_generation !== record.generation || !release.runtime_refs_json
+      || !observedVariables.gcpMatches(observed.runtimeVariables, JSON.parse(release.runtime_refs_json), record.ownedNames)) {
+      return { phase: 'deploying', message: 'Attente de l’application des références de variables dans Cloud Run.', cloudRunUrl: null };
+    }
+  }
   if (observed.ready && observed.image === image(dep, revision)) {
     if (addresses.usesNativeCloudRun(dep)) {
       // Only probe the provider's HTTPS endpoint, never an arbitrary URL or redirect.
@@ -428,6 +452,10 @@ async function observe(dep) {
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
 
     const release = releases.get(dep.id, run.head_sha);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && release.variable_generation !== generation) {
+      return { ...snapshot, phase: 'deploying', message: 'Mise à jour des variables en préparation.' };
+    }
     if (release?.state === 'rejected') return { ...snapshot, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') {
       return { ...snapshot, ...await readiness(dep, run.head_sha, { allowMutation: false }) };
@@ -480,7 +508,16 @@ async function reconcile(dep) {
     if (run.conclusion !== 'success') return { ...result, phase: 'failed', message: 'Le pipeline a échoué ; aucun déploiement publié.' };
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
     const revision = run.head_sha;
-    const release = releases.get(dep.id, revision);
+    let release = releases.get(dep.id, revision);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && ['published', 'rejected'].includes(release.state)
+      && (release.variable_generation !== generation || (release.state === 'published' && generation && !release.runtime_refs_json))) {
+      releases.resetForVariables(dep.id, revision, generation);
+      release = releases.get(dep.id, revision);
+    }
+    if (release && release.variable_generation !== generation && release.state !== 'preparing') {
+      return { ...result, phase: 'deploying', message: 'Mise à jour des variables en attente du candidat courant.' };
+    }
     if (release?.state === 'approving') return { ...result, ...await interruptedApproval(api, dep, release) };
     if (release?.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') return { ...result, ...await readiness(dep, revision) };
@@ -489,11 +526,14 @@ async function reconcile(dep) {
     const token = releases.acquire(dep.id, revision, run.id);
     if (!token) return { ...result, phase: 'deploying', message: 'Préparation GitOps en cours.' };
     const guard = async () => {
-      if (!current(dep) || !releases.owns(dep.id, revision, token) || !(await sourceIsCurrent(dep, revision))) {
+      if (!current(dep) || !releases.owns(dep.id, revision, token)
+        || (deploymentVariables.get(dep.id)?.generation || null) !== generation
+        || !(await sourceIsCurrent(dep, revision))) {
         throw new Error('Le déploiement ou sa branche a changé. Réessayez.');
       }
     };
     try {
+      releases.setVariableGeneration(dep.id, revision, token, generation);
       // Un autre processus a pu terminer entre la lecture et l'acquisition du bail.
       const fresh = releases.get(dep.id, revision);
       if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
@@ -503,7 +543,12 @@ async function reconcile(dep) {
       // les apps inscrites avant le rôle applicatif (16/11/2026) l'obtiennent à leur prochaine publication.
       if (azure.isAzure(dep)) await databaseSecrets(dep, 'app-sql-secrets');
       const files = manifests(dep, revision);
-      if (!azure.isAzure(dep) && !priv.isPrivate(dep)) {
+      let runtimeRefs = null;
+      if (azure.isAzure(dep)) {
+        const prepared = await openbaoRuntime.azureReferences(dep);
+        openbaoRuntime.applyAzureReferences(files, dep, prepared);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = prepared?.references || [];
+      } else if (!priv.isPrivate(dep)) {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
@@ -523,15 +568,20 @@ async function reconcile(dep) {
         }
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
-        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
+        const custom = await openbaoRuntime.references(dep);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = custom;
+        const occupied = new Set([...container.env, ...runtime].map(item => item.name));
+        if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
+        if (custom.length) claim.spec.forProvider.template.serviceAccount = openbaoRuntime.gcpRuntimeIdentity(dep);
+        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime, custom);
         files[claimPath] = yaml.dump(claim);
       }
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
-        releases.save(dep.id, revision, token, 'published');
+        releases.save(dep.id, revision, token, 'published', { runtimeRefs });
         return { ...result, ...await readiness(dep, revision) };
       }
-      const branch = `cnp-release/${dep.id}/${revision}`;
+      const branch = `cnp-release/${dep.id}/${revision}/${generation || 'none'}`;
       const destination = target();
       const main = await github.getRef(destination.owner, destination.repo, 'main');
       await github.createBranch(destination.owner, destination.repo, branch, main);
@@ -544,7 +594,7 @@ async function reconcile(dep) {
           head: branch, base: 'main', body: `Production candidate from successful CI: ${run.html_url}\n\nApprove through CNP Portal so the GitHub App publishes the protected production path.` });
         pr = data;
       }
-      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head });
+      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head, runtimeRefs });
       return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: pr.html_url };
     } finally { releases.release(dep.id, revision, token); }
   })();
@@ -556,6 +606,9 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   if (dep.environment !== 'prod' || !current(dep)) throw new Error('Validation réservée à une production active.');
   const release = releases.get(dep.id, revision);
   if (!release || !['pending', 'approving'].includes(release.state)) throw new Error('Candidat non disponible.');
+  if (release.variable_generation !== (deploymentVariables.get(dep.id)?.generation || null)) {
+    throw new Error('Variables modifiées ; candidat obsolète.');
+  }
   const api = await github.getInstallationOctokit();
   const run = await latest(api, dep);
   if (!run || run.head_sha !== revision || run.conclusion !== 'success' || !(await sourceIsCurrent(dep, revision))) {

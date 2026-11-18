@@ -183,7 +183,10 @@ async function advance(id) {
         }
       }
       if (remaining.length) { save(id, { state: 'waiting', message: `Suppression en cours : ${remaining.join(', ')}` }); return; }
-      save(id, { step: 'repository', state: 'running', message: 'Disparition des ressources confirmée.' });
+      save(id, { step: 'variables', state: 'running', message: 'Disparition des ressources confirmée.' });
+    } else if (row.step === 'variables') {
+      await require('./openbao-cleanup').cleanup(dep);
+      save(id, { step: 'repository', state: 'running', message: 'Variables de cet environnement supprimées.' });
     } else if (row.step === 'repository') {
       await cleanupRepository(dep);
       db.transaction(() => {

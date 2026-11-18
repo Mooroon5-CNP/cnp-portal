@@ -40,7 +40,9 @@ const kubernetes = require('../src/clients/kubernetes');
 const argo = require('../src/clients/argocd');
 const routing = require('../src/services/application-routing');
 const service = require('../src/services/environment-deployment');
+const openbaoRuntime = require('../src/services/openbao-runtime');
 const releases = require('../src/models/deployment_release');
+const variableRecords = require('../src/models/deployment_variables');
 const revision = 'a'.repeat(40);
 let api, run, sourceHead, trees, published, existing, dep;
 
@@ -217,6 +219,21 @@ describe('publication et disponibilité', () => {
     await service.reconcile(dep); expect(published).toHaveLength(1);
   });
 
+  test('les variables Azure sont référencées dans le candidat après la CI', async () => {
+    const identity = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-1/providers/Microsoft.ManagedIdentity/userAssignedIdentities/todo-dev-secrets';
+    const spy = jest.spyOn(openbaoRuntime, 'azureReferences').mockResolvedValueOnce({ identity,
+      references: [{ name: 'API_KEY', secretName: 'cnp-todo-dev-var-aabbccddeeff',
+        keyVaultSecretId: 'https://cnp-test.vault.azure.net/secrets/cnp-todo-dev-var-aabbccddeeff/' + 'a'.repeat(32) }] });
+    try {
+      await service.reconcile(dep);
+      const claim = yaml.load(trees[0].tree.find(file => file.path.endsWith('containerapp-claim.yaml')).content);
+      expect(claim.spec.forProvider.template.container[0].env).toContainEqual({
+        name: 'API_KEY', secretName: 'cnp-todo-dev-var-aabbccddeeff' });
+      expect(claim.spec.forProvider.identity.identityIds).toContain(identity);
+      expect(published).toHaveLength(1);
+    } finally { spy.mockRestore(); }
+  });
+
   test('« déployée » seulement quand la Container App tourne sur la bonne révision', async () => {
     await service.reconcile(dep);
     kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'ready', failure: null, observedImage: `acr.azurecr.io/todo:${'b'.repeat(40)}` });
@@ -229,6 +246,24 @@ describe('publication et disponibilité', () => {
     expect(kubernetes.getAzureAppStatus).toHaveBeenCalledWith('todo', {
       serverName: 'cnp-sov-fr-todo-dev-abc123', databaseName: 'todo-dev-appdb', containerAppName: 'todo-dev',
     });
+  });
+
+  test('une image inchangée attend la version Key Vault observée avant de réussir', async () => {
+    variableRecords.save(dep.id, { generation: 'azure-generation', names: ['FEATURE'], versions: { azure: 1 } });
+    const reference = { name: 'FEATURE', secretName: 'cnp-feature',
+      keyVaultSecretId: 'https://vault.test/secrets/cnp-feature/' + 'a'.repeat(32) };
+    const identity = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-1/providers/Microsoft.ManagedIdentity/userAssignedIdentities/todo-dev-secrets';
+    const spy = jest.spyOn(openbaoRuntime, 'azureReferences').mockResolvedValueOnce({ identity, references: [reference] });
+    try {
+      await service.reconcile(dep);
+      const observed = { phase: 'ready', observedImage: `acr.azurecr.io/todo:${revision}`,
+        observedVariables: { env: [{ name: 'FEATURE', secretName: 'cnp-feature' }],
+          secrets: [{ name: 'cnp-feature', keyVaultSecretId: 'https://vault.test/secrets/cnp-feature/' + 'b'.repeat(32) }] } };
+      kubernetes.getAzureAppStatus.mockResolvedValue(observed);
+      expect(await service.observe(dep)).toMatchObject({ phase: 'deploying' });
+      observed.observedVariables.secrets[0].keyVaultSecretId = reference.keyVaultSecretId;
+      expect(await service.observe(dep)).toMatchObject({ phase: 'success' });
+    } finally { spy.mockRestore(); }
   });
 
   test('avec le domaine public, « déployée » seulement quand l\'adresse répond (nom et certificat posés)', async () => {
