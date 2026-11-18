@@ -8,6 +8,12 @@ const kubernetes = require('../clients/kubernetes');
 const ROUTING_PATH = 'platform/application-routing/urlmap.yaml';
 const MAP_NAME = 'cnp-application-routing';
 const apiVersion = 'compute.gcp.upbound.io/v1beta1';
+// Le réconciliateur vérifie chaque app toutes les 30 s ; sans cache, la sonde HTTPS ci-dessous faisait un `GET /` sur
+// chaque app GCP toutes les 30 s par portail allumé, qui noyait les logs des utilisateurs dans Datadog (constaté le
+// 18/11/2026). Un succès est gardé PROBE_TTL_MS pour la même adresse et le même backend ; un échec n'est jamais gardé
+// (le déploiement attend le routage), et toute publication ou retrait de route (sync) efface l'entrée de l'app.
+const PROBE_TTL_MS = 10 * 60 * 1000;
+const probes = new Map();
 
 function names(dep) {
   const service = `${dep.appName}-${dep.environment}`;
@@ -63,6 +69,7 @@ async function read(api, repo, path, ref) {
   } catch (err) { if (err.status === 404) return null; throw err; }
 }
 async function sync(dep, { api, repo, commitFiles, beforePublish }, remove = false) {
+  probes.delete(dep.id);
   await commitFiles(api, repo, async head => {
     const baseline = await read(api, repo, ROUTING_PATH, head);
     const next = updateMap(baseline, dep, remove);
@@ -108,9 +115,19 @@ async function status(dep, remove = false) {
   if (!managedReady(neg) || !managedReady(backend) || neg.status?.atProvider?.cloudRun?.[0]?.service !== n.service) return false;
   const expected = `https://www.googleapis.com/compute/v1/projects/${config.gcp.project}/regions/${config.gcp.region}/networkEndpointGroups/${n.neg}`;
   if (!backend.status?.atProvider?.backend?.some(item => item.group === expected)) return false;
+  const url = addresses.url(dep);
+  const key = `${url}|${backendUrl(dep)}`;
+  const cached = probes.get(dep.id);
+  if (cached?.key === key && Date.now() - cached.at < PROBE_TTL_MS) return true;
   try {
-    const response = await axios.get(addresses.url(dep), { timeout: 10000, maxRedirects: 0, validateStatus: code => code >= 200 && code < 400 });
-    return response.status >= 200 && response.status < 400;
-  } catch (_) { return false; }
+    const response = await axios.get(url, { timeout: 10000, maxRedirects: 0, validateStatus: code => code >= 200 && code < 400 });
+    const ok = response.status >= 200 && response.status < 400;
+    if (ok) probes.set(dep.id, { key, at: Date.now() }); else probes.delete(dep.id);
+    return ok;
+  } catch (_) {
+    probes.delete(dep.id);
+    return false;
+  }
 }
-module.exports = { names, network, updateMap, sync, status, hasOwnedRoute, managedReady, ROUTING_PATH, MAP_NAME };
+function clearProbeCache() { probes.clear(); }
+module.exports = { names, network, updateMap, sync, status, hasOwnedRoute, managedReady, clearProbeCache, PROBE_TTL_MS, ROUTING_PATH, MAP_NAME };
