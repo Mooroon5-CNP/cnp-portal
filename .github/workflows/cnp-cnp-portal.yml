@@ -4,6 +4,7 @@ name: CNP — cnp-portal
     branches:
       - main
       - prod
+  workflow_dispatch: {}
 permissions:
   contents: read
   id-token: write
@@ -15,9 +16,9 @@ jobs:
     uses: Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@main
     with:
       app_name: cnp-portal
-      node_version: '24'
       target_cloud: gcp
       config_repo_url: https://github.com/Mooroon5-CNP/config-repo
       gitops_mode: portal
+      app_port: '8080'
     secrets:
       CONFIG_REPO_TOKEN: ${{ secrets.CONFIG_REPO_TOKEN }}
