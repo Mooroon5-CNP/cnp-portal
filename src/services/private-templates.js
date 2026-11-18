@@ -238,8 +238,10 @@ function tplDatabase(appName, priv, env) {
                         // PostgreSQL écrit TOUS ses messages sur stderr : sans source, Datadog classe chaque ligne
                         // (« checkpoint complete »…) en erreur (35 fausses erreurs par jour constatées le 18/11). La
                         // source postgresql active le pipeline Datadog qui lit le vrai niveau (LOG, WARNING, ERROR).
+                        // Même service que l'app (`<app>-<env>`) : l'utilisateur voit tous les logs de son app au même
+                        // endroit, comme Cloud SQL sur GCP et RDS sur AWS ; `source:postgresql` isole la base au besoin.
                         annotations: { 'ad.datadoghq.com/postgres.logs': JSON.stringify([{
-                            source: 'postgresql', service: `${appName}-${env}-db` }]) },
+                            source: 'postgresql', service: `${appName}-${env}` }]) },
                     },
                     spec: {
                         serviceAccountName: 'db',
