@@ -305,7 +305,12 @@ function tplApp(appName, appPort, priv, env, revision) {
             strategy: { type: 'RollingUpdate', rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
             revisionHistoryLimit: 3,
             template: {
-                metadata: { labels: appLabels },
+                // Le label seul ne suffit pas : l'agent pose aussi le service déduit de l'image (`<app>`, sans
+                // l'environnement) et Datadog retient celui-là comme service du log ; `<app>-<env>` n'est qu'un tag
+                // secondaire, invisible pour une recherche `service:` (constaté le 18/11). L'annotation de logs du
+                // conteneur fixe le service du log ; la source reste le nom de l'app (aucun pipeline à déclencher).
+                metadata: { labels: appLabels, annotations: { 'ad.datadoghq.com/app.logs': JSON.stringify([{
+                    source: appName, service: `${appName}-${env}` }]) } },
                 spec: {
                     serviceAccountName: 'app',
                     automountServiceAccountToken: false,
