@@ -233,7 +233,16 @@ function tplDatabase(appName, priv, env) {
                 replicas: 1,
                 selector: { matchLabels: { 'app.kubernetes.io/name': appName, 'cnp.io/role': 'db' } },
                 template: {
-                    metadata: { labels: labels(appName, env, 'db') },
+                    metadata: {
+                        labels: labels(appName, env, 'db'),
+                        // PostgreSQL écrit TOUS ses messages sur stderr : sans source, Datadog classe chaque ligne
+                        // (« checkpoint complete »…) en erreur (35 fausses erreurs par jour constatées le 18/11). La
+                        // source postgresql active le pipeline Datadog qui lit le vrai niveau (LOG, WARNING, ERROR).
+                        // Même service que l'app (`<app>-<env>`) : l'utilisateur voit tous les logs de son app au même
+                        // endroit, comme Cloud SQL sur GCP et RDS sur AWS ; `source:postgresql` isole la base au besoin.
+                        annotations: { 'ad.datadoghq.com/postgres.logs': JSON.stringify([{
+                            source: 'postgresql', service: `${appName}-${env}` }]) },
+                    },
                     spec: {
                         serviceAccountName: 'db',
                         automountServiceAccountToken: false,
@@ -271,8 +280,8 @@ function tplDatabase(appName, priv, env) {
             } },
     ];
     return header(
-        `Base PostgreSQL de ${appName} (${env}) : ${POSTGRES_IMAGE}, un volume local sur le disque de la VM (aucune\n` +
-        'sauvegarde : limite assumée du tier). Joignable seulement depuis les pods de l\'app (NetworkPolicy).'
+        `Base PostgreSQL de ${appName} (${env}) : ${POSTGRES_IMAGE}, un volume local sur le disque de la VM (sauvegarde\n` +
+        'quotidienne vers S3 par la VM, voir cnp/aws/private). Joignable seulement depuis les pods de l\'app (NetworkPolicy).'
     ) + dumpAll(objects.map(o => wrap(appName, env, priv, o, 2)));
 }
 
@@ -284,8 +293,12 @@ function tplApp(appName, appPort, priv, env, revision) {
     const port = Number.parseInt(appPort, 10) || 8080;
     const size = SIZING[env];
     const value = (name, v) => ({ name, value: String(v) });
+    // Service Datadog = `<app>-<env>`, comme le service Cloud Run (GCP), le service ECS (AWS) et la Container App
+    // (Azure) : c'est ce nom que cherche la page Logs du portail (observability-scope.serviceNameOf). Avec le seul
+    // nom de l'app, les logs du dev et de la prod se mélangeaient et le portail ne les trouvait pas (constaté le 18/11).
     const appLabels = { ...labels(appName, env, 'app'),
-        'tags.datadoghq.com/env': env, 'tags.datadoghq.com/service': appName, 'tags.datadoghq.com/version': revision };
+        'tags.datadoghq.com/env': env, 'tags.datadoghq.com/service': `${appName}-${env}`,
+        'tags.datadoghq.com/version': revision };
     const deployment = {
         apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'app', namespace: ns, labels: appLabels },
         // Pas de `replicas` : le HPA décide (le provider applique en server-side apply et ne revendique pas ce champ).
@@ -294,7 +307,12 @@ function tplApp(appName, appPort, priv, env, revision) {
             strategy: { type: 'RollingUpdate', rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
             revisionHistoryLimit: 3,
             template: {
-                metadata: { labels: appLabels },
+                // Le label seul ne suffit pas : l'agent pose aussi le service déduit de l'image (`<app>`, sans
+                // l'environnement) et Datadog retient celui-là comme service du log ; `<app>-<env>` n'est qu'un tag
+                // secondaire, invisible pour une recherche `service:` (constaté le 18/11). L'annotation de logs du
+                // conteneur fixe le service du log ; la source reste le nom de l'app (aucun pipeline à déclencher).
+                metadata: { labels: appLabels, annotations: { 'ad.datadoghq.com/app.logs': JSON.stringify([{
+                    source: appName, service: `${appName}-${env}` }]) } },
                 spec: {
                     serviceAccountName: 'app',
                     automountServiceAccountToken: false,
