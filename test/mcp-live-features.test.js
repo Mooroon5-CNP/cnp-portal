@@ -12,18 +12,18 @@ const { scrub } = require('../apps/orchestrator/src/generation/answer');
 const context = { target: { applicationId: 'majoutes-api', environment: 'development' },
   permissions: { allowedTools: ['list_applications', 'get_application_logs'] }, actor: { token: 'never-forward-me' } };
 
-test('local confident route bypasses Jev; unknown route invokes Jev with only minimal context', async () => {
+test('local confident route bypasses Mistral; unknown route invokes it with only minimal context', async () => {
   const decide = jest.fn(async () => ({ kind: 'route', tool: 'get_application_logs' }));
   const classify = createHybridClassifier({ env: { MCP_ROUTING_MODE: 'hybrid' }, decide });
   expect(await classify({ userRequest: 'liste les applications', knownContext: context })).toMatchObject({ tool: 'list_applications' });
   expect(decide).not.toHaveBeenCalled();
-  expect(await classify({ userRequest: 'que se passe-t-il ?', knownContext: context })).toMatchObject({ tool: 'get_application_logs', routedBy: 'jev' });
+  expect(await classify({ userRequest: 'que se passe-t-il ?', knownContext: context })).toMatchObject({ tool: 'get_application_logs', routedBy: 'mistral' });
   expect(decide.mock.calls[0][0]).toEqual({ userRequest: 'que se passe-t-il ?',
     availableReadOnlyTools: context.permissions.allowedTools, knownContext: { applicationId: 'majoutes-api', environment: 'dev' } });
   expect(JSON.stringify(decide.mock.calls)).not.toContain('never-forward-me');
 });
 
-test('mutation bypasses Jev and unavailable Jev does not execute the selected MCP tool', async () => {
+test('mutation bypasses Mistral and unavailable Mistral does not execute the selected MCP tool', async () => {
   const decide = jest.fn(async () => ({ kind: 'routing_unavailable', reason: 'timeout' }));
   const classify = createHybridClassifier({ env: { MCP_ROUTING_MODE: 'hybrid' }, decide });
   expect(await classify({ userRequest: 'redémarrer le serveur', knownContext: context })).toMatchObject({ kind: 'mutation' });
