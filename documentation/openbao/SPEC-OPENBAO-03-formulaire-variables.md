@@ -2,7 +2,7 @@
 
 **Ordre : 3/3, dernière SPEC à implémenter pour ce parcours.** Dépend des SPEC-OPENBAO-01 et 02 et de leurs tests hors interface.
 
-**Statut : IMPLÉMENTÉ LOCALEMENT, ACCEPTATION À FAIRE (15/11/2026).** Interface et validation serveur implémentées sur `feat/OpenBao-Vault`, tests locaux passés. La démonstration d'acceptation sur les trois clouds reste à effectuer après installation des instances et des identités décrites dans `instances_openBao.md` ; la SPEC n'est pas `DONE`.
+**Statut : IMPLÉMENTÉ LOCALEMENT, ACCEPTATION À FAIRE (18/11/2026).** Interface et validation serveur implémentées sur `feat/OpenBao-Vault`, tests locaux passés. Le serveur OpenBao Azure est prêt pour les essais directs, mais la démonstration du formulaire Azure exige encore les identités/coffres de livraison, un portail déployé et une application témoin. Les autres modes dépendent de l'état réel GCP/AWS ; la SPEC n'est pas `DONE`.
 
 ## Parcours utilisateur
 
