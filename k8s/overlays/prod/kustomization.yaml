@@ -60,11 +60,4 @@ patches:
       - op: replace
         path: /metadata/annotations/cert-manager.io~1cluster-issuer
         value: letsencrypt-prod
-  - target:
-      kind: Deployment
-      name: cnp-portal
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/1/value
-        value: "INFO"
 
