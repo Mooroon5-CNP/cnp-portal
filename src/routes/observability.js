@@ -72,14 +72,15 @@ async function readLogs(req, services, limit) {
   const window = windowFrom(req);
   const level = datadogService.normalizeLevel(req.query.level);
   const search = datadogService.normalizeSearch(req.query.q);
-  const logs = await datadogService.getLogs(services, { window, level, search, limit });
-  return { logs, window, level, search };
+  const origin = datadogService.normalizeOrigin(req.query.origin);
+  const logs = await datadogService.getLogs(services, { window, level, search, origin, limit });
+  return { logs, window, level, search, origin };
 }
 
 router.get('/logs', requireAuth, requirePermission('observability:logs:own'), async (req, res) => {
   const resolved = resolveOr403(req, res);
   if (!resolved) return;
-  let result = { logs: [], window: windowFrom(req), level: null, search: null };
+  let result = { logs: [], window: windowFrom(req), level: null, search: null, origin: null };
   let unavailable = false;
   try {
     result = await readLogs(req, resolved.selected, 100);
@@ -87,12 +88,12 @@ router.get('/logs', requireAuth, requirePermission('observability:logs:own'), as
     console.error('[observability] logs:', err.message);
     unavailable = true;
   }
-  const { logs, window, level, search } = result;
+  const { logs, window, level, search, origin } = result;
 
   res.render('observability/logs', commonLocals(req, 'Logs — CNP Portal', {
     logs, unavailable, services: resolved.allowed, window,
     selectedService: req.query.service || '', range: window.range, level: level || '', search: search || '',
-    levels: datadogService.LEVELS, retentionDays: datadogService.LOGS_RETENTION_DAYS,
+    levels: datadogService.LEVELS, origin: origin || '', origins: datadogService.ORIGINS, retentionDays: datadogService.LOGS_RETENTION_DAYS,
     datadogLogsUrl: datadogService.logsExplorerUrl(config.datadog.site, resolved.selected, window),
     csvQuery: new URLSearchParams(Object.entries(req.query).filter(([, v]) => typeof v === 'string' && v)).toString(),
   }));

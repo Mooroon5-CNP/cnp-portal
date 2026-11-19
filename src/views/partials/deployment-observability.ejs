@@ -1,5 +1,6 @@
 <%# Carte « Observabilité » du détail d'un déploiement. Attend obs = { service, available, logs, metrics }. %>
 <% const q = encodeURIComponent(obs.service); %>
+<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple' })[src] || 'badge-gray'; %>
 <% const pct = v => (v === null || v === undefined ? '—' : v + ' %'); %>
 <div class="card" style="margin-top:20px;" id="observability-card">
   <div class="card-header">
@@ -13,8 +14,8 @@
     <% if (!obs.available) { %>
       <p style="color:var(--text-muted);font-size:13px;margin:0;">Datadog est indisponible pour le moment.</p>
     <% } else { %>
-      <% const c = obs.metrics && obs.metrics.cloudRun; const e = obs.metrics && obs.metrics.ecs; %>
-      <% if (c || e) { %>
+      <% const c = obs.metrics && obs.metrics.cloudRun; const e = obs.metrics && obs.metrics.ecs; const a = obs.metrics && obs.metrics.azure; %>
+      <% if (c || e || a) { %>
       <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;margin-bottom:16px;">
         <% if (c) { %>
           <div><div class="text-muted">Requêtes (Cloud Run)</div><strong><%= c.requests === null ? '—' : c.requests %></strong></div>
@@ -28,6 +29,14 @@
           <div><div class="text-muted">CPU ECS</div><strong><%= pct(e.cpu) %></strong></div>
           <div><div class="text-muted">Mémoire ECS</div><strong><%= pct(e.memory) %></strong></div>
           <div><div class="text-muted">Tâches ECS</div><strong><%= e.running === null ? '—' : e.running %></strong></div>
+        <% } %>
+        <% if (a) { %>
+          <div><div class="text-muted">Requêtes (Azure)</div><strong><%= a.requests === null ? '—' : a.requests %></strong></div>
+          <div><div class="text-muted">Erreurs 5xx</div><strong style="color:<%= a.errors > 0 ? 'var(--danger)' : 'inherit' %>"><%= a.errors === null ? '—' : a.errors %></strong></div>
+          <div><div class="text-muted">Temps de réponse moy.</div><strong><%= a.latency === null ? '—' : a.latency + ' ms' %></strong></div>
+          <div><div class="text-muted">CPU moy. / pic</div><strong><%= pct(a.cpu) %> / <%= pct(a.cpuPeak) %></strong></div>
+          <div><div class="text-muted">Mémoire moy. / pic</div><strong><%= pct(a.memory) %> / <%= pct(a.memoryPeak) %></strong></div>
+          <div><div class="text-muted">Réplicas moy.</div><strong><%= a.replicas === null ? '—' : a.replicas %></strong></div>
         <% } %>
       </div>
       <% } else { %>
@@ -43,7 +52,7 @@
             <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
             <span class="log-level-<%= log.level %>"><%= log.level %></span>
             <span class="log-service"><%= log.service %></span>
-            <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : (log.source === 'Azure' ? 'badge-purple' : 'badge-info') %>"><%= log.source || '—' %></span></span>
+            <span><span class="badge <%= sourceBadge(log.source) %>" title="<%= log.source || '' %>"><%= log.source || '—' %></span></span>
             <span class="obs-log-message"><%= log.message %></span>
           </div>
           <% }) %>

@@ -915,9 +915,10 @@ input:focus, select:focus, textarea:focus {
 .obs-filters { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; padding: 12px 16px; margin-bottom: 20px; }
 .obs-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .obs-filters select { min-width: 180px; }
-.obs-log-line { grid-template-columns: 170px 56px minmax(120px, 200px) 1fr; }
 .obs-log-message { color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.obs-log-line { grid-template-columns: 160px 56px minmax(120px, 190px) 84px 1fr; }
+.obs-log-line { grid-template-columns: 160px 56px minmax(120px, 190px) 96px 1fr; }
+/* Une source inconnue peut avoir un nom long : le badge ne déborde jamais sur le message. */
+.obs-log-line .badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .obs-log-head { font-family: inherit; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted); background: var(--bg, #f8f9fc); }
 .obs-custom { gap: 10px; align-items: flex-end; }
 .obs-search input { min-width: 260px; }

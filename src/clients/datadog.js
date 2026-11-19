@@ -212,9 +212,14 @@ function logsScopeQuery(services) {
 
 // `from` / `to` : dates ISO ou expressions Datadog (`now-1h`). `text` : mots à rechercher,
 // déjà nettoyés par le service (ni guillemets, ni parenthèses, ni étoiles).
-async function searchServiceLogs({ services, from = 'now-1h', to = 'now', limit = 100, level = null, text = null }) {
+// Logs des bases de données des apps : Cloud SQL (GCP), RDS et PostgreSQL Azure (source:postgresql).
+const DATABASE_SOURCES = 'source:(gcp.cloudsql.database OR postgresql)';
+const ORIGIN_QUERY = { app: `-${DATABASE_SOURCES}`, db: DATABASE_SOURCES };
+
+async function searchServiceLogs({ services, from = 'now-1h', to = 'now', limit = 100, level = null, text = null, origin = null }) {
   const parts = [logsScopeQuery(services)];
   if (level) parts.push(`status:${level}`);
+  if (ORIGIN_QUERY[origin]) parts.push(ORIGIN_QUERY[origin]);
   // Chaque mot est cherché dans tous les champs du log (`*:`), pas seulement le message : sur ECS,
   // le chemin de la requête est dans un attribut (@path), et Cloud Run range son texte dans `data`.
   if (text) parts.push(...text.split(' ').filter(Boolean).map(word => `*:"${word}"`));
@@ -238,8 +243,8 @@ async function queryByService(client, query, from, to) {
     const out = {};
     for (const s of r.data?.series || []) {
       // tag_set ne contient que les tags du « by {…} » ; scope répète aussi le filtre.
-      const tag = (s.tag_set || []).find(t => /^(service_name|servicename):/.test(t))
-        || /^(?:service_name|servicename):[^,]+/.exec(s.scope || '')?.[0];
+      const tag = (s.tag_set || []).find(t => /^(service_name|servicename|name):/.test(t))
+        || /^(?:service_name|servicename|name):[^,]+/.exec(s.scope || '')?.[0];
       const name = tag?.split(':')[1];
       if (!name) continue;
       out[name] = (out[name] || []).concat((s.pointlist || []).filter(p => p[1] !== null && Number.isFinite(p[1])));
@@ -250,13 +255,15 @@ async function queryByService(client, query, from, to) {
   }
 }
 
-// Métriques Cloud Run (intégration GCP) et ECS (intégration AWS) des services donnés, entre
+// Métriques Cloud Run (intégration GCP), ECS (intégration AWS) et Container Apps (intégration Azure,
+// tag `name:` = nom de l'app) des services donnés, entre
 // `from` et `to` (secondes epoch).
 async function getServiceMetrics(services, from, to) {
   assertServices(services);
   const client = makeClient();
   const run = services.map(s => `service_name:${s}`).join(' OR ');
   const ecs = services.map(s => `servicename:${s}`).join(' OR ');
+  const az = services.map(s => `name:${s}`).join(' OR ');
   const q = query => queryByService(client, query, from, to);
   const entries = {
     requests:   `sum:gcp.run.request_count{${run}} by {service_name}.as_count()`,
@@ -276,6 +283,15 @@ async function getServiceMetrics(services, from, to) {
     ecsMemory:  `avg:aws.ecs.service.memory_utilization{${ecs}} by {servicename}`,
     ecsMemoryPeak: `max:aws.ecs.service.memory_utilization.maximum{${ecs}} by {servicename}`,
     ecsRunning: `sum:aws.ecs.service.running{${ecs}} by {servicename}`,
+    azRequests: `sum:azure.app_containerapps.requests{${az}} by {name}.as_count()`,
+    azErrors:   `sum:azure.app_containerapps.requests{(${az}) AND statuscodecategory:5xx} by {name}.as_count()`,
+    azLatency:  `avg:azure.app_containerapps.response_time{${az}} by {name}`,
+    azLatencyPeak: `max:azure.app_containerapps.response_time{${az}} by {name}`,
+    azCpu:      `avg:azure.app_containerapps.cpu_percentage{${az}} by {name}`,
+    azCpuPeak:  `max:azure.app_containerapps.cpu_percentage{${az}} by {name}`,
+    azMemory:   `avg:azure.app_containerapps.memory_percentage{${az}} by {name}`,
+    azMemoryPeak: `max:azure.app_containerapps.memory_percentage{${az}} by {name}`,
+    azReplicas: `avg:azure.app_containerapps.replicas{${az}} by {name}`,
   };
   const keys = Object.keys(entries);
   const values = await Promise.all(keys.map(k => q(entries[k])));

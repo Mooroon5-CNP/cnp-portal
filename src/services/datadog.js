@@ -25,6 +25,13 @@ function normalizeRange(range) {
   return Object.prototype.hasOwnProperty.call(RANGES, range) && range !== 'custom' ? range : DEFAULT_RANGE;
 }
 
+// Origine d'un log : l'application elle-même, ou sa base de données.
+const ORIGINS = { app: 'Application', db: 'Base de données' };
+
+function normalizeOrigin(origin) {
+  return Object.prototype.hasOwnProperty.call(ORIGINS, origin) ? origin : null;
+}
+
 function normalizeLevel(level) {
   return LEVELS.includes(level) ? level : null;
 }
@@ -98,12 +105,15 @@ function levelOf(attributes) {
 }
 
 // Le nom de l'app d'un log : Cloud Run → `service` ; ECS → préfixe du flux de logs.
-// Où tournait l'app quand elle a écrit le log : Cloud Run (GCP), ECS (AWS) ou Container Apps (Azure).
+// D'où vient le log : l'app elle-même (Cloud Run, ECS, Azure) ou sa base de données
+// (Cloud SQL, RDS, PostgreSQL Azure). Libellés courts : ils s'affichent dans un badge.
 function sourceOf(attributes) {
   const tags = String(attributes.tags || '');
-  if (attributes.attributes?.aws) return 'ECS';
+  const inner = attributes.attributes || {};
+  if (tags.includes('source:gcp.cloudsql')) return 'Cloud SQL';
   if (tags.includes('source:gcp.cloud.run')) return 'Cloud Run';
-  if (attributes.attributes?.azure || tags.includes('source:azure.containerapps')) return 'Azure';
+  if (inner.aws) return String(inner.aws.awslogs?.logGroup || '').startsWith('/aws/rds/') ? 'RDS' : 'ECS';
+  if (inner.azure || tags.includes('source:azure')) return tags.includes('source:postgresql') || inner.postgres ? 'Azure DB' : 'Azure';
   return attributes.source || '';
 }
 
@@ -114,7 +124,7 @@ function serviceOf(attributes, allowed) {
   return allowed.has(prefix) ? prefix : null;
 }
 
-async function getLogs(services, { window = resolveWindow(), level = null, search = null, limit = 100 } = {}) {
+async function getLogs(services, { window = resolveWindow(), level = null, search = null, origin = null, limit = 100 } = {}) {
   if (!services || services.length === 0) return [];
   const allowed = new Set(services);
   const raw = await client.searchServiceLogs({
@@ -123,6 +133,7 @@ async function getLogs(services, { window = resolveWindow(), level = null, searc
     to: new Date(window.to * 1000).toISOString(),
     level: normalizeLevel(level),
     text: normalizeSearch(search),
+    origin: normalizeOrigin(origin),
   });
   return raw.map(entry => {
     const a = entry.attributes || {};
@@ -176,6 +187,9 @@ async function getMetrics(services, window = resolveWindow()) {
   return services.map(service => {
     const hasRun = ['requests', 'latency', 'cpu', 'memory', 'instances'].some(k => pts(k, service).length);
     const hasEcs = ['ecsCpu', 'ecsMemory', 'ecsRunning'].some(k => pts(k, service).length);
+    const hasAz = ['azRequests', 'azCpu', 'azMemory', 'azReplicas'].some(k => pts(k, service).length);
+    const azRequests = sum(pts('azRequests', service));
+    const azErrors = sum(pts('azErrors', service));
     const requests = sum(pts('requests', service));
     const errors = sum(pts('errors', service));
     const billable = sum(pts('billable', service));
@@ -203,6 +217,19 @@ async function getMetrics(services, window = resolveWindow()) {
         memory: round1(avg(pts('ecsMemory', service))),
         memoryPeak: round1(max(pts('ecsMemoryPeak', service))),
         running: last(pts('ecsRunning', service)),
+      } : null,
+      azure: hasAz ? {
+        requests: azRequests === null ? null : Math.round(azRequests),
+        errors: azErrors === null ? (azRequests === null ? null : 0) : Math.round(azErrors),
+        errorRate: azRequests ? round1(((azErrors || 0) / azRequests) * 100) : null,
+        latency: round1(avg(pts('azLatency', service))),
+        latencyPeak: round1(max(pts('azLatencyPeak', service))),
+        cpu: round1(avg(pts('azCpu', service))),
+        cpuPeak: round1(max(pts('azCpuPeak', service))),
+        memory: round1(avg(pts('azMemory', service))),
+        memoryPeak: round1(max(pts('azMemoryPeak', service))),
+        replicas: round1(avg(pts('azReplicas', service))),
+        replicasMax: round1(max(pts('azReplicas', service))),
       } : null,
     };
   });
@@ -284,7 +311,7 @@ async function approveAccess(id) {
 }
 
 module.exports = {
-  RANGES, DEFAULT_RANGE, LEVELS, LOGS_RETENTION_DAYS, normalizeRange, normalizeLevel, normalizeSearch, resolveWindow,
+  RANGES, DEFAULT_RANGE, LEVELS, ORIGINS, LOGS_RETENTION_DAYS, normalizeRange, normalizeLevel, normalizeOrigin, normalizeSearch, resolveWindow,
   logsToCsv, logsExplorerUrl, getLogs, getMetrics, getAlerts, silenceAlert, createAlert,
   requestAccess, getAccessRequests, getAccessRequest, approveAccess,
   // exportés pour les tests
