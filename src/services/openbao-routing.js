@@ -7,6 +7,12 @@ function domainsForDeployment(deployment) {
   if (!deployment || !['dev', 'prod'].includes(deployment.environment)) {
     throw new Error('Environnement de déploiement OpenBao invalide.');
   }
+  // Cloud privé (k3s) : plateforme à part entière, avec SON OpenBao (dans le cluster, cnp/Runbook/OPENBAO-PRIVE.md).
+  // Les apps le lisent par External Secrets ; aucun secours AWS.
+  if (deployment.targetCluster === 'private-aws') {
+    if (deployment.failoverRequested) throw new Error('Secours AWS indisponible pour le cloud privé.');
+    return ['private'];
+  }
   if (deployment.targetCluster === 'azure') {
     if (deployment.failoverRequested) throw new Error('Secours AWS indisponible pour Azure.');
     return ['azure'];

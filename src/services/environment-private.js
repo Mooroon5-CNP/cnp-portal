@@ -78,6 +78,11 @@ function manifests(dep, revision) {
   return Object.fromEntries(Object.entries(files).map(([name, content]) => [`${dir}/${name}`, content]));
 }
 
+/** Variables OpenBao du cloud privé (openbao-runtime.privateReferences) ajoutées aux manifestes. */
+function applyVariables(files, dep, prepared) {
+  return templates.applyPrivateVariables(files, dep.appName, dep.environment, config.private, prepared);
+}
+
 /** Noms de fichiers d'un environnement (suppression). */
 function fileNames() {
   return [...templates.FILES];
@@ -146,6 +151,6 @@ async function confirmTeardown(dep, { attempts = 10, delayMs = 3000 } = {}) {
 }
 
 module.exports = {
-  TARGET, isPrivate, PROGRESS_MESSAGES, validate, assertConfigured, workflow, imageRef, manifests, fileNames, appUrl,
+  TARGET, isPrivate, PROGRESS_MESSAGES, validate, assertConfigured, workflow, imageRef, manifests, applyVariables, fileNames, appUrl,
   readiness, confirmTeardown,
 };

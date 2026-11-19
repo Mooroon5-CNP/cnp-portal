@@ -43,3 +43,11 @@ test('refuses a foreign GCP secret before deleting it or OpenBao versions', asyn
   expect(request.mock.calls.some(call => call[1] === 'DELETE')).toBe(false);
   expect(destroy).not.toHaveBeenCalled();
 });
+
+test('cloud privé : aucune copie à supprimer, seulement les versions OpenBao du domaine private', async () => {
+  records.get.mockReturnValue({ ownedNames: ['API_URL'], history: [{ versions: { private: 4 } }] });
+  await cleanup({ ...dep, targetCluster: 'private-aws' });
+  expect(GcpVariableDelivery).not.toHaveBeenCalled();
+  expect(OpenBaoClient.fromEnvironment).toHaveBeenCalledWith('private');
+  expect(destroy.mock.calls.map(call => call[2])).toEqual([4]);
+});

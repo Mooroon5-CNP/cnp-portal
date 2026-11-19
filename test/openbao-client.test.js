@@ -61,3 +61,16 @@ test('obtains a scoped identity token from the Google metadata server', async ()
     expect.objectContaining({ headers: { 'Metadata-Flavor': 'Google' },
       params: { audience: 'https://openbao.test:8200', format: 'full' } }));
 });
+
+test('accepte le domaine private (OpenBao du cloud privé) depuis CNP_OPENBAO_PRIVATE_*', () => {
+  const previous = process.env.CNP_OPENBAO_PRIVATE_ADDR;
+  process.env.CNP_OPENBAO_PRIVATE_ADDR = 'https://openbao.prive.apps.example.fr:8200';
+  try {
+    const client = OpenBaoClient.fromEnvironment('private', { transport: {}, identityToken: jest.fn() });
+    expect(client.domain).toBe('private');
+    expect(client.audience).toBe('https://openbao.prive.apps.example.fr:8200');
+    expect(() => OpenBaoClient.fromEnvironment('k3s')).toThrow('Domaine OpenBao invalide.');
+  } finally {
+    if (previous === undefined) delete process.env.CNP_OPENBAO_PRIVATE_ADDR; else process.env.CNP_OPENBAO_PRIVATE_ADDR = previous;
+  }
+});

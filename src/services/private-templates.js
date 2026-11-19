@@ -29,8 +29,14 @@ const DB_PORT = 5432;
 // Image officielle, version épinglée (publiée le 06/11/2026). Variante alpine : utilisateur postgres = 70.
 const POSTGRES_IMAGE = 'postgres:16.15-alpine';
 const POSTGRES_UID = 70;
-// Nom réservé : k3s-api.<domaine> est le nom de l'API k3s (certificat tls-san, cnp/aws/private).
-const RESERVED_NAMES = ['k3s-api'];
+// Noms réservés : k3s-api.<domaine> est l'API k3s (certificat tls-san), openbao.<domaine> l'OpenBao du cloud privé
+// (cnp/aws/private).
+const RESERVED_NAMES = ['k3s-api', 'openbao'];
+// Variables applicatives (OpenBao du cloud privé) : Secret « variables » produit par External Secrets depuis le magasin
+// cnp-openbao. La politique d'admission du cluster n'accepte que apps/<app>/<env> du namespace <app>-<env>.
+const VARIABLES_SECRET = 'variables';
+const OPENBAO_STORE = 'cnp-openbao';
+const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // Dimensionnement (cadrage §6 et §7). Les quotas laissent la place d'un pod de plus pendant un déploiement progressif
 // (maxSurge 1) au nombre maximal de répliques.
@@ -54,7 +60,7 @@ function validatePrivateAppName(appName) {
         throw new Error(`Nom d'application invalide pour le cloud privé : "${appName}".`);
     }
     if (RESERVED_NAMES.includes(appName)) {
-        throw new Error(`Le nom « ${appName} » est réservé par la plateforme (adresse de l'API du cloud privé).`);
+        throw new Error(`Le nom « ${appName} » est réservé par la plateforme (adresse d'un service du cloud privé).`);
     }
 }
 
@@ -373,6 +379,52 @@ function tplApp(appName, appPort, priv, env, revision) {
     ) + dumpAll([deployment, service, redirect, ingress, hpa].map(o => wrap(appName, env, priv, o, 3)));
 }
 
+/**
+ * Variables applicatives publiées dans l'OpenBao du cloud privé ({ version, names }) : ajoute l'ExternalSecret qui lit
+ * CETTE version (secrets.yaml) et une entrée secretKeyRef par nom dans le conteneur (app.yaml). Liste explicite plutôt
+ * qu'envFrom : le Secret contient aussi le marqueur de génération du portail, qui ne doit pas devenir une variable.
+ * L'annotation de version relance les pods quand seule la version change (le contenu d'un Secret ne le fait pas).
+ * Modifie `files` (clés : noms de fichiers ou chemins complets se terminant par ces noms).
+ */
+function applyPrivateVariables(files, appName, env, priv, prepared) {
+    if (!prepared || !prepared.names?.length) return files;
+    const { version, names } = prepared;
+    if (!Number.isInteger(version) || version < 1 || names.some(name => !VARIABLE_NAME.test(name))) {
+        throw new Error('Variables OpenBao du cloud privé invalides.');
+    }
+    const n = privateNames(appName, priv, env);
+    const key = suffix => Object.keys(files).find(k => k === suffix || k.endsWith(`/${suffix}`));
+    const secretsPath = key('secrets.yaml');
+    const appPath = key('app.yaml');
+    if (!secretsPath || !appPath) throw new Error('Manifestes du cloud privé incomplets pour les variables.');
+    const external = {
+        apiVersion: 'external-secrets.io/v1', kind: 'ExternalSecret',
+        metadata: { name: VARIABLES_SECRET, namespace: n.namespace },
+        spec: {
+            refreshInterval: '1h',
+            secretStoreRef: { kind: 'ClusterSecretStore', name: OPENBAO_STORE },
+            target: { name: VARIABLES_SECRET, creationPolicy: 'Owner' },
+            dataFrom: [{ extract: { key: `apps/${appName}/${env}`, version: String(version) } }],
+        },
+    };
+    files[secretsPath] = files[secretsPath].replace(/\n*$/, '\n') + '---\n' + yaml.dump(wrap(appName, env, priv, external, 1), DUMP);
+    const text = files[appPath];
+    const head = (text.match(/^(#[^\n]*\n)*/) || [''])[0];
+    const objects = yaml.loadAll(text).filter(Boolean);
+    const deployment = objects.find(o => o.spec?.forProvider?.manifest?.kind === 'Deployment')?.spec.forProvider.manifest;
+    const container = deployment?.spec?.template?.spec?.containers?.[0];
+    if (!container || !Array.isArray(container.env)) throw new Error('Deployment du cloud privé inattendu pour les variables.');
+    const occupied = new Set(container.env.map(item => item.name));
+    for (const name of names) {
+        if (occupied.has(name)) throw new Error(`Variable « ${name} » en conflit avec une variable de la plateforme.`);
+        container.env.push({ name, valueFrom: { secretKeyRef: { name: VARIABLES_SECRET, key: name } } });
+    }
+    deployment.spec.template.metadata.annotations = { ...deployment.spec.template.metadata.annotations,
+        'cnp.io/variables-version': String(version) };
+    files[appPath] = head + dumpAll(objects);
+    return files;
+}
+
 /** Fichiers écrits dans le config-repo : { nom de fichier : contenu } (dossier apps/<app>/crossplane/<env>). */
 function privateCrossplaneFiles(appName, appPort, priv, env, revision) {
     assertEnv(env);
@@ -424,6 +476,6 @@ function privateAppStatusFrom(objects, { expectedImage } = {}) {
 module.exports = {
     ENVIRONMENTS, FILES, RESERVED_NAMES, POSTGRES_IMAGE, SIZING,
     validatePrivateAppName, privateNames, privateAppUrl, objectLabels,
-    privateCrossplaneFiles, privateAppStatusFrom,
+    privateCrossplaneFiles, privateAppStatusFrom, applyPrivateVariables, VARIABLES_SECRET, OPENBAO_STORE,
     tplNamespace, tplPolicies, tplSecrets, tplDatabase, tplApp,
 };

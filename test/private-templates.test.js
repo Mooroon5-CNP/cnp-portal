@@ -195,3 +195,52 @@ describe('état observé', () => {
     expect(t.privateAppStatusFrom([object('Namespace', { deleting: true })])).toMatchObject({ exists: true, deleting: true });
   });
 });
+
+describe('variables OpenBao du cloud privé', () => {
+  const withVariables = (env, prepared) => t.applyPrivateVariables(files(env), 'todo', env, priv, prepared);
+
+  test('openbao est un nom réservé', () => {
+    expect(() => t.privateCrossplaneFiles('openbao', 8080, priv, 'prod', revision)).toThrow('réservé');
+  });
+
+  test('sans variables publiées, les manifestes sont inchangés', () => {
+    expect(withVariables('prod', null)).toEqual(files('prod'));
+    expect(withVariables('prod', { version: 2, names: [] })).toEqual(files('prod'));
+  });
+
+  test("ExternalSecret sur cnp-openbao, chemin apps/<app>/<env> à la version publiée, forme acceptée par l'admission", () => {
+    const out = withVariables('prod', { version: 3, names: ['API_URL', 'FEATURE_X'] });
+    const es = inner(load(out['secrets.yaml']), 'ExternalSecret', 'variables');
+    expect(es.metadata.namespace).toBe('todo-prod');
+    expect(es.spec.secretStoreRef).toEqual({ kind: 'ClusterSecretStore', name: 'cnp-openbao' });
+    expect(es.spec.data).toBeUndefined();
+    expect(es.spec.dataFrom).toEqual([{ extract: { key: 'apps/todo/prod', version: '3' } }]);
+    expect(es.spec.target).toEqual({ name: 'variables', creationPolicy: 'Owner' });
+    // Les mots de passe des bases restent là.
+    expect(inner(load(out['secrets.yaml']), 'ExternalSecret', 'db-runtime')).toBeDefined();
+  });
+
+  test('une entrée secretKeyRef par nom (pas le marqueur de génération), annotation de version, en-tête conservé', () => {
+    const out = withVariables('dev', { version: 7, names: ['API_URL'] });
+    expect(out['app.yaml'].startsWith('# ')).toBe(true);
+    const dep = inner(load(out['app.yaml']), 'Deployment');
+    const env = dep.spec.template.spec.containers[0].env;
+    expect(env.find(e => e.name === 'API_URL')).toEqual({ name: 'API_URL', valueFrom: { secretKeyRef: { name: 'variables', key: 'API_URL' } } });
+    expect(env.some(e => e.name === 'CNP_VARIABLES_GENERATION')).toBe(false);
+    expect(dep.spec.template.spec.containers[0].envFrom).toBeUndefined();
+    expect(dep.spec.template.metadata.annotations['cnp.io/variables-version']).toBe('7');
+    expect(dep.spec.template.metadata.annotations['ad.datadoghq.com/app.logs']).toBeDefined();
+  });
+
+  test('refuse un conflit avec une variable de la plateforme, un nom invalide ou une version invalide', () => {
+    expect(() => withVariables('prod', { version: 1, names: ['DB_PASSWORD'] })).toThrow('conflit');
+    expect(() => withVariables('prod', { version: 1, names: ['bad-name'] })).toThrow('invalides');
+    expect(() => withVariables('prod', { version: 0, names: ['A'] })).toThrow('invalides');
+  });
+
+  test('accepte les chemins complets du config-repo', () => {
+    const full = Object.fromEntries(Object.entries(files('prod')).map(([k, v]) => [`apps/todo/crossplane/prod/${k}`, v]));
+    t.applyPrivateVariables(full, 'todo', 'prod', priv, { version: 1, names: ['A'] });
+    expect(full['apps/todo/crossplane/prod/secrets.yaml']).toContain('cnp-openbao');
+  });
+});

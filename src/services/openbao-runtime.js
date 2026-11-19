@@ -69,6 +69,8 @@ function gcpRuntimeIdentity(deployment) {
 function assertReady(deployment) {
   const domains = domainsForDeployment(deployment);
   for (const domain of domains) OpenBaoClient.fromEnvironment(domain);
+  // Cloud privé : External Secrets lit OpenBao dans le cluster, aucune identité cloud à préparer.
+  if (deployment.targetCluster === 'private-aws') return;
   if (deployment.targetCluster === 'azure') {
     azureRuntimeIdentity(deployment);
     AzureVariableDelivery.fromEnvironment(deployment);
@@ -114,6 +116,15 @@ async function failoverReferences(deployment, profile, imageRecord) {
     runtimeServiceAccount: serviceAccount }).deliver(deployment, published.values.gcp);
   const aws = awsDelivery.deliver(deployment, published.generation, published.values.aws);
   return { gcp, aws, aws_execution_role: role };
+}
+
+// Cloud privé : rien n'est copié. Le manifeste référence la version publiée (ExternalSecret, private-templates.js).
+async function privateReferences(deployment) {
+  if (!records.get(deployment.id)) return null;
+  if (deployment.targetCluster !== 'private-aws') throw new Error('Variables du cloud privé réservées au cloud privé.');
+  const published = await variables.service().published(deployment);
+  if (!published) return null;
+  return { version: published.versions.private, names: Object.keys(published.values.private) };
 }
 
 function applyAzureReferences(files, deployment, prepared) {
@@ -162,5 +173,5 @@ async function references(deployment) {
   return delivery.deliver(deployment, published.values.gcp);
 }
 
-module.exports = { references, azureReferences, applyAzureReferences, azureRuntimeIdentity, gcpRuntimeIdentity,
+module.exports = { references, azureReferences, applyAzureReferences, privateReferences, azureRuntimeIdentity, gcpRuntimeIdentity,
   awsRuntimeRole, failoverReferences, assertReady };
