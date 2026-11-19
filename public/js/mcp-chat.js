@@ -139,6 +139,21 @@
       card.appendChild(reference);
       assistant.after(card);
     }
+    if (event.type === 'diagnostic_answer') {
+      const card = document.createElement('section');
+      card.className = 'mcp-tool-result mcp-diagnostic';
+      window.CnpMcpResults.describeDiagnostic(event.answer).forEach((section) => {
+        const title = document.createElement('h3');
+        title.textContent = section.title;
+        const list = document.createElement('ul');
+        section.items.forEach((item) => { const line = document.createElement('li'); line.textContent = item; list.appendChild(line); });
+        card.append(title, list);
+      });
+      const reference = document.createElement('small');
+      reference.textContent = `Référence : ${event.correlationId}`;
+      card.appendChild(reference);
+      assistant.after(card);
+    }
     if (event.type === 'turn_started') conversationId = event.conversationId;
     if (event.type === 'tool_started') assistant.textContent = `Consultation de ${event.tool}...`;
     if (event.type === 'answer_delta') {

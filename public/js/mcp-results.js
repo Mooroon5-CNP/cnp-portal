@@ -39,6 +39,22 @@
     };
     throw new Error('UNKNOWN_MCP_TOOL');
   }
-  if (typeof module === 'object' && module.exports) module.exports = { describeResult };
-  else root.CnpMcpResults = { describeResult };
+  const sourceNames = { gemini_cloud_assist: 'Gemini Cloud Assist', argo: 'Argo CD', git: 'Git/config', kubernetes: 'Kubernetes', datadog: 'Datadog', platform: 'Platform API' };
+  const source = name => sourceNames[name] || name;
+  const when = item => item ? ` — ${item}` : '';
+  /** The mandatory 7 sections, in order; every line keeps its source. */
+  function describeDiagnostic(answer) {
+    const confidence = { high: 'Élevé', medium: 'Moyen', low: 'Faible' }[answer.confidence.level];
+    return [
+      { title: '1. Résumé', items: [answer.summary] },
+      { title: '2. Observations', items: answer.observations.map(o => `[${source(o.source)}] ${o.fact}${o.resource ? ` (${o.resource})` : ''}${when(o.observedAt)}`) },
+      { title: '3. Diagnostic / interprétation', items: answer.diagnosis.map(d => `${d.kind === 'fact' ? 'Fait' : 'Hypothèse'} : ${d.statement}`) },
+      { title: '4. Éléments de preuve', items: answer.evidence.map(e => `[${source(e.source)}] ${value(e.resource)}${e.period ? ` — période ${e.period.from} → ${e.period.to} (UTC)` : ''}${when(e.observedAt)}${e.values ? ` : ${e.values}` : ''}`) },
+      { title: '5. Recommandations (non exécutées)', items: answer.recommendations.map(r => `P${r.priority} — ${r.action}`) },
+      { title: '6. Niveau de confiance', items: [`${confidence} : ${answer.confidence.justification}`] },
+      { title: '7. Limites / données manquantes', items: answer.limitations },
+    ].map(section => ({ ...section, items: section.items.length ? section.items : ['Aucun élément.'] }));
+  }
+  if (typeof module === 'object' && module.exports) module.exports = { describeResult, describeDiagnostic };
+  else root.CnpMcpResults = { describeResult, describeDiagnostic };
 })(typeof window === 'undefined' ? globalThis : window);
