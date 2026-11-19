@@ -11,7 +11,7 @@
       <div class="page-header">
         <div>
           <div class="page-title">Logs</div>
-          <div class="page-subtitle">Logs des applications de votre équipe — Cloud Run (GCP), ECS (AWS) et Azure, via Datadog</div>
+          <div class="page-subtitle">Logs des applications de votre équipe — Cloud Run (GCP), ECS (AWS), Azure et k3s (cloud privé), via Datadog</div>
         </div>
         <% if (can('observability:access:request')) { %>
         <button onclick="document.getElementById('access-modal').style.display='flex'" class="btn btn-secondary">Demander un accès Datadog</button>
@@ -19,7 +19,7 @@
       </div>
 
       <%- include('../partials/observability-nav', { active: 'logs' }) %>
-<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple' })[src] || 'badge-gray'; %>
+<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple', k3s: 'badge-success', 'k3s DB': 'badge-success' })[src] || 'badge-gray'; %>
 
       <% if (services.length > 0) { %>
       <div class="card">
@@ -43,7 +43,7 @@
           <% } else { %>
             <div class="log-line obs-log-line obs-log-head">
               <span>Date</span><span>Niveau</span><span>Application</span>
-              <span title="D'où vient le log. L'application : Cloud Run (GCP), ECS (AWS, secours après une bascule) ou Azure. Sa base de données : Cloud SQL (GCP), RDS (AWS) ou Azure DB (PostgreSQL Azure).">Source ⓘ</span>
+              <span title="D'où vient le log. L'application : Cloud Run (GCP), ECS (AWS, secours après une bascule) Azure ou k3s (cloud privé). Sa base de données : Cloud SQL (GCP), RDS (AWS), Azure DB (PostgreSQL Azure) ou k3s DB.">Source ⓘ</span>
               <span>Message</span>
             </div>
             <% logs.forEach(log => { %>

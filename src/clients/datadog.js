@@ -205,15 +205,26 @@ function assertServices(services) {
 
 // Cloud Run : `service:<nom>` ; ECS : le flux de logs commence par `<nom>/` (le champ `service`
 // des logs ECS est choisi par l'app elle-même et ne correspond pas forcément au nom de la ressource).
+// Cloud privé : cluster k3s sur une VM AWS. Chaque app y a son namespace `<app>-<env>` (= nom du service),
+// seule clé fiable : les logs de l'app en prod portent `service:<app>` sans l'environnement.
+const K3S_CLUSTER = 'cnp-prive';
+
+function k3sScope(services) {
+  return `kube_cluster_name:${K3S_CLUSTER} kube_namespace:(${services.join(' OR ')})`;
+}
+
 function logsScopeQuery(services) {
   assertServices(services);
-  return `(service:(${services.join(' OR ')}) OR @aws.awslogs.logStream:(${services.map(s => `${s}\\/*`).join(' OR ')}))`;
+  return `(service:(${services.join(' OR ')}) OR @aws.awslogs.logStream:(${services.map(s => `${s}\\/*`).join(' OR ')})`
+    // Le journal d'audit de l'API k3s est un log de la plateforme, pas de l'app.
+    + ` OR (${k3sScope(services)} -source:kubernetes.audit))`;
 }
 
 // `from` / `to` : dates ISO ou expressions Datadog (`now-1h`). `text` : mots à rechercher,
 // déjà nettoyés par le service (ni guillemets, ni parenthèses, ni étoiles).
-// Logs des bases de données des apps : Cloud SQL (GCP), RDS et PostgreSQL Azure (source:postgresql).
-const DATABASE_SOURCES = 'source:(gcp.cloudsql.database OR postgresql)';
+// Logs des bases de données des apps : Cloud SQL (GCP), RDS et PostgreSQL Azure (source:postgresql),
+// PostgreSQL dans le namespace k3s (source:postgres).
+const DATABASE_SOURCES = 'source:(gcp.cloudsql.database OR postgresql OR postgres)';
 const ORIGIN_QUERY = { app: `-${DATABASE_SOURCES}`, db: DATABASE_SOURCES };
 
 async function searchServiceLogs({ services, from = 'now-1h', to = 'now', limit = 100, level = null, text = null, origin = null }) {
@@ -243,8 +254,8 @@ async function queryByService(client, query, from, to) {
     const out = {};
     for (const s of r.data?.series || []) {
       // tag_set ne contient que les tags du « by {…} » ; scope répète aussi le filtre.
-      const tag = (s.tag_set || []).find(t => /^(service_name|servicename|name):/.test(t))
-        || /^(?:service_name|servicename|name):[^,]+/.exec(s.scope || '')?.[0];
+      const tag = (s.tag_set || []).find(t => /^(service_name|servicename|name|kube_namespace):/.test(t))
+        || /^(?:service_name|servicename|name|kube_namespace):[^,]+/.exec(s.scope || '')?.[0];
       const name = tag?.split(':')[1];
       if (!name) continue;
       out[name] = (out[name] || []).concat((s.pointlist || []).filter(p => p[1] !== null && Number.isFinite(p[1])));
@@ -264,10 +275,13 @@ async function getServiceMetrics(services, from, to) {
   const run = services.map(s => `service_name:${s}`).join(' OR ');
   const ecs = services.map(s => `servicename:${s}`).join(' OR ');
   const az = services.map(s => `name:${s}`).join(' OR ');
+  // Requête de métriques : les filtres se combinent par AND explicite (un espace ne suffit pas, contrairement aux logs).
+  const k3s = `kube_cluster_name:${K3S_CLUSTER} AND kube_namespace:(${services.join(' OR ')})`;
   const q = query => queryByService(client, query, from, to);
   const entries = {
     requests:   `sum:gcp.run.request_count{${run}} by {service_name}.as_count()`,
-    errors:     `sum:gcp.run.request_count{(${run}) AND response_code_class:5xx} by {service_name}.as_count()`,
+    // 501 (méthode non gérée, ex. `HEAD /` envoyé par les robots qui scannent le web) n'est pas une panne de l'app.
+    errors:     `sum:gcp.run.request_count{(${run}) AND response_code_class:5xx AND NOT response_code:501} by {service_name}.as_count()`,
     latency:    `max:gcp.run.request_latencies.p95{${run}} by {service_name}`,
     cpu:        `avg:gcp.run.container.cpu.utilizations.avg{${run}} by {service_name}`,
     cpuPeak:    `max:gcp.run.container.cpu.utilizations.p99{${run}} by {service_name}`,
@@ -284,7 +298,7 @@ async function getServiceMetrics(services, from, to) {
     ecsMemoryPeak: `max:aws.ecs.service.memory_utilization.maximum{${ecs}} by {servicename}`,
     ecsRunning: `sum:aws.ecs.service.running{${ecs}} by {servicename}`,
     azRequests: `sum:azure.app_containerapps.requests{${az}} by {name}.as_count()`,
-    azErrors:   `sum:azure.app_containerapps.requests{(${az}) AND statuscodecategory:5xx} by {name}.as_count()`,
+    azErrors:   `sum:azure.app_containerapps.requests{(${az}) AND statuscodecategory:5xx AND NOT statuscode:501} by {name}.as_count()`,
     azLatency:  `avg:azure.app_containerapps.response_time{${az}} by {name}`,
     azLatencyPeak: `max:azure.app_containerapps.response_time{${az}} by {name}`,
     azCpu:      `avg:azure.app_containerapps.cpu_percentage{${az}} by {name}`,
@@ -292,6 +306,10 @@ async function getServiceMetrics(services, from, to) {
     azMemory:   `avg:azure.app_containerapps.memory_percentage{${az}} by {name}`,
     azMemoryPeak: `max:azure.app_containerapps.memory_percentage{${az}} by {name}`,
     azReplicas: `avg:azure.app_containerapps.replicas{${az}} by {name}`,
+    // k3s : total du namespace (l'app et sa base PostgreSQL) à chaque instant.
+    k3sCpu:     `sum:kubernetes.cpu.usage.total{${k3s}} by {kube_namespace}`,
+    k3sMemory:  `sum:kubernetes.memory.usage{${k3s}} by {kube_namespace}`,
+    k3sPods:    `sum:kubernetes_state.deployment.replicas_available{${k3s}} by {kube_namespace}`,
   };
   const keys = Object.keys(entries);
   const values = await Promise.all(keys.map(k => q(entries[k])));
@@ -318,4 +336,4 @@ async function getMonitor(monitorId) {
   }
 }
 
-module.exports = { logsScopeQuery, searchServiceLogs, getServiceMetrics, listMonitors, getMonitor, searchMcpLogs,queryMcpMetrics, getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };
+module.exports = { K3S_CLUSTER, logsScopeQuery, searchServiceLogs, getServiceMetrics, listMonitors, getMonitor, searchMcpLogs,queryMcpMetrics, getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };

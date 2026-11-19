@@ -15,6 +15,7 @@
   const where = s => {
     if (s.cloud === 'aws') return 'AWS (ECS)';
     if (s.cloud === 'azure') return 'Azure';
+    if (s.cloud === 'private-aws') return 'k3s';
     return s.failover ? 'GCP, secours AWS' : 'GCP (Cloud Run)';
   };
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);

@@ -1,6 +1,6 @@
 <%# Carte « Observabilité » du détail d'un déploiement. Attend obs = { service, available, logs, metrics }. %>
 <% const q = encodeURIComponent(obs.service); %>
-<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple' })[src] || 'badge-gray'; %>
+<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple', k3s: 'badge-success', 'k3s DB': 'badge-success' })[src] || 'badge-gray'; %>
 <% const pct = v => (v === null || v === undefined ? '—' : v + ' %'); %>
 <div class="card" style="margin-top:20px;" id="observability-card">
   <div class="card-header">
@@ -14,8 +14,8 @@
     <% if (!obs.available) { %>
       <p style="color:var(--text-muted);font-size:13px;margin:0;">Datadog est indisponible pour le moment.</p>
     <% } else { %>
-      <% const c = obs.metrics && obs.metrics.cloudRun; const e = obs.metrics && obs.metrics.ecs; const a = obs.metrics && obs.metrics.azure; %>
-      <% if (c || e || a) { %>
+      <% const c = obs.metrics && obs.metrics.cloudRun; const e = obs.metrics && obs.metrics.ecs; const a = obs.metrics && obs.metrics.azure; const k = obs.metrics && obs.metrics.k3s; %>
+      <% if (c || e || a || k) { %>
       <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;margin-bottom:16px;">
         <% if (c) { %>
           <div><div class="text-muted">Requêtes (Cloud Run)</div><strong><%= c.requests === null ? '—' : c.requests %></strong></div>
@@ -37,6 +37,11 @@
           <div><div class="text-muted">CPU moy. / pic</div><strong><%= pct(a.cpu) %> / <%= pct(a.cpuPeak) %></strong></div>
           <div><div class="text-muted">Mémoire moy. / pic</div><strong><%= pct(a.memory) %> / <%= pct(a.memoryPeak) %></strong></div>
           <div><div class="text-muted">Réplicas moy.</div><strong><%= a.replicas === null ? '—' : a.replicas %></strong></div>
+        <% } %>
+        <% if (k) { %>
+          <div><div class="text-muted">CPU k3s moy. / pic</div><strong><%= k.cpu === null ? '—' : k.cpu + ' m' %> / <%= k.cpuPeak === null ? '—' : k.cpuPeak + ' m' %></strong></div>
+          <div><div class="text-muted">Mémoire k3s moy. / pic</div><strong><%= k.memory === null ? '—' : k.memory + ' Mio' %> / <%= k.memoryPeak === null ? '—' : k.memoryPeak + ' Mio' %></strong></div>
+          <div><div class="text-muted">Pods disponibles</div><strong><%= k.pods === null ? '—' : k.pods %></strong></div>
         <% } %>
       </div>
       <% } else { %>
