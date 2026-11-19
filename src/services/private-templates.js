@@ -26,6 +26,8 @@ const DB_NAME = 'appdb';
 const DB_ADMIN = 'pgadmin';
 const RUNTIME_USER = 'cnp_runtime';
 const DB_PORT = 5432;
+// Port d'écoute du pod de validation HTTP-01 créé par cert-manager (fixe dans cert-manager).
+const ACME_SOLVER_PORT = 8089;
 // Image officielle, version épinglée (publiée le 06/11/2026). Variante alpine : utilisateur postgres = 70.
 const POSTGRES_IMAGE = 'postgres:16.15-alpine';
 const POSTGRES_UID = 70;
@@ -164,6 +166,15 @@ function tplPolicies(appName, priv, env) {
                 from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
                     podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
                 ports: [{ protocol: 'TCP', port: 'http' }] }] } },
+        // Validation HTTP-01 de Let's Encrypt : cert-manager crée dans ce namespace un pod temporaire (port 8089), que Traefik
+        // doit joindre. Sans cette ouverture, le refus par défaut le coupe : Traefik répond 502, le défi reste « pending » et
+        // l'app garde le certificat par défaut de Traefik. Constaté le 19/11 après une recréation de la VM (le 17/11, le
+        // certificat était passé avant la création des politiques). Touche aussi toute nouvelle app et chaque renouvellement.
+        { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: 'traefik-vers-validation-acme', namespace: ns },
+            spec: { podSelector: { matchLabels: { 'acme.cert-manager.io/http01-solver': 'true' } }, policyTypes: ['Ingress'], ingress: [{
+                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+                    podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
+                ports: [{ protocol: 'TCP', port: ACME_SOLVER_PORT }] }] } },
         { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: 'app-vers-base', namespace: ns },
             spec: { podSelector: role('app'), policyTypes: ['Egress'], egress: [{
                 to: [{ podSelector: role('db') }], ports: [{ protocol: 'TCP', port: DB_PORT }] }] } },
@@ -177,7 +188,7 @@ function tplPolicies(appName, priv, env) {
     ];
     return header(
         `Isolation de ${appName} (${env}) : quotas, valeurs par défaut des conteneurs, réseau en refus par défaut, comptes\n` +
-        'de service sans jeton. Seules ouvertures : DNS, Traefik vers l\'app, l\'app vers SA base.'
+        'de service sans jeton. Seules ouvertures : DNS, Traefik vers l\'app et vers la validation Let\'s Encrypt, l\'app vers SA base.'
     ) + dumpAll(objects.map(o => wrap(appName, env, priv, o, 1)));
 }
 
