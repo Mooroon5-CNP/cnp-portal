@@ -7,6 +7,8 @@ const https = require('https');
 const APP = /^[a-z][a-z0-9-]{1,39}$/;
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SEGMENT = /^[a-z][a-z0-9-]*$/;
+// « private » : OpenBao du cloud privé (k3s), variables CNP_OPENBAO_PRIVATE_*.
+const DOMAINS = ['gcp', 'aws', 'azure', 'private'];
 
 function safePath(app, environment) {
   if (!APP.test(app) || !['dev', 'prod'].includes(environment)) {
@@ -30,7 +32,7 @@ class OpenBaoClient {
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Adresse OpenBao HTTPS invalide.');
     }
-    if (!['gcp', 'aws', 'azure'].includes(domain) || !SEGMENT.test(mount) || !SEGMENT.test(role)) {
+    if (!DOMAINS.includes(domain) || !SEGMENT.test(mount) || !SEGMENT.test(role)) {
       throw new Error('Configuration OpenBao invalide.');
     }
     this.domain = domain;
@@ -44,7 +46,7 @@ class OpenBaoClient {
   }
 
   static fromEnvironment(domain, dependencies = {}) {
-    if (!['gcp', 'aws', 'azure'].includes(domain)) throw new Error('Domaine OpenBao invalide.');
+    if (!DOMAINS.includes(domain)) throw new Error('Domaine OpenBao invalide.');
     const prefix = `CNP_OPENBAO_${domain.toUpperCase()}_`;
     const address = process.env[`${prefix}ADDR`];
     if (!address) throw new Error(`Adresse OpenBao ${domain} manquante.`);

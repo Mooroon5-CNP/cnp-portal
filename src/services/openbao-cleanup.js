@@ -57,7 +57,9 @@ async function cleanup(deployment) {
   const record = records.get(deployment.id);
   if (!record) return;
   if (deployment.targetCluster === 'azure') await azure(deployment, record.ownedNames);
-  else {
+  // Cloud privé : aucune copie hors d'OpenBao. Le Secret « variables » produit par External Secrets disparaît avec le
+  // namespace ; il ne reste qu'à détruire les versions ci-dessous.
+  else if (deployment.targetCluster !== 'private-aws') {
     await gcp(deployment, record.ownedNames);
     if (deployment.failoverRequested) aws(deployment, record.ownedNames);
   }

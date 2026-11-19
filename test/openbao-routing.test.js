@@ -9,6 +9,8 @@ test.each([
   [{ environment: 'prod', targetCluster: 'gcp', failoverRequested: true }, ['gcp', 'aws']],
   [{ environment: 'dev', targetCluster: 'azure' }, ['azure']],
   [{ environment: 'prod', targetCluster: 'azure' }, ['azure']],
+  [{ environment: 'dev', targetCluster: 'private-aws' }, ['private']],
+  [{ environment: 'prod', targetCluster: 'private-aws' }, ['private']],
 ])('routes deployment %j only to %j', (deployment, expected) => {
   expect(domainsForDeployment(deployment)).toEqual(expected);
 });
@@ -18,6 +20,7 @@ test.each([
   { environment: 'prod', targetCluster: 'aws' },
   { environment: 'dev', targetCluster: 'azure', failoverRequested: true },
   { environment: 'dev', targetCluster: 'gcp', failoverRequested: true },
+  { environment: 'prod', targetCluster: 'private-aws', failoverRequested: true },
   { environment: 'prod', targetCluster: 'gcp', persistentStorage: true, failoverRequested: true },
 ])('rejects unsupported routing %j', deployment => {
   expect(() => domainsForDeployment(deployment)).toThrow();

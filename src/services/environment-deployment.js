@@ -548,7 +548,11 @@ async function reconcile(dep) {
         const prepared = await openbaoRuntime.azureReferences(dep);
         openbaoRuntime.applyAzureReferences(files, dep, prepared);
         if (deploymentVariables.get(dep.id)) runtimeRefs = prepared?.references || [];
-      } else if (!priv.isPrivate(dep)) {
+      } else if (priv.isPrivate(dep)) {
+        const prepared = await openbaoRuntime.privateReferences(dep);
+        priv.applyVariables(files, dep, prepared);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = prepared ? { version: prepared.version, names: prepared.names } : [];
+      } else {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
