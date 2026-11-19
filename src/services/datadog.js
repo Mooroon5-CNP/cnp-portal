@@ -114,11 +114,17 @@ function sourceOf(attributes) {
   if (tags.includes('source:gcp.cloud.run')) return 'Cloud Run';
   if (inner.aws) return String(inner.aws.awslogs?.logGroup || '').startsWith('/aws/rds/') ? 'RDS' : 'ECS';
   if (inner.azure || tags.includes('source:azure')) return tags.includes('source:postgresql') || inner.postgres ? 'Azure DB' : 'Azure';
+  if (tags.includes(`kube_cluster_name:${client.K3S_CLUSTER}`)) return /source:postgres/.test(tags) ? 'k3s DB' : 'k3s';
   return attributes.source || '';
 }
 
 function serviceOf(attributes, allowed) {
   if (allowed.has(attributes.service)) return attributes.service;
+  const tags = [].concat(attributes.tags || []);
+  if (tags.includes(`kube_cluster_name:${client.K3S_CLUSTER}`)) {
+    const ns = tags.find(t => t.startsWith('kube_namespace:'))?.slice('kube_namespace:'.length);
+    if (allowed.has(ns)) return ns;
+  }
   const stream = attributes.attributes?.aws?.awslogs?.logStream || '';
   const prefix = stream.split('/')[0];
   return allowed.has(prefix) ? prefix : null;
@@ -175,6 +181,7 @@ const sum = pts => (pts && pts.length ? pts.reduce((s, p) => s + p[1], 0) : null
 const max = pts => (pts && pts.length ? Math.max(...pts.map(p => p[1])) : null);
 const last = pts => (pts && pts.length ? pts.reduce((a, b) => (b[0] > a[0] ? b : a))[1] : null);
 const round1 = v => (v === null ? null : Math.round(v * 10) / 10);
+const scaled = (v, unit) => (v === null ? null : Math.round(v / unit));
 
 const pctOf = v => (v === null ? null : round1(v * 100));
 const ratio = (num, den) => (num !== null && den ? num / den : null);
@@ -190,6 +197,7 @@ async function getMetrics(services, window = resolveWindow()) {
     const hasAz = ['azRequests', 'azCpu', 'azMemory', 'azReplicas'].some(k => pts(k, service).length);
     const azRequests = sum(pts('azRequests', service));
     const azErrors = sum(pts('azErrors', service));
+    const hasK3s = ['k3sCpu', 'k3sMemory', 'k3sPods'].some(k => pts(k, service).length);
     const requests = sum(pts('requests', service));
     const errors = sum(pts('errors', service));
     const billable = sum(pts('billable', service));
@@ -230,6 +238,12 @@ async function getMetrics(services, window = resolveWindow()) {
         memoryPeak: round1(max(pts('azMemoryPeak', service))),
         replicas: round1(avg(pts('azReplicas', service))),
         replicasMax: round1(max(pts('azReplicas', service))),
+      } : null,
+      k3s: hasK3s ? {
+        // CPU en millicœurs (nanocœurs / 10⁶), mémoire en Mio.
+        cpu: scaled(avg(pts('k3sCpu', service)), 1e6), cpuPeak: scaled(max(pts('k3sCpu', service)), 1e6),
+        memory: scaled(avg(pts('k3sMemory', service)), 1048576), memoryPeak: scaled(max(pts('k3sMemory', service)), 1048576),
+        pods: last(pts('k3sPods', service)),
       } : null,
     };
   });

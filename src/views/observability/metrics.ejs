@@ -37,7 +37,7 @@
             <thead><tr>
               <th>Application</th>
               <%- th('Requêtes', 'Nombre de requêtes HTTP reçues sur la période. Indique si l’application est utilisée.') %>
-              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total. Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
+              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total, sans les 501 (méthode non gérée, souvent des robots). Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
               <%- th('Latence p95', 'Temps de réponse sous lequel se trouvent 95 % des requêtes (pire valeur de la période). Ce que ressentent les utilisateurs les moins bien servis.') %>
               <%- th('CPU moy. / pic', 'Part du processeur alloué réellement utilisée : moyenne de la période, puis pic (99e centile). Un pic proche de 100 % signifie que l’instance sature et ralentit.') %>
               <%- th('Mémoire moy. / pic', 'Part de la mémoire allouée utilisée : moyenne, puis pic (99e centile). À 100 %, Cloud Run redémarre l’instance (plantage « out of memory »).') %>
@@ -107,7 +107,7 @@
             <thead><tr>
               <th>Application</th>
               <%- th('Requêtes', 'Nombre de requêtes HTTP reçues sur la période. Indique si l’application est utilisée.') %>
-              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total. Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
+              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total, sans les 501 (méthode non gérée, souvent des robots). Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
               <%- th('Temps de réponse moy. / pic', 'Temps de réponse moyen des requêtes, puis la pire valeur de la période (Azure ne fournit pas de p95).') %>
               <%- th('CPU moy. / pic', 'Part du processeur alloué réellement utilisée : moyenne de la période, puis maximum. Proche de 100 %, l’application sature et ralentit.') %>
               <%- th('Mémoire moy. / pic', 'Part de la mémoire allouée utilisée : moyenne, puis maximum. À 100 %, Azure redémarre l’application.') %>
@@ -134,7 +134,39 @@
       </div>
       <% } %>
 
-      <% const silent = metrics.filter(m => !m.cloudRun && !m.ecs && !m.azure); %>
+      <% const k3s = metrics.filter(m => m.k3s); %>
+      <% if (k3s.length > 0 || services.some(s => s.cloud === 'private-aws')) { %>
+      <div class="card mb-6">
+        <div class="card-header">
+          <span class="card-title" title="Le cloud privé est un cluster k3s (Kubernetes léger) sur une machine AWS. Chaque application y a son espace (namespace), base de données comprise.">k3s (cloud privé) <span class="text-muted" style="font-weight:400;">— <%= window.label %></span></span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr>
+              <th>Application</th>
+              <%- th('CPU moy. / pic', 'Processeur consommé par l’application et sa base, en millicœurs (1 000 = un cœur entier) : moyenne de la période, puis maximum.') %>
+              <%- th('Mémoire moy. / pic', 'Mémoire utilisée par l’application et sa base : moyenne de la période, puis maximum.') %>
+              <%- th('Pods disponibles', 'Nombre de copies de l’application prêtes à répondre (dernière valeur). 0 = l’application ne répond plus.') %>
+            </tr></thead>
+            <tbody>
+              <% k3s.forEach(m => { const k = m.k3s; %>
+              <tr>
+                <td><a href="<%= logsLink(m.service) %>" class="font-mono" title="Voir les logs de cette application"><%= m.service %></a></td>
+                <td><%= k.cpu === null ? '—' : k.cpu + ' m' %> <span class="text-muted">/</span> <%= k.cpuPeak === null ? '—' : k.cpuPeak + ' m' %></td>
+                <td><%= k.memory === null ? '—' : k.memory + ' Mio' %> <span class="text-muted">/</span> <%= k.memoryPeak === null ? '—' : k.memoryPeak + ' Mio' %></td>
+                <td style="<%= k.pods === 0 ? 'color:var(--danger)' : '' %>"><%= show(k.pods) %></td>
+              </tr>
+              <% }) %>
+              <% if (k3s.length === 0) { %>
+              <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px;">Aucune métrique k3s sur cette période.</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+
+      <% const silent = metrics.filter(m => !m.cloudRun && !m.ecs && !m.azure && !m.k3s); %>
       <% if (silent.length > 0) { %>
       <div class="card">
         <div class="card-body text-muted" style="font-size:13px;">

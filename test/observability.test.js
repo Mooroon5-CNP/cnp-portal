@@ -58,9 +58,10 @@ describe('périmètre d\'observabilité', () => {
 });
 
 describe('requêtes Datadog', () => {
-  test('le filtre de logs couvre Cloud Run (service) et ECS (flux de logs)', () => {
+  test('le filtre de logs couvre Cloud Run (service), ECS (flux de logs) et k3s (namespace du cluster privé)', () => {
     expect(datadogClient.logsScopeQuery(['a-dev', 'b-prod']))
-      .toBe('(service:(a-dev OR b-prod) OR @aws.awslogs.logStream:(a-dev\\/* OR b-prod\\/*))');
+      .toBe('(service:(a-dev OR b-prod) OR @aws.awslogs.logStream:(a-dev\\/* OR b-prod\\/*)'
+        + ' OR (kube_cluster_name:cnp-prive kube_namespace:(a-dev OR b-prod) -source:kubernetes.audit))');
   });
 
   test.each([[[]], [['a OR service:*']], [['a)']], [['*']]])('un nom de service hors format est refusé : %j', services => {
@@ -113,6 +114,22 @@ describe('mise en forme des logs', () => {
     expect(logs.map(l => l.source)).toEqual(['Cloud SQL', 'RDS', 'Azure DB']);
   });
 
+  test('k3s : rattaché par namespace (le log de prod porte service:<app> sans l\'environnement)', async () => {
+    jest.spyOn(datadogClient, 'searchServiceLogs').mockResolvedValue([
+      { attributes: { service: 'obs-alpha', message: 'GET / 200',
+        tags: ['kube_cluster_name:cnp-prive', 'kube_namespace:obs-alpha-prod', 'source:obs-alpha'] } },
+      { attributes: { service: 'postgres', message: 'checkpoint',
+        tags: ['kube_cluster_name:cnp-prive', 'kube_namespace:obs-alpha-prod', 'source:postgres'] } },
+      // Un namespace homonyme sur un autre cluster n'est pas rattaché.
+      { attributes: { service: 'x', message: 'secret', tags: ['kube_cluster_name:autre', 'kube_namespace:obs-alpha-prod'] } },
+    ]);
+    const logs = await datadogService.getLogs(['obs-alpha-prod']);
+    expect(logs).toEqual([
+      expect.objectContaining({ service: 'obs-alpha-prod', source: 'k3s', message: 'GET / 200' }),
+      expect.objectContaining({ service: 'obs-alpha-prod', source: 'k3s DB' }),
+    ]);
+  });
+
   test('entrée de requête HTTP Cloud Run', () => {
     expect(datadogService.messageOf({ attributes: { data: { httpRequest: { requestMethod: 'GET', requestUrl: '/x', status: 200 } } } }))
       .toBe('GET /x 200');
@@ -138,7 +155,16 @@ describe('métriques', () => {
     expect(a.ecs).toBeNull();
     expect(b.cloudRun).toBeNull();
     expect(b.ecs).toEqual({ cpu: 4, cpuPeak: 12, memory: 8, memoryPeak: 9, running: 1 });
-    expect(c).toEqual({ service: 'c-dev', cloudRun: null, ecs: null, azure: null });
+    expect(c).toEqual({ service: 'c-dev', cloudRun: null, ecs: null, azure: null, k3s: null });
+  });
+
+  test('k3s : CPU en millicœurs, mémoire en Mio, pods disponibles', async () => {
+    jest.spyOn(datadogClient, 'getServiceMetrics').mockResolvedValue({
+      k3sCpu: { 'p-dev': [[1, 2e6], [2, 4e6]] }, k3sMemory: { 'p-dev': [[1, 100 * 1048576], [2, 140 * 1048576]] },
+      k3sPods: { 'p-dev': [[1, 1], [2, 0]] },
+    });
+    const [p] = await datadogService.getMetrics(['p-dev'], datadogService.resolveWindow({ range: '24h' }));
+    expect(p.k3s).toEqual({ cpu: 3, cpuPeak: 4, memory: 120, memoryPeak: 140, pods: 0 });
   });
 
   test('Azure Container Apps : requêtes, erreurs, temps de réponse, CPU, mémoire, réplicas', async () => {
@@ -190,8 +216,8 @@ describe('période, recherche et export', () => {
   });
 
   test.each([
-    ['app', ' -source:(gcp.cloudsql.database OR postgresql)'],
-    ['db', ' source:(gcp.cloudsql.database OR postgresql)'],
+    ['app', ' -source:(gcp.cloudsql.database OR postgresql OR postgres)'],
+    ['db', ' source:(gcp.cloudsql.database OR postgresql OR postgres)'],
     ['source:*', ''],
   ])('filtre d\'origine %s : fragment fixe ajouté à la requête Datadog, valeur inconnue ignorée', async (origin, fragment) => {
     const spy = jest.spyOn(datadogClient, 'searchServiceLogs').mockResolvedValue([]);
