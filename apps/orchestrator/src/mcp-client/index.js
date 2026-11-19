@@ -17,7 +17,13 @@ function createMcpClient(env = process.env) {
   if (env.MCP_CLIENT_MODE === 'http') {
     const { HttpMcpClient } = require('./http-client');
     let tokenProvider;
-    if (env.MCP_LOCAL_JWT_SECRET) {
+    if (env.MCP_JWT_SECRET) {
+      // Shared deployments: the portal is the token issuer; HTTPS only, the secret comes from the runtime secret store.
+      if (new URL(env.MCP_URL || env.MCP_BASE_URL).protocol !== 'https:') throw new Error('MCP_JWT_SECRET requires an HTTPS MCP_URL');
+      const { createLocalToken } = require('./local-token');
+      createLocalToken(env.MCP_JWT_SECRET);
+      tokenProvider = (claims) => createLocalToken(env.MCP_JWT_SECRET, claims);
+    } else if (env.MCP_LOCAL_JWT_SECRET) {
       const url = new URL(env.MCP_URL || env.MCP_BASE_URL);
       if (env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production'
         || env.MCP_LOCAL_HTTP !== 'true' || url.hostname !== '127.0.0.1' || url.protocol !== 'http:') {
@@ -25,7 +31,7 @@ function createMcpClient(env = process.env) {
       }
       const { createLocalToken } = require('./local-token');
       createLocalToken(env.MCP_LOCAL_JWT_SECRET);
-      tokenProvider = () => createLocalToken(env.MCP_LOCAL_JWT_SECRET);
+      tokenProvider = (claims) => createLocalToken(env.MCP_LOCAL_JWT_SECRET, claims);
     }
     return new HttpMcpClient({
       url: env.MCP_URL || env.MCP_BASE_URL,
@@ -34,6 +40,8 @@ function createMcpClient(env = process.env) {
       origin: env.MCP_ORIGIN || env.MCP_EXPECTED_ORIGIN,
       local: env.MCP_LOCAL_HTTP === 'true',
       timeoutMs: Number(env.MCP_TOOL_TIMEOUT_MS || 10000),
+      gcaTimeoutMs: Number(env.MCP_GCA_TIMEOUT_MS || 60000),
+      iamAudience: env.MCP_IAM_AUDIENCE,
     });
   }
   if (env.MCP_CLIENT_MODE && env.MCP_CLIENT_MODE !== 'fake') throw new Error('INVALID_MCP_CLIENT_MODE');
