@@ -29,7 +29,7 @@ The first application installs pinned cert-manager; the second owns the Let's En
 
 ## Recreate application configuration
 
-Terraform supplies the `cnp-portal` Kubernetes service account, GCP OpenBao CA ConfigMap, and `cnp-portal-cloud-env` Secret. Check their presence. Use a private `credentials.env` with the required application keys (`ADMIN_INITIAL_PASSWORD`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_CONFIG_REPO_NAME`, `DD_API_KEY`, `DD_APP_KEY`); optional OAuth and Datadog site keys may be present. Never commit this file.
+Terraform supplies the `cnp-portal` Kubernetes service account, GCP OpenBao CA ConfigMap, and `cnp-portal-cloud-env` Secret. Check their presence. Use a private `credentials.env` with the required application keys (`ADMIN_INITIAL_PASSWORD`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_CONFIG_REPO_NAME`, `DD_API_KEY`, `DD_APP_KEY`). Put the production OAuth `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in a second ignored file, `oauth-prod.env`. Never commit either file.
 
 From the portal repository after `npm ci`:
 
@@ -37,12 +37,20 @@ From the portal repository after `npm ci`:
 kubectl -n cnp-portal get serviceaccount cnp-portal
 kubectl -n cnp-portal get configmap openbao-ca
 kubectl -n cnp-portal get secret cnp-portal-cloud-env
-node scripts/deploy/apply-app-secret.js /secure/path/credentials.env --oauth-callback-registered
+node scripts/deploy/apply-app-secret.js /secure/path/credentials.env --oauth-file /secure/path/oauth-prod.env --oauth-callback-registered
 ```
 
 The script allowlists application credentials. It generates a strong session key if needed and preserves an existing key. It obtains Argo CD's certificate from `argocd/argocd-secret` and overrides the legacy public-IP/insecure endpoint with verified `https://argocd-server.argocd.svc`; Argo credentials stay in the Terraform Secret. Re-run the script when Argo rotates its certificate, then restart the portal pod.
 
-**OAuth registration gate:** the local `.env` used on 19 November has `GITHUB_REDIRECT_URI=http://localhost:3001/auth/github/callback`. Its client ID and secret are installed unchanged in the portal Secret, while the bootstrap script sets the production callback to `https://portal.apps.mooroon5.fr/auth/github/callback`. Before passing `--oauth-callback-registered`, open the OAuth app associated with that client ID under GitHub **Settings → Developer settings → OAuth apps**, add the exact production URL as another callback, and save. Keep the localhost callback if local development needs it. Then complete a real browser sign-in; a redirect from `/auth/github` alone does not prove registration. If the GitHub app is owned by another account or organization, its owner must make this change.
+**OAuth registration gate:** the local `.env` used on 19 November has a localhost callback and an OAuth client from a different app. Before passing `--oauth-callback-registered`, open the production OAuth app under GitHub **Settings → Developer settings → OAuth apps**, add the exact production callback `https://portal.apps.mooroon5.fr/auth/github/callback`, and save. Keep its localhost callback if local development needs it. Put that same app's Client ID and a matching client secret in `oauth-prod.env`. Then complete a real browser sign-in; a redirect from `/auth/github` alone does not prove registration. If the app is owned by another account or organization, its owner must make this change.
+
+To rotate just the OAuth client later, from the portal repository run:
+
+```sh
+node scripts/deploy/update-oauth-secret.js /secure/path/oauth-prod.env
+```
+
+This checks the client/secret pair and registered callback with GitHub before updating the Kubernetes Secret. It restarts the one portal pod and verifies the live redirect. The script replaces the Secret without a plaintext `kubectl.kubernetes.io/last-applied-configuration` annotation. Expect a brief interruption during the `Recreate` rollout.
 
 ## Build and promote an image
 
