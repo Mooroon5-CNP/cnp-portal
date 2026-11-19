@@ -14,14 +14,15 @@ Le chemin historique du pilote (`initialize_secrets.py`, pile Terraform `credent
 """
 import base64
 import json
+import os
 import re
 import secrets
 from uuid import NAMESPACE_URL, uuid5
 
-ACCOUNT = "626278345026"
-PROJECT = "cnp-terraform-512313"
-REGION = "eu-west-3"
-GCP_LOCATION = "europe-west9"
+ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "626278345026")
+PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
+REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
+GCP_LOCATION = os.environ.get("GCP_REGION", "europe-west9")
 NAMESPACE = "crossplane-system"
 MANAGED_BY = "cnp-platform"
 # Les quatre premières sont celles du pilote (même contenu du conteneur bootstrap, lu tel quel par bootstrap.py).
@@ -307,6 +308,51 @@ def app_sql_remove(app, environment, kube, gsm):
         kube.delete(names["kubernetes_secret"])
         removed.append(f"{NAMESPACE}/{names['kubernetes_secret']}")
     return {"removed": removed}
+
+
+# --- Rôle applicatif d'une base Azure (dev et prod) -------------------------------------------------------------------------
+# L'app se connecte en cnp_runtime (propriétaire de ses tables, sans droit d'administration), comme sur GCP. Son mot de passe
+# est généré ici, une seule fois, dans un Secret Kubernetes que Crossplane recopie dans la Container App et dans le Key
+# Vault ; le job de réplication Azure crée le rôle sur les serveurs (azure_replication.py, ensure_runtime_role).
+AZURE_ENVIRONMENTS = ("dev", "prod")
+
+
+def azure_runtime_names(app, environment):
+    if not isinstance(app, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,38}[a-z0-9]", app) or environment not in AZURE_ENVIRONMENTS:
+        raise ValueError("Application ou environnement invalide pour une base Azure.")
+    return {"kubernetes_secret": f"{app}-{environment}-pg-runtime",
+            "labels": {"cnp.io/application": app, "cnp.io/environment": environment, "cnp.io/credentials": "azure-runtime"}}
+
+
+def azure_runtime_initialize(app, environment, kube):
+    """Crée (une seule fois) le mot de passe de cnp_runtime. Relançable : un secret de la plateforme est conservé tel quel,
+    un objet étranger est refusé, aucune valeur n'est jamais remplacée."""
+    names = azure_runtime_names(app, environment)
+    current = kube.get(names["kubernetes_secret"])
+    if current is None:
+        try:
+            kube.create({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {"name": names["kubernetes_secret"], "namespace": NAMESPACE, "labels": names["labels"]},
+                "data": {"password": base64.b64encode(secrets.token_urlsafe(48).encode()).decode()}})
+            return {"kubernetes_secret": names["kubernetes_secret"], "initialized": True}
+        except Exists:
+            current = kube.get(names["kubernetes_secret"])
+    found = (current or {}).get("metadata", {}).get("labels") or {}
+    if any(found.get(key) != value for key, value in names["labels"].items()) or set((current or {}).get("data") or {}) != {"password"}:
+        raise ValueError("Secret Kubernetes existant incompatible ; ne pas remplacer des identifiants actifs.")
+    return {"kubernetes_secret": names["kubernetes_secret"], "initialized": True}
+
+
+def azure_runtime_remove(app, environment, kube):
+    names = azure_runtime_names(app, environment)
+    current = kube.get(names["kubernetes_secret"])
+    if current is None:
+        return {"removed": []}
+    found = current.get("metadata", {}).get("labels") or {}
+    if any(found.get(key) != value for key, value in names["labels"].items()):
+        raise ValueError("Secret Kubernetes non créé par la plateforme pour cette app : suppression refusée.")
+    kube.delete(names["kubernetes_secret"])
+    return {"removed": [f"{NAMESPACE}/{names['kubernetes_secret']}"]}
 
 
 def clients(kube_context=None):

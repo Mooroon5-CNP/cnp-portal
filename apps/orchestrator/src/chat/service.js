@@ -102,7 +102,7 @@ async function* runChatTurn(rawRequest, dependencies) {
   });
   if (classification.kind === 'routing_unavailable') {
     yield event({ type: 'error', correlationId, code: 'ROUTING_UNAVAILABLE', retryable: true,
-      message: 'La demande est incertaine et Jev ne répond pas. Choisissez une commande / ou réessayez.' });
+      message: 'La demande est incertaine et Mistral ne répond pas. Choisissez une commande / ou réessayez.' });
     return;
   }
   if (classification.kind === 'rejected') {

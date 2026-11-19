@@ -23,10 +23,16 @@ const k8sClient = require('../clients/kubernetes');
 const manifestMrModel = require('../models/manifest_mr');
 const azureTemplates = require('../services/azure-templates');
 const { azureAppUrl } = azureTemplates;
+const { privateAppUrl } = require('../services/private-templates');
 const { PROGRESS_MESSAGES: AZURE_PROGRESS_MESSAGES } = require('../services/environment-azure');
+const { valuesFromForm } = require('../services/deployment-variable-input');
+const openbaoVariables = require('../services/openbao-variables');
+const deploymentVariables = require('../models/deployment_variables');
+const deploymentReleases = require('../models/deployment_release');
+const openbaoRuntime = require('../services/openbao-runtime');
 
 // Clouds que le portail sait déployer. AWS n'est pas encore pris en charge.
-const SUPPORTED_CLOUDS = ['gcp', 'azure'];
+const SUPPORTED_CLOUDS = ['gcp', 'azure', 'private-aws'];
 
 // ---------------------------------------------------------------------------
 // GitHub PR status sync
@@ -82,6 +88,17 @@ function canRetryConfiguration(user, dep) {
     return usesEnvironment(dep) && dep.onboardingStatus === 'failed'
         && !dep.onboardingError?.startsWith('Nettoyage partiel')
         && (user.role === 'manager' || user.id === dep.ownerUserId);
+}
+
+function assertVariableChangeAllowed(dep) {
+    if (!usesEnvironment(dep) || dep.onboardingStatus !== 'ready') throw new Error('Environnement indisponible pour la mise à jour.');
+    if (dep.failoverRequested && require('../services/failover-provisioning').get(dep.appName)?.state !== 'completed') {
+        throw new Error('Terminez la mise en service du failover avant de modifier ses variables.');
+    }
+    if (deploymentReleases.list(dep.id).some(release => ['pending', 'approving'].includes(release.state)
+        || (release.state === 'preparing' && release.lease_until > Date.now()))) {
+        throw new Error('Publication en cours : attendez sa fin avant de modifier les variables.');
+    }
 }
 
 async function environmentStatus(dep) {
@@ -270,6 +287,8 @@ const STACKS = {
     'azure-postgres': { targetCluster: 'azure' },
     'gcp-sqlite': { targetCluster: 'gcp', persistentStorage: 'on' },
     'gcp-postgres': { targetCluster: 'gcp', database: 'postgres' },
+    // Cloud privé : k3s sur une VM dédiée (cnp, aws/private), PostgreSQL dans le namespace de l'app.
+    'private-postgres': { targetCluster: 'private-aws' },
 };
 function fromStack(body) {
     const stack = STACKS[body.stack];
@@ -291,9 +310,10 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
     const { appName, githubRepoUrl, appPort, ownerTeamId, targetCluster, persistentStorage, environment = 'dev' } = req.body;
     // Mode de facturation de Cloud Run : « usage » (défaut, mise à l'échelle à zéro) ou « instance » (une instance toujours active).
-    const billing = req.body.billing === 'instance' && targetCluster !== 'azure' ? 'instance' : 'usage';
+    const billing = req.body.billing === 'instance' && !['azure', 'private-aws'].includes(targetCluster) ? 'instance' : 'usage';
     // Sur Azure, la donnée est dans PostgreSQL (un serveur par app) : l'option « SQLite sur GCS » ne s'applique pas.
-    const hasPersistentStorage = targetCluster !== 'azure'
+    // Cloud privé : la donnée est dans le PostgreSQL du namespace de l'app.
+    const hasPersistentStorage = !['azure', 'private-aws'].includes(targetCluster)
         && (persistentStorage === 'on' || persistentStorage === 'true' || persistentStorage === true);
 
     if (!appName || !githubRepoUrl) {
@@ -335,7 +355,14 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
 
     if (targetCluster && !SUPPORTED_CLOUDS.includes(targetCluster)) {
-        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP et Azure sont supportés pour le moment.');
+        req.flash('error', 'Ce cloud n\'est pas encore disponible. Seuls GCP, Azure et le cloud privé sont supportés pour le moment.');
+        return res.redirect('/deployments');
+    }
+
+    let variableValues;
+    try { variableValues = valuesFromForm(req.body); }
+    catch (error) {
+        req.flash('error', error.message);
         return res.redirect('/deployments');
     }
 
@@ -351,15 +378,25 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     // Reject a known database mismatch BEFORE recording or provisioning anything.
     try {
         const selected = hasPersistentStorage ? 'sqlite'
-            : (database || failoverRequested || targetCluster === 'azure') ? 'postgres' : null;
+            : (database || failoverRequested || ['azure', 'private-aws'].includes(targetCluster)) ? 'postgres' : null;
         await repositoryDatabase.assertCompatible(parsed, { environment,
             selected });
     } catch (error) {
         req.session.deploymentDraft = { appName, githubRepoUrl, appPort: port, environment,
-            stack: req.body.stack || (hasPersistentStorage ? 'gcp-sqlite' : targetCluster === 'azure' ? 'azure-postgres' : 'gcp-postgres'),
+            stack: req.body.stack || (hasPersistentStorage ? 'gcp-sqlite' : targetCluster === 'azure' ? 'azure-postgres'
+                : targetCluster === 'private-aws' ? 'private-postgres' : 'gcp-postgres'),
             ownerTeamId: resolvedTeamId, billing, error: error.message };
         req.flash('error', error.message);
         return res.redirect('/deployments');
+    }
+
+    if (Object.keys(variableValues).length) {
+        try { openbaoRuntime.assertReady({ appName, environment, targetCluster: targetCluster || 'gcp', failoverRequested,
+            persistentStorage: hasPersistentStorage }); }
+        catch (error) {
+            req.flash('error', `Variables indisponibles : ${error.message}`);
+            return res.redirect('/deployments');
+        }
     }
 
     // Only record the deployment after the read-only compatibility check succeeds.
@@ -382,6 +419,16 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     } catch (e) {
         req.flash('error', "Impossible d'enregistrer le déploiement.");
         return res.redirect('/deployments');
+    }
+
+    if (Object.keys(variableValues).length) {
+        try { await openbaoVariables.service().prepare(dep, variableValues); }
+        catch (error) {
+            deploymentVariables.remove(dep.id);
+            deploymentModel.delete(dep.id);
+            req.flash('error', `Variables non préparées : ${error.message} Ressaisissez leurs valeurs avant de réessayer.`);
+            return res.redirect('/deployments');
+        }
     }
 
     // Les ressources live suivent un CI réussi ; la production reste soumise à validation.
@@ -639,7 +686,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     }
     let ingressUrl = null;
     // For GCP apps, Cloud Run is the only URL source — never fall back to nip.io.
-    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && dep.targetCluster !== 'gcp' && dep.targetCluster !== 'azure') {
+    if (!cloudRunUrl && dep.onboardingStatus === 'ready' && !['gcp', 'azure', 'private-aws'].includes(dep.targetCluster)) {
         // 1. Try reading the actual Ingress from the cluster (protocol inferred from TLS presence).
         ingressUrl = await k8sClient.getIngressUrl(dep.appName, 'dev').catch(() => null);
 
@@ -741,6 +788,10 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
+        variableNames: deploymentVariables.get(dep.id)?.names || [],
+        canRestoreVariables: (deploymentVariables.get(dep.id)?.history.length || 0) > 1,
+        canEditVariables: usesEnvironment(dep) && dep.onboardingStatus === 'ready'
+            && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
         deletionDraft,
         canRetryConfiguration: canRetryConfiguration(req.user, dep),
         canRetryPipeline: can(req.user, 'cicd:trigger-pipeline') && (req.user.role === 'manager' || req.user.id === dep.ownerUserId),
@@ -750,6 +801,8 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         // domaine par défaut de l'environnement Container Apps.
         applicationUrl: dep.targetCluster === 'azure' && usesEnvironment(dep)
             ? azureAppUrl(dep.appName, config.azure, dep.environment)
+            : dep.targetCluster === 'private-aws' && usesEnvironment(dep)
+            ? privateAppUrl(dep.appName, config.private, dep.environment)
             : applicationAddress.usesNativeCloudRun(dep)
                 ? selectedStatus?.applicationUrl || null : applicationAddress.url(dep),
         runs,
@@ -768,6 +821,41 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
         user: req.user,
         can: (p) => can(req.user, p),
     });
+});
+
+router.post('/:id/variables', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && req.user.id !== dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé');
+    }
+    try {
+        assertVariableChangeAllowed(dep);
+        const values = valuesFromForm(req.body);
+        if (Object.keys(values).length || deploymentVariables.get(dep.id)) openbaoRuntime.assertReady(dep);
+        if (!Object.keys(values).length && !deploymentVariables.get(dep.id)) {
+            req.flash('success', 'Aucune variable à modifier.');
+        } else {
+            await openbaoVariables.service().prepare(dep, values, { allowEmpty: true });
+            req.flash('success', 'Variables enregistrées ; publication GitOps en cours.');
+        }
+    } catch (err) { req.flash('error', err.message); }
+    return res.redirect(`/deployments/${dep.id}`);
+});
+
+router.post('/:id/variables/restore', requireAuth, requirePermission('deployments:deploy'), async (req, res) => {
+    const dep = deploymentModel.get(req.params.id);
+    if (!dep) return res.status(404).send('Déploiement introuvable');
+    if (!canViewDeployment(req.user, dep) || (req.user.role !== 'manager' && req.user.id !== dep.ownerUserId)) {
+        return res.status(403).send('Accès refusé');
+    }
+    try {
+        assertVariableChangeAllowed(dep);
+        openbaoRuntime.assertReady(dep);
+        await openbaoVariables.service().restorePrevious(dep);
+        req.flash('success', 'Version précédente préparée ; publication GitOps en cours.');
+    } catch (err) { req.flash('error', err.message); }
+    return res.redirect(`/deployments/${dep.id}`);
 });
 
 // Une validation manager publie exactement le candidat de production sélectionné.

@@ -18,6 +18,9 @@ const yaml = require('js-yaml');
 const { config, getMissingAzureVars } = require('../config/env');
 const kubernetes = require('../clients/kubernetes');
 const azureTemplates = require('./azure-templates');
+const deploymentVariables = require('../models/deployment_variables');
+const releases = require('../models/deployment_release');
+const observedVariables = require('./openbao-observed');
 
 const isAzure = dep => !!dep && dep.targetCluster === 'azure';
 
@@ -92,7 +95,21 @@ function manifests(dep, revision) {
 function fileNames() {
   // Les fichiers de copie n'existent qu'en prod ; leur absence en dev est sans effet (seuls les fichiers présents sont retirés).
   return ['containerapp-secretname.yaml', 'flexibleserver.yaml', 'flexibleserver-database.yaml', 'containerapp-claim.yaml',
-    ...azureTemplates.PROD_COPY_FILES, 'kustomization.yaml'];
+    'keyvault-secrets.yaml', ...azureTemplates.PROD_COPY_FILES, 'kustomization.yaml'];
+}
+
+/**
+ * L'adresse publique répond-elle vraiment ? Avec le domaine public (eu.mooroon5.fr), le nom et son certificat sont posés
+ * par le job de réplication 5 à 10 min APRÈS la Container App : avant, le lien du portail mène à une erreur TLS. Toute
+ * réponse HTTP (même 503 : base en bascule) prouve que nom, DNS et certificat sont en place ; une erreur réseau ou TLS non.
+ */
+async function publicAddressAnswers(url) {
+  try {
+    await fetch(`${url}/health`, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
@@ -114,6 +131,17 @@ async function readiness(dep, revision) {
   if (status.phase === 'failed') return { phase: 'failed', message: `Azure : ${status.failure}`, cloudRunUrl: null };
   if (status.phase === 'ready') {
     if (status.observedImage === imageRef(dep, revision)) {
+      const record = deploymentVariables.get(dep.id);
+      if (record) {
+        const release = releases.get(dep.id, revision);
+        if (release?.variable_generation !== record.generation || !release.runtime_refs_json
+          || !observedVariables.azureMatches(status.observedVariables, JSON.parse(release.runtime_refs_json), record.ownedNames)) {
+          return { phase: 'deploying', message: 'Attente de l’application des références de variables dans Azure Container Apps.', cloudRunUrl: null };
+        }
+      }
+      if (config.azure.publicDomain && url && !(await publicAddressAnswers(url))) {
+        return { phase: 'deploying', message: 'Container App prête ; nom public et certificat en cours de pose (5 à 10 min).', cloudRunUrl: null };
+      }
       return { phase: 'success', message: 'Application déployée.', cloudRunUrl: url, applicationUrl: url };
     }
     return { phase: 'deploying', message: `Container App prête ; attente de la révision ${String(revision).slice(0, 7)}.`, cloudRunUrl: null };

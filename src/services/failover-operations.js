@@ -96,9 +96,17 @@ function start(app, action, user) {
   }
   if (['runtime-verify', 'runtime-rollout'].includes(action)) {
     service.rows(app);
-    const runtime = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
+    const runtime = db.prepare("SELECT image_record, files, variable_generation FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
     if (!runtime) throw new Error('Publication des runtimes requise avant vérification.');
     request.images = runtime.image_record ? JSON.parse(runtime.image_record) : null;
+    if (runtime.variable_generation) {
+      const deployments = require('../models/deployment');
+      const records = require('../models/deployment_variables');
+      const deployment = deployments.listForUser(null).find(row => row.app_name === app && row.deployment_environment === 'prod' && row.failover_requested);
+      const record = deployment && records.get(deployment.id);
+      if (!record || record.generation !== runtime.variable_generation) throw new Error('Génération des variables du secours non publiée.');
+      request.runtime_variables = require('./openbao-failover-observed').expected(JSON.parse(runtime.files), app, record.names, record.ownedNames);
+    }
   }
   if (action === 'health') {
     request.packages = service.operationalPackage(app, 'automation', user);
@@ -169,6 +177,9 @@ async function createProfile(app, mode, contract, user) {
   if (row.billing_mode === 'instance') profile.gcp.billing_mode = 'instance';
   profile.gcp.gcp_lb_ip = platform.gcp.gcp_lb_ip;
   profile.gcp.gcp_runtime.service_account = platform.gcp.gcp_runtime.service_account;
+  if (require('../models/deployment_variables').get(row.id)) {
+    profile.gcp.gcp_runtime.service_account = require('./openbao-runtime').gcpRuntimeIdentity(deployments.get(row.id));
+  }
   profile.gcp.gcp_runtime.subnetwork = platform.gcp.gcp_runtime.subnetwork;
   profile.aws.listener_priority = allocation.priority;
   if (mode === 'postgres') {

@@ -13,7 +13,7 @@ APPS = RG + '/providers/Microsoft.App/containerApps'
 
 def app(name, env, domains=None, extra_tags=None):
     return {'name': name, 'location': 'France Central', 'tags': {'cnp-env': env, **(extra_tags or {})},
-            'properties': {'configuration': {'ingress': {'external': True, 'targetPort': 8080,
+            'properties': {'provisioningState': 'Succeeded', 'configuration': {'ingress': {'external': True, 'targetPort': 8080,
                                                          'fqdn': name + '.default.example',
                                                          'customDomains': domains}}}}
 
@@ -101,6 +101,14 @@ class DomainsTest(unittest.TestCase):
         arm = FakeArm([app('todo-prod', 'prod')], [orphan])
         states = [r['state'] for r in domains(arm).reconcile(apply=False)]
         self.assertEqual(states, ['PENDING', 'CERTIFICATE_ORPHAN'])
+        self.assertEqual(arm.writes(), [])
+
+    def test_apps_being_deleted_or_failed_are_never_written(self):
+        ghost = app('todo-prod', 'prod')
+        ghost['properties'] = {'provisioningState': 'Failed', 'configuration': {'ingress': None}}
+        cert = {'name': 'c', 'id': '/c', 'properties': {'subjectName': 'todo.eu.example', 'provisioningState': 'Succeeded'}}
+        arm = FakeArm([ghost], [cert])
+        self.assertEqual([r['state'] for r in domains(arm).reconcile()], ['SKIPPED'])
         self.assertEqual(arm.writes(), [])
 
     def test_one_failing_app_does_not_stop_the_others(self):

@@ -48,11 +48,13 @@ while :; do
 done
 echo "$(date +%T)  $STATUS"
 
-# Les journaux arrivent dans Log Analytics avec 30 s à 2 min de retard.
+# Les journaux arrivent dans Log Analytics avec 30 s à 2 min de retard. Deux tables possibles : ContainerAppConsoleLogs_CL
+# (envoi direct, avant le 16/11) et ContainerAppConsoleLogs (paramètre de diagnostic, depuis l'envoi des logs à Datadog,
+# cnp azure/17-datadog-logs.tf). La requête lit les deux ; isfuzzy tolère celle qui n'existe pas.
 WS=$(az monitor log-analytics workspace show -g "$RG" -n "$WORKSPACE" --query customerId -o tsv)
 for _ in $(seq 1 12); do
   LOGS=$(az monitor log-analytics query -w "$WS" --analytics-query \
-    "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '$EXECUTION' | order by TimeGenerated asc | project Log_s" -o tsv 2>/dev/null || true)
+    "union isfuzzy=true (ContainerAppConsoleLogs_CL | project TimeGenerated, Group=ContainerGroupName_s, Line=Log_s), (ContainerAppConsoleLogs | project TimeGenerated, Group=ContainerGroupName, Line=Log) | where Group startswith '$EXECUTION' | order by TimeGenerated asc | project Line" -o tsv 2>/dev/null || true)
   [ -n "$LOGS" ] && break
   sleep 10
 done

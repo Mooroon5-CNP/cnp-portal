@@ -86,6 +86,9 @@ function schema() {
   if (!db.pragma('table_info(failover_candidates)').some(column => column.name === 'image_record')) {
     db.exec('ALTER TABLE failover_candidates ADD COLUMN image_record TEXT');
   }
+  if (!db.pragma('table_info(failover_candidates)').some(column => column.name === 'variable_generation')) {
+    db.exec('ALTER TABLE failover_candidates ADD COLUMN variable_generation TEXT');
+  }
   if (!db.pragma('table_info(failover_candidates)').some(column => column.name === 'app_name')) {
     db.exec('ALTER TABLE failover_candidates ADD COLUMN app_name TEXT');
     // L'historique est rattaché aux chemins effectivement publiés, jamais au profil sélectionné.
@@ -165,6 +168,10 @@ function runtimeRevision(app) {
   const row = db.prepare("SELECT image_record FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app);
   return row?.image_record ? JSON.parse(row.image_record).revision : null;
 }
+function runtimeVariableGeneration(app) {
+  schema();
+  return db.prepare("SELECT variable_generation FROM failover_candidates WHERE app_name=? AND stage='runtime' AND state='published' ORDER BY created_at DESC LIMIT 1").get(app)?.variable_generation || null;
+}
 function rows(app) {
   schema();
   return db.prepare(`SELECT id,app_name,stage,base_sha,head_sha,pr_number,pr_url,state,requested_by,reviewed_by,created_at FROM failover_candidates ${app ? 'WHERE app_name=?' : ''} ORDER BY created_at`).all(...(app ? [app] : []));
@@ -191,15 +198,23 @@ async function prepare(stage, user, requestedApp) {
     }
     const input = profileFor(app);
     let imageRecord = null;
+    let runtimeDeployment = null;
     if (stage === 'runtime') {
       const deployments = require('../models/deployment');
       const row = deployments.listForUser(null).find(row => row.app_name === app && row.deployment_environment === 'prod' && row.failover_requested);
-      if (row) imageRecord = await require('./failover-ci-images').resolve(deployments.get(row.id));
+      if (row) {
+        runtimeDeployment = deployments.get(row.id);
+        imageRecord = await require('./failover-ci-images').resolve(runtimeDeployment);
+      }
     }
     const renderingInput = JSON.parse(JSON.stringify(input));
     if (imageRecord) {
       renderingInput.profile.gcp.gcp_runtime.image = imageRecord.gcp;
       renderingInput.profile.aws.image = imageRecord.aws;
+    }
+    if (runtimeDeployment) {
+      const runtimeVariables = await require('./openbao-runtime').failoverReferences(runtimeDeployment, renderingInput.profile, imageRecord);
+      if (runtimeVariables) renderingInput.runtime_variables = runtimeVariables;
     }
     const api = await github.getInstallationOctokit();
     const repo = repository();
@@ -221,9 +236,10 @@ async function prepare(stage, user, requestedApp) {
       body: `Candidat généré par CNP Platform. Baseline ${base}. Validation manager obligatoire dans le portail.\n\nAucun retrait de ressource, bucket conservé. Aucun changement du tunnel.` });
     if (pr.user?.login !== 'cnp-platform-bot[bot]') throw new Error('Identité du bot de publication inattendue.');
     db.transaction(() => {
-      db.prepare('INSERT INTO failover_candidates (id,stage,base_sha,head_sha,pr_number,pr_url,files,input_hash,state,requested_by,reviewed_by,created_at,app_name,image_record) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+      db.prepare('INSERT INTO failover_candidates (id,stage,base_sha,head_sha,pr_number,pr_url,files,input_hash,state,requested_by,reviewed_by,created_at,app_name,image_record,variable_generation) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
         id, stage, base, head, pr.number, pr.html_url, JSON.stringify(files), hash(input), 'pending', user.id, null,
-        new Date().toISOString(), app, imageRecord ? JSON.stringify(imageRecord) : null);
+        new Date().toISOString(), app, imageRecord ? JSON.stringify(imageRecord) : null,
+        runtimeDeployment ? require('../models/deployment_variables').get(runtimeDeployment.id)?.generation || null : null);
     })();
     return { id, stage, prUrl: pr.html_url, head, files };
   } finally { busy = false; }
@@ -396,5 +412,5 @@ function readiness(dep) {
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
-module.exports = { profiles, configure, profileFor, enabled, platform, render, rows, runtimeRevision, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
+module.exports = { profiles, configure, profileFor, enabled, platform, render, rows, runtimeRevision, runtimeVariableGeneration, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
   operationalPackage, deploymentStatus, stagesFor, duration };

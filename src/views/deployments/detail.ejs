@@ -44,6 +44,33 @@
                 </div>
               </div>
 
+              <% if (canEditVariables) { %>
+                <div class="card" style="margin-bottom:16px;">
+                  <div class="card-header"><span class="card-title">Variables d’environnement</span></div>
+                  <div class="card-body">
+                    <p>Variables actuelles : <%= variableNames.length ? variableNames.join(', ') : 'aucune' %>. Les valeurs ne sont jamais affichées.</p>
+                    <p>Pour modifier la liste, ressaisissez toutes les variables à conserver et leurs valeurs. Une liste vide les supprime toutes.</p>
+                    <form id="updateVariablesForm" action="/deployments/<%= deployment.id %>/variables" method="POST">
+                      <div id="updateVariableRows"></div>
+                      <button type="button" id="addUpdateVariable" class="btn btn-secondary btn-sm">Ajouter une variable</button>
+                      <label for="updateEnvFile" style="display:block;margin-top:12px;">Importer un fichier .env</label>
+                      <input type="file" id="updateEnvFile" accept=".env,.local,text/plain">
+                      <div id="updateVariableSummary" class="form-hint" aria-live="polite">Aucune variable ajoutée.</div>
+                      <div id="updateVariableError" class="flash flash-error" role="alert" hidden></div>
+                      <button type="submit" class="btn btn-primary" style="margin-top:12px;">Enregistrer et publier</button>
+                    </form>
+                    <% if (canRestoreVariables) { %>
+                      <form action="/deployments/<%= deployment.id %>/variables/restore" method="POST" style="margin-top:12px;">
+                        <button type="submit" class="btn btn-secondary btn-sm">Rétablir la version précédente</button>
+                      </form>
+                    <% } %>
+                  </div>
+                </div>
+                <script src="/js/deployment-variables.js"></script>
+                <script>window.CNPDeploymentVariables.init({ form: 'updateVariablesForm', list: 'updateVariableRows',
+                  file: 'updateEnvFile', summary: 'updateVariableSummary', error: 'updateVariableError', add: 'addUpdateVariable' });</script>
+              <% } %>
+
               <% if (applicationUrl) { %>
                 <div class="card" id="application-address" style="margin-bottom:16px;">
                   <div class="card-header"><span class="card-title"><%= deployment.onboardingStatus === 'ready' ? 'Adresse de l’environnement' : 'Adresse prévue de l’environnement' %></span></div>
@@ -51,6 +78,8 @@
                     <code><%= applicationUrl %></code>
                     <% if (deployment.targetCluster === 'azure') { %>
                       <div class="form-hint">Adresse par défaut d’Azure (domaine de l’environnement Container Apps). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
+                    <% } else if (deployment.targetCluster === 'private-aws' && environmentStatus?.phase !== 'success') { %>
+                      <div class="form-hint">Adresse du cloud privé (k3s). L’application n’y répond qu’une fois le déploiement terminé : suivez l’état ci-dessous.</div>
                     <% } else if (environmentStatus?.phase === 'success' && environmentStatus.applicationUrl === applicationUrl) { %>
                       <div class="form-hint">Adresse HTTPS vérifiée pour la version déployée.</div>
                     <% } else { %>

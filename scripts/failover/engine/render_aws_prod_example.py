@@ -6,23 +6,25 @@ import postgres_contract
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
 import ssl
 
-ACCOUNT = "626278345026"
-REGION = "eu-west-3"
+ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "626278345026")
+REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
+BASE_DOMAIN = os.environ.get("APPLICATIONS_BASE_DOMAIN", "apps.mooroon5.fr")
 ALLOWED_KEYS = {
     "app_name", "environment", "image", "database_security_group_id", "runtime_secret_arn",
     "runtime_user", "database_name", "listener_priority", "log_group_name", "database_ca_pem", "application_profile", "backup_retention_period", "sql_contract", "container_port", "liveness_path", "readiness_path",
     "master_password_secret",
 }
 PLATFORM = {
-    "vpc": "vpc-0a99bd6da5b289db4",
-    "subnets": ["subnet-069399247ab10b23e", "subnet-0259a6e88f0558ab0"],
-    "ecs_security_group": "sg-0c8e2003de9c975ef",
-    "https_listener": f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/722456f0108435d7/fd877dabbaff37b7",
+    "vpc": os.environ.get("CNP_AWS_VPC_ID", "vpc-0a99bd6da5b289db4"),
+    "subnets": os.environ.get("CNP_AWS_PUBLIC_SUBNET_IDS", "subnet-069399247ab10b23e,subnet-0259a6e88f0558ab0").split(","),
+    "ecs_security_group": os.environ.get("CNP_AWS_ECS_SECURITY_GROUP_ID", "sg-0c8e2003de9c975ef"),
+    "https_listener": os.environ.get("CNP_AWS_HTTPS_LISTENER_ARN", f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/cnp-alb/722456f0108435d7/fd877dabbaff37b7"),
 }
 
 
@@ -119,6 +121,11 @@ def bootstrap(config):
                          "deletionProtection": True, "skipFinalSnapshot": False,
                          "finalSnapshotIdentifier": name + "-final",
                          "backupRetentionPeriod": config.get("backup_retention_period", 7),
+                         # Journal PostgreSQL exporté vers CloudWatch (/aws/rds/instance/<app>-prod-db/postgresql), que
+                         # l'intégration Datadog abonne d'elle-même (source rds) et range sous le service de l'app
+                         # (pipeline de cnp/aws/17-datadog-ecs-logs.tf) : l'utilisateur voit aussi les logs de sa base
+                         # de secours. Modifiable à chaud, sans redémarrage (18/11/2026).
+                         "enabledCloudwatchLogsExports": ["postgresql"],
                          "dbSubnetGroupNameRef": {"name": name + "-subnets"},
                          "parameterGroupNameRef": {"name": name + "-pg15"},
                          "vpcSecurityGroupIds": [config["database_security_group_id"]]}, app, 0)
@@ -149,7 +156,7 @@ def observed_endpoint(config, observed):
     if actual.get("dbName") != config.get("database_name", "appdb"):
         raise ValueError("Le nom de base observé ne correspond pas au profil.")
     address = actual.get("address") or ""
-    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]+\.eu-west-3\.rds\.amazonaws\.com", address):
+    if not re.fullmatch(rf"[a-z0-9][a-z0-9.-]+\.{re.escape(REGION)}\.rds\.amazonaws\.com", address):
         raise ValueError("L'adresse réelle de RDS est absente ou n'est pas dans la région attendue.")
     master = actual.get("masterUserSecret", [])
     if isinstance(master, dict):
@@ -208,7 +215,7 @@ def runtime_resources(config, container):
     rule = resource("elbv2.aws.upbound.io/v1beta1", "LBListenerRule", name + "-https",
                     {"region": REGION, "listenerArn": PLATFORM["https_listener"], "priority": config["listener_priority"],
                      "action": [{"type": "forward", "targetGroupArnSelector": selector}],
-                     "condition": [{"hostHeader": [{"values": [app + ".apps.mooroon5.fr"]}]}]}, app, 3)
+                     "condition": [{"hostHeader": [{"values": [app + "." + BASE_DOMAIN]}]}]}, app, 3)
     service = resource("ecs.aws.upbound.io/v1beta1", "Service", name,
                        {"region": REGION, "cluster": "cnp-cluster", "desiredCount": 1, "launchType": "FARGATE",
                         "taskDefinitionRef": {"name": task_name}, "networkConfiguration": [{"assignPublicIp": False,

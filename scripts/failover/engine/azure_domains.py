@@ -64,6 +64,13 @@ class Domains:
                 continue
             host = hostname(*found, self.domain)
             wanted.add(host)
+            state = (item.get('properties') or {}).get('provisioningState')
+            if state != 'Succeeded':
+                # App en création, en suppression ou en échec : n'y rien écrire. Le 16/11, des écritures sur une app à
+                # moitié supprimée (état Failed, sans conteneur) ont été lues par Azure comme des CRÉATIONS, refusées
+                # toutes les 2 minutes. Son certificat est gardé tant qu'elle est listée.
+                results.append(self._report(app=found[0], env=found[1], host=host, state='SKIPPED', provisioning=state))
+                continue
             try:
                 results.append(self._one(item, found, host, by_subject.get(host), apply))
             except Exception as error:  # noqa: BLE001 — une app en erreur n'empêche pas les autres.

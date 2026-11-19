@@ -14,7 +14,11 @@ const argo = require('../clients/argocd');
 const routing = require('./application-routing');
 const addresses = require('./application-address');
 const azure = require('./environment-azure');
+const priv = require('./environment-private');
 const failover = require('./environment-failover');
+const openbaoRuntime = require('./openbao-runtime');
+const deploymentVariables = require('../models/deployment_variables');
+const observedVariables = require('./openbao-observed');
 
 const locks = new Map();
 const onboardingLocks = new Map();
@@ -23,6 +27,7 @@ function validate(environment, appName, targetCluster) {
   if (!Object.hasOwn(branches, environment)) throw new Error('Environnement invalide : dev ou prod attendu.');
   if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(appName)) throw new Error('Nom invalide : 2 à 40 caractères, lettres minuscules, chiffres et tirets.');
   if (targetCluster === 'azure') azure.validate(appName);
+  if (targetCluster === priv.TARGET) priv.validate(appName);
 }
 function target() {
   const [owner, repo] = (config.github.configRepoName || 'Mooroon5-CNP/config-repo').split('/');
@@ -36,6 +41,7 @@ function workflowName(appName) { return `cnp-${appName}.yml`; }
 function image(dep, revision) { return `${config.github.registryUrl || config.gcp.imageRegistry}/${dep.appName}:${revision}`; }
 function workflow(appName, dep = {}) {
   if (azure.isAzure(dep)) return azure.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
+  if (priv.isPrivate(dep)) return priv.workflow(dep, process.env.CNP_CI_TEMPLATES_REF);
   const document = { name: `CNP — ${appName}`, on: { push: { branches: ['main', 'prod'] }, workflow_dispatch: {} },
     permissions: { contents: 'read', 'id-token': 'write' },
     concurrency: { group: `cnp-${appName}-\${{ github.ref }}`, 'cancel-in-progress': false },
@@ -46,19 +52,21 @@ function workflow(appName, dep = {}) {
     } },
   };
   if (dep.failoverRequested || failover.enabled(dep)) {
+    const awsRegistry = require('./failover-ci-images').awsRegistry();
     document.jobs['failover-images'] = {
       needs: ['pipeline'], 'runs-on': 'ubuntu-latest',
       if: "${{ github.ref == 'refs/heads/prod' && needs.pipeline.result == 'success' }}",
       steps: [{ name: 'Record immutable images', env: {
         CNP_APP: appName, CNP_REVISION: '${{ github.sha }}', CNP_DIGEST: '${{ needs.pipeline.outputs.image_digest }}',
         CNP_GCP_REGISTRY: config.github.registryUrl || config.gcp.imageRegistry,
+        CNP_AWS_REGISTRY: awsRegistry,
       }, run: `python3 - <<'PY'
 import json, os, re
 assert re.fullmatch(r'sha256:[a-f0-9]{64}', os.environ['CNP_DIGEST'])
 app, digest = os.environ['CNP_APP'], os.environ['CNP_DIGEST']
 record = {'app': app, 'revision': os.environ['CNP_REVISION'], 'digest': digest,
     'gcp': os.environ['CNP_GCP_REGISTRY'] + '/' + app + '@' + digest,
-    'aws': '626278345026.dkr.ecr.eu-west-3.amazonaws.com/' + app + '@' + digest}
+    'aws': os.environ['CNP_AWS_REGISTRY'] + '/' + app + '@' + digest}
 with open('cnp-images.json', 'w') as file: json.dump(record, file)
 PY` }, { uses: 'actions/upload-artifact@v4', with: {
         name: 'cnp-failover-images-${{ github.sha }}', path: 'cnp-images.json', 'if-no-files-found': 'error', 'retention-days': 30,
@@ -120,6 +128,7 @@ async function commitFiles(api, repository, files, message, branch = 'main', bef
 function manifests(dep, revision) {
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Révision CI invalide.');
   if (azure.isAzure(dep)) return azure.manifests(dep, revision);
+  if (priv.isPrivate(dep)) return priv.manifests(dep, revision);
   if (dep.failoverRequested && !failover.enabled(dep)) throw new Error('Profil de secours de cette application absent.');
   if (failover.enabled(dep)) return failover.manifests(dep);
   const { name, path } = identity(dep);
@@ -131,7 +140,9 @@ function manifests(dep, revision) {
     { name: 'DD_ENV', value: dep.environment }, { name: 'DD_SERVICE', value: dep.appName },
     { name: 'DD_VERSION', value: revision }, { name: 'LOG_LEVEL', value: 'INFO' },
   ] };
-  const template = { serviceAccount: config.gcp.cloudRunSa, containers: [container] };
+  const runtimeServiceAccount = deploymentVariables.get(dep.id)
+    ? openbaoRuntime.gcpRuntimeIdentity(dep) : config.gcp.cloudRunSa;
+  const template = { serviceAccount: runtimeServiceAccount, containers: [container] };
   if (dep.billing === 'instance') {
     // Facturation à l'instance : une instance toujours active et son CPU toujours alloué (pas de démarrage à froid).
     template.scaling = { minInstanceCount: 1 };
@@ -158,7 +169,7 @@ function manifests(dep, revision) {
       { project: config.gcp.project, location: config.gcp.region, forceDestroy: false, uniformBucketLevelAccess: true });
     storage.spec.deletionPolicy = 'Orphan';
     const binding = resource('storage.gcp.upbound.io/v1beta1', 'BucketIAMMember', `${bucket}-runtime`,
-      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${config.gcp.cloudRunSa}` });
+      { bucket, role: 'roles/storage.objectAdmin', member: `serviceAccount:${runtimeServiceAccount}` });
     files[`${path}/gcs-bucket.yaml`] = yaml.dump(storage) + '---\n' + yaml.dump(binding);
     resources.push('gcs-bucket.yaml');
   }
@@ -219,7 +230,16 @@ function current(dep) {
 // Mot de passe de la base Cloud SQL d'une app de dev : créé (une seule fois) avant toute publication, car Crossplane le lit pour
 // créer l'utilisateur et Cloud Run dans Secret Manager. Par l'opérateur Python (clients Kubernetes et Secret Manager).
 async function databaseSecrets(dep, action) {
-  if (dep.database !== 'postgres' || azure.isAzure(dep)) return null;
+  // Cloud privé : mots de passe générés dans k3s (private-templates.tplSecrets), rien à préparer ni à nettoyer ici.
+  if (priv.isPrivate(dep)) return null;
+  if (azure.isAzure(dep)) {
+    // Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, lu par Crossplane pour la Container App et le Key Vault.
+    if (!['dev', 'prod'].includes(dep.environment)) return null;
+    const operator = require('./failover-operations');
+    return operator.run({ action: action === 'app-sql-secrets' ? 'azure-runtime-secret' : 'azure-runtime-cleanup',
+      app: dep.appName, environment: dep.environment });
+  }
+  if (dep.database !== 'postgres') return null;
   const operator = require('./failover-operations');
   return operator.run({ action, app: dep.appName, environment: dep.environment, service_account: config.gcp.cloudRunSa });
 }
@@ -228,6 +248,7 @@ async function prepareOnboarding(dep) {
   validate(dep.environment, dep.appName, dep.targetCluster);
   if (!config.github.configRepoToken) throw new Error('Configuration CI GitHub manquante.');
   if (azure.isAzure(dep)) azure.assertConfigured();
+  if (priv.isPrivate(dep)) priv.assertConfigured();
   await databaseSecrets(dep, 'app-sql-secrets');
   const api = await github.getInstallationOctokit();
   const source = repositories.parseRepoUrl(dep.githubRepoUrl);
@@ -275,7 +296,8 @@ async function prepareOnboarding(dep) {
   await github.checkActionsEnabled(source.owner, source.repo);
   await github.setRepoSecret(source.owner, source.repo, 'CONFIG_REPO_TOKEN', config.github.configRepoToken);
   // Variables lues par le pipeline du cloud : WIF/Artifact Registry pour GCP, identité fédérée et ACR pour Azure.
-  const repoVariables = azure.isAzure(dep)
+  // Cloud privé : pipeline.yml en cible « aws » (rôle OIDC fixe vers l'ECR), aucune variable.
+  const repoVariables = priv.isPrivate(dep) ? [] : azure.isAzure(dep)
     ? azure.repoVariables()
     : [['WIF_PROVIDER', config.github.wifProvider], ['GCP_SA_EMAIL', config.github.gcpSaEmail], ['REGISTRY_URL', config.github.registryUrl]];
   for (const [keyName, value] of repoVariables) {
@@ -285,9 +307,15 @@ async function prepareOnboarding(dep) {
   const main = await github.getRef(source.owner, source.repo, 'main');
   await github.createBranch(source.owner, source.repo, 'prod', main);
   const workflowPath = `.github/workflows/${workflowName(dep.appName)}`;
+  // Un seul workflow par dépôt, écrit sur main ET prod. Si la prod de l'app a le failover, il doit rester en mode failover
+  // (target_cloud: both) même quand on inscrit la dev : sinon la prod perd son image AWS et la preuve des images, et sa mise
+  // en service du secours se bloque (constaté le 16/11 sur cnp-demo-gcp : dev inscrite pendant la mise en service de la prod).
+  const failoverProd = !azure.isAzure(dep) && !priv.isPrivate(dep) && deployments.listForUser(null).some(row => row.app_name === dep.appName
+    && row.deployment_environment === 'prod' && (row.failover_requested || failover.enabled(deployments.get(row.id))));
+  const workflowFor = failoverProd ? { ...dep, failoverRequested: true } : dep;
   for (const branch of ['main', 'prod']) {
     await commitFiles(api, source, async head => {
-      const files = { [workflowPath]: workflow(dep.appName, dep) };
+      const files = { [workflowPath]: workflow(dep.appName, workflowFor) };
       // Retirer uniquement l'ancien caller CNP possédé par la plateforme évite deux builds du même tag.
       const old = await readFile(api, source, '.github/workflows/ci.yml', head);
       if (old) {
@@ -323,6 +351,12 @@ async function prepareOnboarding(dep) {
   }, `chore(${dep.appName}): register ${dep.environment}`);
   await commitFiles(api, source, { [`.cnp-platform-${dep.environment}`]: `CNP ${dep.environment}\n${new Date().toISOString()}\n` },
     `ci(${dep.appName}): deploy ${dep.environment}`, branches[dep.environment]);
+  if (dep.environment === 'prod') {
+    // La configuration du workflow sur main utilise [skip ci]. Un nouveau commit
+    // déclenche la CI dev via push, avec la permission Contents: write de l'App.
+    await commitFiles(api, source, { '.cnp-platform-dev': `CNP dev\n${new Date().toISOString()}\n` },
+      `ci(${dep.appName}): deploy dev after prod onboarding`, 'main');
+  }
 }
 
 function onboard(dep) {
@@ -348,8 +382,20 @@ async function sourceIsCurrent(dep, revision) {
 
 async function readiness(dep, revision, { allowMutation = true } = {}) {
   if (azure.isAzure(dep)) return azure.readiness(dep, revision);
+  if (priv.isPrivate(dep)) return priv.readiness(dep, revision);
   if (failover.enabled(dep)) return failover.readiness(dep);
   const observed = await kubernetes.getV2ServiceStatus(identity(dep).name);
+  if (observed.failure && observed.image === image(dep, revision)) {
+    return { phase: 'failed', message: `Cloud Run : ${observed.failure}`, cloudRunUrl: null };
+  }
+  const record = deploymentVariables.get(dep.id);
+  if (record) {
+    const release = releases.get(dep.id, revision);
+    if (release?.variable_generation !== record.generation || !release.runtime_refs_json
+      || !observedVariables.gcpMatches(observed.runtimeVariables, JSON.parse(release.runtime_refs_json), record.ownedNames)) {
+      return { phase: 'deploying', message: 'Attente de l’application des références de variables dans Cloud Run.', cloudRunUrl: null };
+    }
+  }
   if (observed.ready && observed.image === image(dep, revision)) {
     if (addresses.usesNativeCloudRun(dep)) {
       // Only probe the provider's HTTPS endpoint, never an arbitrary URL or redirect.
@@ -406,6 +452,10 @@ async function observe(dep) {
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
 
     const release = releases.get(dep.id, run.head_sha);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && release.variable_generation !== generation) {
+      return { ...snapshot, phase: 'deploying', message: 'Mise à jour des variables en préparation.' };
+    }
     if (release?.state === 'rejected') return { ...snapshot, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') {
       return { ...snapshot, ...await readiness(dep, run.head_sha, { allowMutation: false }) };
@@ -458,7 +508,16 @@ async function reconcile(dep) {
     if (run.conclusion !== 'success') return { ...result, phase: 'failed', message: 'Le pipeline a échoué ; aucun déploiement publié.' };
     if (!/^[a-f0-9]{40}$/.test(run.head_sha)) throw new Error('Révision GitHub invalide.');
     const revision = run.head_sha;
-    const release = releases.get(dep.id, revision);
+    let release = releases.get(dep.id, revision);
+    const generation = deploymentVariables.get(dep.id)?.generation || null;
+    if (release && ['published', 'rejected'].includes(release.state)
+      && (release.variable_generation !== generation || (release.state === 'published' && generation && !release.runtime_refs_json))) {
+      releases.resetForVariables(dep.id, revision, generation);
+      release = releases.get(dep.id, revision);
+    }
+    if (release && release.variable_generation !== generation && release.state !== 'preparing') {
+      return { ...result, phase: 'deploying', message: 'Mise à jour des variables en attente du candidat courant.' };
+    }
     if (release?.state === 'approving') return { ...result, ...await interruptedApproval(api, dep, release) };
     if (release?.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
     if (release?.state === 'published') return { ...result, ...await readiness(dep, revision) };
@@ -467,18 +526,33 @@ async function reconcile(dep) {
     const token = releases.acquire(dep.id, revision, run.id);
     if (!token) return { ...result, phase: 'deploying', message: 'Préparation GitOps en cours.' };
     const guard = async () => {
-      if (!current(dep) || !releases.owns(dep.id, revision, token) || !(await sourceIsCurrent(dep, revision))) {
+      if (!current(dep) || !releases.owns(dep.id, revision, token)
+        || (deploymentVariables.get(dep.id)?.generation || null) !== generation
+        || !(await sourceIsCurrent(dep, revision))) {
         throw new Error('Le déploiement ou sa branche a changé. Réessayez.');
       }
     };
     try {
+      releases.setVariableGeneration(dep.id, revision, token, generation);
       // Un autre processus a pu terminer entre la lecture et l'acquisition du bail.
       const fresh = releases.get(dep.id, revision);
       if (fresh.state === 'published') return { ...result, ...await readiness(dep, revision) };
       if (fresh.state === 'rejected') return { ...result, phase: 'rejected', message: 'Production refusée.' };
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
+      // Azure : le mot de passe de cnp_runtime doit exister avant que Crossplane lise les claims. Relançable, sans rotation :
+      // les apps inscrites avant le rôle applicatif (16/11/2026) l'obtiennent à leur prochaine publication.
+      if (azure.isAzure(dep)) await databaseSecrets(dep, 'app-sql-secrets');
       const files = manifests(dep, revision);
-      if (!azure.isAzure(dep)) {
+      let runtimeRefs = null;
+      if (azure.isAzure(dep)) {
+        const prepared = await openbaoRuntime.azureReferences(dep);
+        openbaoRuntime.applyAzureReferences(files, dep, prepared);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = prepared?.references || [];
+      } else if (priv.isPrivate(dep)) {
+        const prepared = await openbaoRuntime.privateReferences(dep);
+        priv.applyVariables(files, dep, prepared);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = prepared ? { version: prepared.version, names: prepared.names } : [];
+      } else {
         // Operator-managed Secret Manager references survive image promotions.
         const runtime = yaml.load(await readFile(api, target(), `${identity(dep).path}/runtime-secrets.yaml`) || '[]');
         if (!Array.isArray(runtime) || runtime.some(item => !/^[A-Z_][A-Z0-9_]*$/.test(item?.name || '')
@@ -498,15 +572,20 @@ async function reconcile(dep) {
         }
         const claim = yaml.load(files[claimPath]);
         const container = claim.spec.forProvider.template.containers[0];
-        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime);
+        const custom = await openbaoRuntime.references(dep);
+        if (deploymentVariables.get(dep.id)) runtimeRefs = custom;
+        const occupied = new Set([...container.env, ...runtime].map(item => item.name));
+        if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
+        if (custom.length) claim.spec.forProvider.template.serviceAccount = openbaoRuntime.gcpRuntimeIdentity(dep);
+        container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime, custom);
         files[claimPath] = yaml.dump(claim);
       }
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
-        releases.save(dep.id, revision, token, 'published');
+        releases.save(dep.id, revision, token, 'published', { runtimeRefs });
         return { ...result, ...await readiness(dep, revision) };
       }
-      const branch = `cnp-release/${dep.id}/${revision}`;
+      const branch = `cnp-release/${dep.id}/${revision}/${generation || 'none'}`;
       const destination = target();
       const main = await github.getRef(destination.owner, destination.repo, 'main');
       await github.createBranch(destination.owner, destination.repo, branch, main);
@@ -519,7 +598,7 @@ async function reconcile(dep) {
           head: branch, base: 'main', body: `Production candidate from successful CI: ${run.html_url}\n\nApprove through CNP Portal so the GitHub App publishes the protected production path.` });
         pr = data;
       }
-      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head });
+      releases.save(dep.id, revision, token, 'pending', { ...pr, head_sha: head, runtimeRefs });
       return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: pr.html_url };
     } finally { releases.release(dep.id, revision, token); }
   })();
@@ -531,6 +610,9 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
   if (dep.environment !== 'prod' || !current(dep)) throw new Error('Validation réservée à une production active.');
   const release = releases.get(dep.id, revision);
   if (!release || !['pending', 'approving'].includes(release.state)) throw new Error('Candidat non disponible.');
+  if (release.variable_generation !== (deploymentVariables.get(dep.id)?.generation || null)) {
+    throw new Error('Variables modifiées ; candidat obsolète.');
+  }
   const api = await github.getInstallationOctokit();
   const run = await latest(api, dep);
   if (!run || run.head_sha !== revision || run.conclusion !== 'success' || !(await sourceIsCurrent(dep, revision))) {
@@ -578,8 +660,9 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
   }
   const { path, name } = identity(dep);
   const onAzure = azure.isAzure(dep);
+  const onPrivate = priv.isPrivate(dep);
   const files = {};
-  const claimFiles = onAzure ? azure.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
+  const claimFiles = onAzure ? azure.fileNames() : onPrivate ? priv.fileNames() : ['cloudrun-claim.yaml', 'cloudrun-iam.yaml', 'gcs-bucket.yaml', 'cloudsql.yaml', 'application-network.yaml', 'kustomization.yaml'];
   for (const file of cleanupFiles) {
     if (!/^[a-zA-Z0-9_.-]+\.ya?ml$/.test(file)) throw new Error('Fichier de nettoyage hors du dossier de l’environnement.');
     if (!claimFiles.includes(file)) claimFiles.push(file);
@@ -588,7 +671,7 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
     if (await readFile(api, target(), `${path}/${file}`)) files[`${path}/${file}`] = null;
   }
   let hasRuntime = false;
-  if (!onAzure) {
+  if (!onAzure && !onPrivate) {
     const application = await kubernetes.getArgocdApplicationIfExists(name);
     hasRuntime = Object.keys(files).length > 0 || application
       || releases.list(dep.id).some(release => release.state === 'published');
@@ -643,6 +726,12 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
     await kubernetes.cascadeDeleteArgocdApplication(name);
     await azure.confirmTeardown(dep);
   }
+  // Cloud privé : même ordre qu'Azure. La cascade supprime les Object ; le provider supprime alors le namespace dans k3s
+  // (base, volume et mots de passe compris).
+  if (onPrivate) {
+    await kubernetes.cascadeDeleteArgocdApplication(name);
+    await priv.confirmTeardown(dep);
+  }
   // GCP : la cascade vient APRÈS le retrait du dossier et de son chemin dans l'ApplicationSet, comme pour Azure. Faite avant
   // (ancien ordre), l'ApplicationSet (create-update, preserveResourcesOnDeletion) recréait l'Application 30 s plus tard, sans
   // finalizer, puisque le dossier était encore dans Git : Cloud Run, Cloud SQL et répartiteur restaient (constaté le
@@ -651,7 +740,7 @@ async function remove(dep, { afterFailoverTeardown = false, cleanupFiles = [] } 
   // Failover : les ressources sont déjà détruites ; l'Application est retirée pour la même raison (l'ApplicationSet ne
   // supprime jamais d'Application). Retirée avant, alors que le dossier existait encore, le contrôleur ne l'a plus recréée au
   // redéploiement suivant (06/11/2026, réparé par un redémarrage du contrôleur) ; laissée, elle restait.
-  if (!onAzure && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
+  if (!onAzure && !onPrivate && (hasRuntime || afterFailoverTeardown)) await kubernetes.cascadeDeleteArgocdApplication(name);
   // Base Cloud SQL de dev : ses manifestes sont retirés avec le reste (vagues Argo : Cloud Run, puis base et utilisateur, puis
   // instance) ; ses deux secrets partent ensuite.
   await databaseSecrets(dep, 'app-sql-cleanup');

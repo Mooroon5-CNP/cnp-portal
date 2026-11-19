@@ -48,7 +48,7 @@ async function main() {
     PORT: '3000', ADAPTER_MODE: 'mock', MCP_JWT_SECRET: secret,
     MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', MCP_ALLOWED_ORIGINS: 'http://localhost:3001',
     MCP_TLS_KEY_FILE: '', MCP_TLS_CERT_FILE: '' };
-  const portalEnv = { ...process.env, ...Object.fromEntries(Object.entries(readEnv(mcpRoot)).filter(([key]) => key.startsWith('TYPESAFE_'))), ...readEnv(portalRoot), MCP_PROJECT_DIR: mcpRoot, MCP_DATA_MODE: mock ? 'mock' : 'real', MCP_ROUTING_MODE: process.env.MCP_ROUTING_MODE || readEnv(portalRoot).MCP_ROUTING_MODE || 'hybrid', NODE_ENV: 'development', HOST: '127.0.0.1', PORT: '3001',
+  const portalEnv = { ...process.env, ...readEnv(portalRoot), MCP_PROJECT_DIR: mcpRoot, MCP_DATA_MODE: mock ? 'mock' : 'real', MCP_ROUTING_MODE: process.env.MCP_ROUTING_MODE || readEnv(portalRoot).MCP_ROUTING_MODE || 'hybrid', NODE_ENV: 'development', HOST: '127.0.0.1', PORT: '3001',
     MCP_CLIENT_MODE: 'http', MCP_URL: 'http://127.0.0.1:3000/mcp',
     MCP_ORIGIN: 'http://localhost:3001', MCP_LOCAL_HTTP: 'true', MCP_LOCAL_JWT_SECRET: secret };
   if (mock) start(mcpRoot, entry, mcpEnv, ['--http']);
@@ -67,6 +67,6 @@ async function main() {
   start(portalRoot, path.join(portalRoot, 'src/index.js'), portalEnv);
   console.log('Open http://localhost:3001/mcp-chat and sign in. MCP: http://127.0.0.1:3000/mcp');
   console.log(mock ? 'Explicit mock mode.' : 'Real source mode: Git registry, Argo, Kubernetes, Datadog; no mock fallback.');
-  console.log('Routing: confident local matches, otherwise Jev. GenAI uses GENAI_* configuration. Ctrl+C stops both services.');
+  console.log('Routing: confident local matches, otherwise Scaleway Mistral. Answers and application matching use Scaleway Mistral. Ctrl+C stops both services.');
 }
 main().catch((error) => { console.error(error.message); stop(1); });

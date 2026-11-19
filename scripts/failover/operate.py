@@ -69,7 +69,12 @@ def bootstrap_operations(action, introspected):
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
 # l'environnement (pod du portail, sinon poste de l'opérateur et `kube_context` du profil).
-PROJECT = 'cnp-terraform-512313'
+PROJECT = os.environ.get('GCP_PROJECT', 'cnp-terraform-512313')
+AWS_ACCOUNT = os.environ.get('CNP_AWS_ACCOUNT_ID', '626278345026')
+AWS_REGION = os.environ.get('CNP_AWS_REGION', 'eu-west-3')
+GCP_REGION = os.environ.get('GCP_REGION', 'europe-west9')
+BASE_DOMAIN = os.environ.get('APPLICATIONS_BASE_DOMAIN', 'apps.mooroon5.fr')
+ALB_DNS = os.environ.get('CNP_AWS_ALB_DNS_NAME', 'cnp-alb-1261477539.eu-west-3.elb.amazonaws.com')
 # Ressources Crossplane observées (cluster-scoped). La version est celle que le cluster préfère, comme le faisait `kubectl get`.
 OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-gcp-db'),
             ('rds', 'rds.aws.upbound.io', 'instances', '{app}-prod-db'),
@@ -82,6 +87,47 @@ OBSERVED = [('cloudsql', 'sql.gcp.upbound.io', 'databaseinstances', '{app}-prod-
 NAMES = {
          'platform': {'state_table': 'cnp-failover-platform-state', 'rules': ['cnp-failover-platform-alarm', 'cnp-failover-platform-retry']}}
 TASK_FAMILY = r'cnp-failover-platform-(bootstrap|worker)'
+
+
+def aws_runtime_variables_match(expected, containers):
+    """Require the exact AWS pins before promoting an ECS task definition."""
+    if not isinstance(expected, dict) or not isinstance(containers, list) or len(containers) != 1:
+        return False
+    owned = expected.get('ownedNames')
+    aws_expected = expected.get('aws')
+    aws_secrets = containers[0].get('secrets')
+    if not all(isinstance(value, list) for value in (owned, aws_expected, aws_secrets)):
+        return False
+    if len(set(owned)) != len(owned) or any(not isinstance(name, str) for name in owned):
+        return False
+    aws_now = {item.get('name'): item for item in aws_secrets if isinstance(item, dict)}
+    names = [item.get('name') for item in aws_expected if isinstance(item, dict)]
+    if len(names) != len(aws_expected) or len(set(names)) != len(names) or any(name not in owned for name in names):
+        return False
+    if any((name in aws_now) != (name in names) for name in owned):
+        return False
+    return all(item.get('valueFrom') and aws_now.get(item['name'], {}).get('valueFrom') == item['valueFrom']
+               for item in aws_expected)
+
+
+def runtime_variables_match(expected, cloudrun, containers):
+    """Compare the published pins with the provider's running Cloud Run and ECS configuration."""
+    if not aws_runtime_variables_match(expected, containers):
+        return False
+    gcp_expected, owned = expected.get('gcp'), expected.get('ownedNames')
+    gcp_env = (cloudrun.get('template') or {}).get('containers', [{}])[0].get('env')
+    if not isinstance(gcp_expected, list) or not isinstance(gcp_env, list):
+        return False
+    gcp_now = {item.get('name'): item for item in gcp_env if isinstance(item, dict)}
+    names = [item.get('name') for item in gcp_expected if isinstance(item, dict)]
+    if len(names) != len(gcp_expected) or len(set(names)) != len(names) or any(name not in owned for name in names):
+        return False
+    if any((name in gcp_now) != (name in names) for name in owned):
+        return False
+    return all(item.get('valueSource', {}).get('secretKeyRef', {}).get('secret')
+                and item.get('valueSource', {}).get('secretKeyRef', {}).get('version')
+                and gcp_now.get(item['name'], {}).get('valueSource', {}).get('secretKeyRef') == item['valueSource']['secretKeyRef']
+                for item in gcp_expected)
 
 
 def google_session(session=None):
@@ -197,7 +243,7 @@ def gcp_availability(app, document, request, control):
     except Exception:
         pass
     try:
-        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
+        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/{GCP_REGION}/services/{app}-prod', request.get('_google'))
         checks['cloud_run'] = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and not cloudrun.get('reconciling', False)
     except Exception:
         pass
@@ -216,7 +262,7 @@ def gcp_availability(app, document, request, control):
 
 def worker_control(app, document):
     import boto3
-    item = boto3.client('dynamodb', region_name='eu-west-3').get_item(TableName=NAMES['platform']['state_table'],
+    item = boto3.client('dynamodb', region_name=AWS_REGION).get_item(TableName=NAMES['platform']['state_table'],
         Key={'app': {'S': app}, 'record': {'S': 'CONTROL'}}, ConsistentRead=True).get('Item', {})
     return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
 
@@ -250,6 +296,13 @@ def execute(request):
     import re
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,38}[a-z0-9]', app):
         raise ValueError('Application invalide')
+    if action in {'azure-runtime-secret', 'azure-runtime-cleanup'}:
+        # Base Azure (dev et prod) : mot de passe du rôle applicatif cnp_runtime, créé avant publication, retiré à la suppression.
+        import platform_secrets
+        kube = (request.get('_clients') or (platform_secrets.Kubernetes.from_environment(request.get('kube_context')),))[0]
+        if action == 'azure-runtime-secret':
+            return platform_secrets.azure_runtime_initialize(app, request['environment'], kube)
+        return platform_secrets.azure_runtime_remove(app, request['environment'], kube)
     if action in {'app-sql-secrets', 'app-sql-cleanup'}:
         # Base Cloud SQL d'un déploiement sans failover (dev) : mot de passe de l'app, créé avant publication, retiré à la suppression.
         import platform_secrets
@@ -286,8 +339,13 @@ def execute(request):
         task = tasks[0] if tasks else None
         observed = (task or {}).get('status', {}).get('atProvider', {})
         registered = bool(task) and ready(task) and images['aws'] in (observed.get('containerDefinitions') or '')
+        if registered and request.get('runtime_variables') is not None:
+            try:
+                registered = aws_runtime_variables_match(request['runtime_variables'], json.loads(observed['containerDefinitions']))
+            except (ValueError, TypeError, KeyError):
+                registered = False
         arn = observed.get('arn') or ''
-        if not registered or not re.fullmatch(r'arn:aws:ecs:eu-west-3:626278345026:task-definition/[A-Za-z0-9_-]+:\d+', arn):
+        if not registered or not re.fullmatch(rf'arn:aws:ecs:{re.escape(AWS_REGION)}:{re.escape(AWS_ACCOUNT)}:task-definition/[A-Za-z0-9_-]+:\d+', arn):
             return {'verified': False, 'message': 'En attente de la nouvelle définition de tâche chez AWS.'}
         if service['spec']['forProvider'].get('taskDefinition') != arn:
             custom.patch_cluster_custom_object(group, version, plural, service['metadata']['name'],
@@ -295,13 +353,13 @@ def execute(request):
         return {'verified': True, 'task_definition': arn}
     if action == 'runtime-verify':
         import boto3
-        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/europe-west9/services/{app}-prod', request.get('_google'))
+        cloudrun = google_get(f'https://run.googleapis.com/v2/projects/{PROJECT}/locations/{GCP_REGION}/services/{app}-prod', request.get('_google'))
         # Prête, sans reconfiguration en cours, et la dernière révision créée est celle qui sert.
         # L'API omet `reconciling` quand il est faux (JSON des API Google : valeurs par défaut non écrites).
         primary_ready = cloudrun.get('terminalCondition', {}).get('state') == 'CONDITION_SUCCEEDED' and not cloudrun.get('reconciling', False)
         primary_ready &= bool(cloudrun.get('latestReadyRevision')) and cloudrun.get('latestReadyRevision') == cloudrun.get('latestCreatedRevision')
-        client = boto3.client('ecs', region_name='eu-west-3')
-        if boto3.client('sts', region_name='eu-west-3').get_caller_identity()['Account'] != '626278345026':
+        client = boto3.client('ecs', region_name=AWS_REGION)
+        if boto3.client('sts', region_name=AWS_REGION).get_caller_identity()['Account'] != AWS_ACCOUNT:
             raise ValueError('Compte AWS inattendu')
         services = client.describe_services(cluster='cnp-cluster', services=[app + '-prod'])['services']
         standby_ready = len(services) == 1 and services[0]['runningCount'] > 0 and services[0]['pendingCount'] == 0
@@ -310,35 +368,40 @@ def execute(request):
         groups = services[0].get('loadBalancers', []) if services else []
         target_ready = bool(groups)
         for group in groups:
-            targets = boto3.client('elbv2', region_name='eu-west-3').describe_target_health(TargetGroupArn=group['targetGroupArn'])['TargetHealthDescriptions']
+            targets = boto3.client('elbv2', region_name=AWS_REGION).describe_target_health(TargetGroupArn=group['targetGroupArn'])['TargetHealthDescriptions']
             target_ready &= bool(targets) and all(value['TargetHealth']['State'] == 'healthy' for value in targets)
         images = request.get('images')
         images_ready = not images
-        if images and services:
+        variable_expectation = request.get('runtime_variables')
+        variables_ready = variable_expectation is None
+        if (images or variable_expectation is not None) and services:
             containers = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']['containerDefinitions']
             primary_image = cloudrun.get('template', {}).get('containers', [{}])[0].get('image')
-            images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
-        return {'verified': primary_ready and standby_ready and target_ready and images_ready,
+            if images:
+                images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
+            if variable_expectation is not None:
+                variables_ready = runtime_variables_match(variable_expectation, cloudrun, containers)
+        return {'verified': primary_ready and standby_ready and target_ready and images_ready and variables_ready,
             'primary_ready': primary_ready, 'standby_ready': standby_ready, 'target_ready': target_ready,
-            'images_ready': images_ready, 'observed_at': int(time.time())}
+            'images_ready': images_ready, 'variables_ready': variables_ready, 'observed_at': int(time.time())}
     if action == 'health':
         import boto3, urllib.request, ssl, botocore
         from botocore.config import Config
-        client = lambda name, region='eu-west-3': boto3.client(name, region_name=region, config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 0}))
-        if client('sts').get_caller_identity()['Account'] != '626278345026': raise ValueError('Compte AWS inattendu')
+        client = lambda name, region=AWS_REGION: boto3.client(name, region_name=region, config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 0}))
+        if client('sts').get_caller_identity()['Account'] != AWS_ACCOUNT: raise ValueError('Compte AWS inattendu')
         try:
-            with urllib.request.urlopen('https://' + app + '.apps.mooroon5.fr' + document['profile']['gcp'].get('readiness_path', '/health'), timeout=10, context=ssl.create_default_context(cafile=str(Path(botocore.__file__).parent / 'cacert.pem'))) as response:
+            with urllib.request.urlopen('https://' + app + '.' + BASE_DOMAIN + document['profile']['gcp'].get('readiness_path', '/health'), timeout=10, context=ssl.create_default_context(cafile=str(Path(botocore.__file__).parent / 'cacert.pem'))) as response:
                 public_ready = response.status == 200
         except Exception: public_ready = False
         services = client('ecs').describe_services(cluster=document['profile'].get('automation', {}).get('ecs_cluster_arn', 'cnp-cluster'), services=[app + '-prod'])['services']
         aws_ready = len(services) == 1 and services[0]['runningCount'] >= 1 and services[0]['pendingCount'] == 0
         from render_failover_phase1 import ZONE
-        records = client('route53').list_resource_record_sets(HostedZoneId=ZONE, StartRecordName=app + '.apps.mooroon5.fr', StartRecordType='A', MaxItems='10')['ResourceRecordSets']
-        own = [record for record in records if record['Name'].rstrip('.') == app + '.apps.mooroon5.fr' and record['Type'] == 'A']
+        records = client('route53').list_resource_record_sets(HostedZoneId=ZONE, StartRecordName=app + '.' + BASE_DOMAIN, StartRecordType='A', MaxItems='10')['ResourceRecordSets']
+        own = [record for record in records if record['Name'].rstrip('.') == app + '.' + BASE_DOMAIN and record['Type'] == 'A']
         primary = next((record for record in own if record.get('Failover') == 'PRIMARY'), {})
         secondary = next((record for record in own if record.get('Failover') == 'SECONDARY'), {})
         alias = secondary.get('AliasTarget', {}).get('DNSName', '').rstrip('.').removeprefix('dualstack.')
-        dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == 'cnp-alb-1261477539.eu-west-3.elb.amazonaws.com'
+        dns_ready = len(own) == 2 and [record['Value'] for record in primary.get('ResourceRecords', [])] == [document['profile']['gcp']['gcp_lb_ip']] and bool(primary.get('HealthCheckId')) and alias == ALB_DNS
         names = NAMES['platform']
         def decode(item):
             return {key: value.get('S') if 'S' in value else value.get('BOOL') if 'BOOL' in value else int(value['N']) for key, value in item.items()}
@@ -385,7 +448,7 @@ def execute(request):
     if action == 'allocate-listener':
         import boto3
         from render_aws_prod_example import PLATFORM
-        client = boto3.client('elbv2', region_name='eu-west-3')
+        client = boto3.client('elbv2', region_name=AWS_REGION)
         used = set(request.get('used_priorities', []))
         for page in client.get_paginator('describe_rules').paginate(ListenerArn=PLATFORM['https_listener']):
             used.update(int(rule['Priority']) for rule in page['Rules'] if rule['Priority'].isdigit())
@@ -473,20 +536,20 @@ def execute(request):
         result = platform_secrets.remove(platform_secrets_profile(document['profile']),
                                          *platform_secrets.clients(document['profile']['automation'].get('kube_context')))
         import boto3
-        table = boto3.client('dynamodb', region_name='eu-west-3')
+        table = boto3.client('dynamodb', region_name=AWS_REGION)
         keys = [item for page in table.get_paginator('query').paginate(TableName=NAMES['platform']['state_table'],
                 KeyConditionExpression='app = :a', ExpressionAttributeValues={':a': {'S': app}}, ProjectionExpression='app, #r',
                 ExpressionAttributeNames={'#r': 'record'}) for item in page['Items']]
         for key in keys:
             table.delete_item(TableName=NAMES['platform']['state_table'], Key=key)
-        leftovers = remove_aws_leftovers(app, request.get('_aws') or (lambda name: boto3.client(name, region_name='eu-west-3')))
+        leftovers = remove_aws_leftovers(app, request.get('_aws') or (lambda name: boto3.client(name, region_name=AWS_REGION)))
         return {**result, 'worker_records_removed': len(keys), **leftovers, 'verified': True}
     if action in BOOTSTRAP_ACTIONS | set(WORKER_ACTIONS):
         import boto3
         from botocore.config import Config
-        session = boto3.Session(region_name='eu-west-3')
+        session = boto3.Session(region_name=AWS_REGION)
         settings = Config(connect_timeout=3, read_timeout=10, retries={'max_attempts': 1})
-        if session.client('sts', config=settings).get_caller_identity()['Account'] != '626278345026': raise ValueError('Compte AWS inattendu')
+        if session.client('sts', config=settings).get_caller_identity()['Account'] != AWS_ACCOUNT: raise ValueError('Compte AWS inattendu')
         ecs = session.client('ecs', config=settings)
         variables = document['profile']['automation']
         packages = request['packages']

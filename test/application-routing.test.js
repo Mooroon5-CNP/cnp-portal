@@ -15,7 +15,7 @@ function baseline() {
     pathMatcher: [{ name: 'existing', defaultService: 'existing-backend' }], description: 'Keep this field' } } };
 }
 function ready(atProvider) { return { status: { atProvider, conditions: ['Ready', 'Synced'].map(type => ({ type, status: 'True' })) } }; }
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => { jest.clearAllMocks(); routing.clearProbeCache(); });
 test('network points at fixed environment services with separate dev/prod backends', () => {
   const [neg, backend] = yaml.loadAll(routing.network(dep));
   expect(neg.spec.forProvider.cloudRun).toEqual([{ service: 'pixelcam-dev' }]);
@@ -53,10 +53,33 @@ test('availability needs observed route, fixed service and successful HTTPS, not
   axios.get.mockResolvedValue({ status: 200 });
   expect(await routing.status(dep)).toBe(true);
   expect(axios.get).toHaveBeenCalledWith('https://pixelcam.dev.apps.mooroon5.fr', expect.objectContaining({ maxRedirects: 0 }));
+  // Un succès est gardé : pas de nouveau GET / à chaque tour du réconciliateur (bruit dans les logs de l'app).
+  axios.get.mockClear(); expect(await routing.status(dep)).toBe(true); expect(axios.get).not.toHaveBeenCalled();
+  routing.clearProbeCache();
   axios.get.mockRejectedValue(new Error('TLS pending'));
   expect(await routing.status(dep)).toBe(false);
+  // Un échec n'est pas gardé : le tour suivant sonde de nouveau.
+  axios.get.mockClear(); expect(await routing.status(dep)).toBe(false); expect(axios.get).toHaveBeenCalledTimes(1);
   bodies.urlmaps.status.atProvider.hostRule = [];
   axios.get.mockClear(); expect(await routing.status(dep)).toBe(false); expect(axios.get).not.toHaveBeenCalled();
+});
+test('the probe cache expires and is cleared by a route publication', async () => {
+  const map = routing.updateMap(baseline(), dep);
+  const n = routing.names(dep);
+  const bodies = { urlmaps: ready(map.spec.forProvider),
+    regionnetworkendpointgroups: ready({ cloudRun: [{ service: n.service }] }),
+    backendservices: ready({ backend: [{ group: `https://www.googleapis.com/compute/v1/projects/test-project/regions/europe-west9/networkEndpointGroups/${n.neg}` }] }) };
+  k8s.getComputeResource.mockImplementation(async plural => bodies[plural]);
+  axios.get.mockResolvedValue({ status: 200 });
+  const now = jest.spyOn(Date, 'now').mockReturnValue(1000);
+  expect(await routing.status(dep)).toBe(true);
+  now.mockReturnValue(1000 + routing.PROBE_TTL_MS + 1);
+  expect(await routing.status(dep)).toBe(true);
+  expect(axios.get).toHaveBeenCalledTimes(2);
+  await routing.sync(dep, { api: {}, repo: {}, commitFiles: async () => {}, beforePublish: async () => {} }, true);
+  expect(await routing.status(dep)).toBe(true);
+  expect(axios.get).toHaveBeenCalledTimes(3);
+  now.mockRestore();
 });
 test('removal waits until the observed shared map no longer references the environment', async () => {
   const map = routing.updateMap(baseline(), dep);

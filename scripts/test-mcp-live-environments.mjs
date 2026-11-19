@@ -19,7 +19,7 @@ try {
   Object.assign(process.env, { DB_PATH: resolve(temporary, 'recipe.sqlite'), NODE_ENV: 'development',
     ADMIN_INITIAL_PASSWORD: randomBytes(24).toString('hex'),
     MCP_CLIENT_MODE: 'http', MCP_DATA_MODE: 'real', MCP_ROUTING_MODE: 'local',
-    GENAI_ENABLED: 'false', TYPESAFE_ENABLED: 'false', MCP_LOCAL_HTTP: 'true',
+    MCP_MISTRAL_ENABLED: 'false', MCP_LOCAL_HTTP: 'true',
     MCP_ORIGIN: 'http://localhost:3001', MCP_LOCAL_JWT_SECRET: randomBytes(32).toString('hex') });
   const load = file => import(pathToFileURL(resolve(mcpRoot, 'dist/apps/mcp-server/src', file)).href);
   const { createHttpServer } = await load('http.js');

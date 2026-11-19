@@ -443,6 +443,7 @@ function observedServiceStatus(body) {
     ready,
     url: observed.uri || null,
     image: template?.containers?.[0]?.image || null,
+    runtimeVariables: Array.isArray(template?.containers?.[0]?.env) ? template.containers[0].env : null,
     failure: readyCondition?.state === 'CONDITION_FAILED' ? readyCondition.message || 'Révision Cloud Run en échec.' : null,
   };
 }
@@ -509,10 +510,19 @@ function azureObservedImage(containerApp) {
   return container?.image || null;
 }
 
+function azureObservedVariables(containerApp) {
+  const observed = containerApp?.status?.atProvider || {};
+  const template = Array.isArray(observed.template) ? observed.template[0] : observed.template;
+  const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+  return { env: Array.isArray(container?.env) ? container.env : null,
+    secrets: Array.isArray(observed.secret) ? observed.secret : null };
+}
+
 function azureAppStatusFrom({ server, database, containerApp }) {
   const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
   if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
-    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp) };
+    return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp),
+      observedVariables: azureObservedVariables(containerApp) };
   }
   // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
   // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
@@ -535,6 +545,23 @@ async function getAzureObject(api, group, version, plural, name) {
   catch (err) {
     if (err.statusCode === 404 || err.response?.statusCode === 404) return null;
     throw err;
+  }
+}
+
+/**
+ * Cloud privé k3s : Object de provider-kubernetes d'un environnement (labels posés par private-templates.objectLabels),
+ * résumés par privateAppStatusFrom. Droit requis : rôle cnp-portal-private-read (cnp, gcp/11-portal.tf).
+ */
+async function getPrivateAppStatus(appName, environment, { expectedImage } = {}) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  const { objectLabels, privateAppStatusFrom } = require('../services/private-templates');
+  const selector = Object.entries(objectLabels(appName, environment)).map(([k, v]) => `${k}=${v}`).join(',');
+  try {
+    const { body } = await api.listClusterCustomObject('kubernetes.crossplane.io', 'v1alpha2', 'objects',
+      undefined, undefined, undefined, undefined, selector);
+    return privateAppStatusFrom(body.items || [], { expectedImage });
+  } catch (err) {
+    handleError(err, `getPrivateAppStatus(${appName}-${environment})`);
   }
 }
 
@@ -686,6 +713,7 @@ module.exports = {
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
   deleteNamespace,
   getCleanupResource, CLEANUP_KINDS,
+  getPrivateAppStatus,
   getAzureAppStatus, azureAppStatusFrom, azureObservedImage, getComputeResource, observedServiceStatus, getV2ServiceStatus, getV2ServiceUrl, getIngressUrl, getIngressControllerIp, isCertManagerAvailable,
   provisionArgoCDLocalUser,
 };

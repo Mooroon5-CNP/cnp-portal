@@ -5,10 +5,15 @@ jest.mock('../src/clients/github', () => ({}));
 jest.mock('../src/clients/kubernetes', () => ({}));
 jest.mock('../src/services/environment-deployment', () => ({ validate: jest.fn(), onboard: jest.fn().mockResolvedValue() }));
 jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest.fn() }));
+jest.mock('../src/services/openbao-variables', () => ({ ...jest.requireActual('../src/services/openbao-variables'),
+  service: jest.fn() }));
+jest.mock('../src/services/openbao-runtime', () => ({ assertReady: jest.fn() }));
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
 const guard = require('../src/services/repository-database');
 const environment = require('../src/services/environment-deployment');
+const openbaoVariables = require('../src/services/openbao-variables');
+const openbaoRuntime = require('../src/services/openbao-runtime');
 const router = require('../src/routes/deployments');
 const user = require('../src/models/user').findByUsername('admin');
 beforeEach(() => {
@@ -16,9 +21,10 @@ beforeEach(() => {
   db.prepare('DELETE FROM deployment_team_access').run();
   db.prepare('DELETE FROM deployments').run();
   guard.assertCompatible.mockResolvedValue({ engine: 'unknown' });
+  openbaoVariables.service.mockReturnValue({ prepare: jest.fn().mockResolvedValue({ generation: 'test' }) });
 });
-async function submit(stack, environment = 'dev') {
-  const req = { body: { appName: 'guard-app', githubRepoUrl: 'https://github.com/team/guard-app', appPort: '8080', stack, environment },
+async function submit(stack, environment = 'dev', variables = {}) {
+  const req = { body: { appName: 'guard-app', githubRepoUrl: 'https://github.com/team/guard-app', appPort: '8080', stack, environment, ...variables },
     user, session: {}, flash: jest.fn() };
   const res = { redirect: jest.fn(), status: jest.fn().mockReturnThis(), send: jest.fn() };
   await router.stack.find(layer => layer.route?.path === '/' && layer.route.methods.post).route.stack.at(-1).handle(req, res);
@@ -34,6 +40,24 @@ test.each(['gcp-sqlite', 'gcp-postgres', 'azure-postgres'])('a mismatch for %s c
   expect(res.redirect).toHaveBeenCalledWith('/deployments');
   expect(req.session.deploymentDraft).toMatchObject({ appName: 'guard-app', stack, githubRepoUrl: 'https://github.com/team/guard-app' });
   expect(req.flash).toHaveBeenCalledWith('error', 'SQLite/PostgreSQL incompatibles');
+});
+
+test('variables are prepared in OpenBao before onboarding and never saved in the session draft', async () => {
+  const { req } = await submit('gcp-sqlite', 'dev', { variableNames: ['API_KEY', 'EMPTY'], variableValues: ['private-value', ''] });
+  expect(openbaoVariables.service().prepare).toHaveBeenCalledWith(expect.objectContaining({ appName: 'guard-app' }),
+    expect.objectContaining({ API_KEY: 'private-value', EMPTY: '' }));
+  expect(openbaoRuntime.assertReady).toHaveBeenCalledWith(expect.objectContaining({ appName: 'guard-app', targetCluster: 'gcp' }));
+  expect(environment.onboard).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(req.session)).not.toContain('private-value');
+});
+
+test('an OpenBao failure removes the new deployment and does not start onboarding', async () => {
+  openbaoVariables.service.mockReturnValue({ prepare: jest.fn().mockRejectedValue(new Error('OpenBao indisponible.')) });
+  const { req, res } = await submit('gcp-sqlite', 'dev', { variableNames: 'API_KEY', variableValues: 'private-value' });
+  expect(deployments.listForUser(null)).toHaveLength(0);
+  expect(environment.onboard).not.toHaveBeenCalled();
+  expect(res.redirect).toHaveBeenCalledWith('/deployments');
+  expect(JSON.stringify(req.session)).not.toContain('private-value');
 });
 
 test.each([

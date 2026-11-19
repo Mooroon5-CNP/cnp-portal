@@ -167,4 +167,22 @@ function getMissingAzureVars(azure = config.azure) {
     .map(([, envName]) => envName);
 }
 
-module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED };
+// Cloud privé k3s (cnp, Runbook/CLOUD-PRIVE-K3S.md) : sortie Terraform `portal_environment` de cnp/aws/private/.
+// Le registre et le domaine n'ont pas de valeur par défaut (valeurs d'infrastructure) ; la ProviderConfig et l'émetteur
+// ont celle de la plateforme (PRIVATE_CERT_ISSUER=letsencrypt-staging pour une recette sans quota Let's Encrypt).
+config.private = {
+  ecrRegistry:    process.env.PRIVATE_ECR_REGISTRY,
+  appsDomain:     process.env.PRIVATE_APPS_DOMAIN,
+  providerConfig: process.env.PRIVATE_PROVIDER_CONFIG || 'cnp-prive',
+  certIssuer:     process.env.PRIVATE_CERT_ISSUER || 'letsencrypt-prod',
+};
+const PRIVATE_REQUIRED = { ecrRegistry: 'PRIVATE_ECR_REGISTRY', appsDomain: 'PRIVATE_APPS_DOMAIN' };
+
+/** Variables du cloud privé manquantes. Vide = déploiement sur k3s possible. */
+function getMissingPrivateVars(priv = config.private) {
+  return Object.entries(PRIVATE_REQUIRED)
+    .filter(([key]) => !priv[key] || String(priv[key]).trim() === '')
+    .map(([, envName]) => envName);
+}
+
+module.exports = { config, getMissingVars, getMissingAzureVars, AZURE_REQUIRED, getMissingPrivateVars, PRIVATE_REQUIRED };
