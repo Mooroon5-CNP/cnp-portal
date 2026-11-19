@@ -10,7 +10,7 @@ const dotenv = require('dotenv');
 
 const file = process.argv[2];
 if (!file) {
-  console.error('Usage: node scripts/deploy/apply-app-secret.js <credentials.env>');
+  console.error('Usage: node scripts/deploy/apply-app-secret.js <credentials.env> [--oauth-callback-registered]');
   process.exit(2);
 }
 
@@ -54,6 +54,10 @@ stringData.SESSION_SECRET = prior
     ? source.SESSION_SECRET
     : randomBytes(48).toString('base64url');
 if (source.GITHUB_CLIENT_ID && source.GITHUB_CLIENT_SECRET) {
+  if (!process.argv.includes('--oauth-callback-registered')) {
+    console.error('Register https://portal.apps.mooroon5.fr/auth/github/callback on the GitHub OAuth app, then pass --oauth-callback-registered.');
+    process.exit(2);
+  }
   stringData.GITHUB_REDIRECT_URI = 'https://portal.apps.mooroon5.fr/auth/github/callback';
 }
 
