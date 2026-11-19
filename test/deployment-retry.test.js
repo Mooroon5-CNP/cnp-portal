@@ -1,10 +1,12 @@
 'use strict';
 
 jest.mock('../src/services/environment-deployment', () => ({ onboard: jest.fn(), remove: jest.fn(), resumeAfterCleanupFailure: jest.fn(), workflowName: name => `cnp-${name}.yml` }));
+jest.mock('../src/services/environment-deletion', () => ({ start: jest.fn(), get: jest.fn() }));
 const app = require('../src/index');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
 const service = require('../src/services/environment-deployment');
+const deletion = require('../src/services/environment-deletion');
 const { request, cookie } = require('./helpers/in-memory-http');
 let auth;
 beforeAll(async () => {
@@ -16,6 +18,8 @@ beforeEach(() => {
   service.onboard.mockReset();
   service.remove.mockReset();
   service.resumeAfterCleanupFailure.mockReset();
+  deletion.start.mockReset();
+  deletion.get.mockReset();
   db.prepare('DELETE FROM deployment_team_access').run();
   db.prepare('DELETE FROM deployments').run();
 });
@@ -66,14 +70,16 @@ test('failed retry retains the new error rather than claiming successful setup',
 
 test('partial cleanup retains the record and a second deletion can succeed', async () => {
   const dep = deployment('ready', null);
-  service.remove.mockRejectedValueOnce(new Error('Kubernetes timeout')).mockResolvedValueOnce();
-  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
-  expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed', onboardingError: 'Nettoyage partiel : Kubernetes timeout' });
+  deletion.start.mockImplementationOnce(() => { throw new Error('Kubernetes timeout'); })
+    .mockImplementationOnce(item => deployments.updateOnboardingStatus(item.id, 'deleting'));
+  const body = new URLSearchParams({ confirmation: 'delete' }).toString();
+  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth, 'content-type': 'application/x-www-form-urlencoded' }, body });
+  expect(deployments.get(dep.id)).toMatchObject({ onboardingStatus: 'delete_failed', onboardingError: 'Kubernetes timeout' });
   const status = await request(app, { url: `/deployments/${dep.id}/status`, headers: { cookie: auth } });
   expect(status.text).toContain('delete_failed');
-  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
-  expect(service.remove).toHaveBeenCalledTimes(2);
-  expect(deployments.get(dep.id)).toBeNull();
+  await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth, 'content-type': 'application/x-www-form-urlencoded' }, body });
+  expect(deletion.start).toHaveBeenCalledTimes(2);
+  expect(deployments.get(dep.id).onboardingStatus).toBe('deleting');
 });
 test('legacy cleanup failures expose the recovery status and explicit resume route', async () => {
   const dep = deployment('failed', 'Nettoyage partiel : ArgoCD 415');
@@ -85,6 +91,6 @@ test('legacy cleanup failures expose the recovery status and explicit resume rou
 test('concurrent deletion is rejected without starting another cleanup', async () => {
   const dep = deployment('deleting', null);
   const response = await request(app, { method: 'POST', url: `/deployments/${dep.id}/delete`, headers: { cookie: auth } });
-  expect(response.status).toBe(409);
-  expect(service.remove).not.toHaveBeenCalled();
+  expect(response.status).toBe(302);
+  expect(deletion.start).not.toHaveBeenCalled();
 });

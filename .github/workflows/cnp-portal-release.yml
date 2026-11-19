@@ -36,4 +36,6 @@ jobs:
       config_repo_url: https://github.com/Mooroon5-CNP/config-repo
       gitops_mode: portal
     secrets:
-      CONFIG_REPO_TOKEN: ${{ secrets.CONFIG_REPO_TOKEN }}
+      # The reusable workflow requires this input. gitops_mode=portal skips every
+      # config-repo write job, so this repository-scoped token is never used there.
+      CONFIG_REPO_TOKEN: ${{ github.token }}
