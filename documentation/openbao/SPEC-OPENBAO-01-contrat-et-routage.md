@@ -2,7 +2,7 @@
 
 **Ordre : 1/3.** Dépend du service OpenBao fourni par l'utilisatrice ; l'implémentation du portail peut être développée et testée avec un faux service. Le déploiement des instances OpenBao n'est pas dans cette SPEC.
 
-**Statut : IMPLÉMENTÉ LOCALEMENT, ACCEPTATION À FAIRE.** Client JWT/KV v2, CAS, routage, métadonnées sans valeurs et validation de génération sont codés et testés avec de faux services. Les politiques réelles, le refus d'accès croisé et le comportement en panne sur les instances déployées restent à vérifier ; la SPEC n'est pas `DONE`.
+**Statut au 18 novembre 2026 : PARTIEL, acceptation à faire.** Client JWT/KV v2, CAS, routage, métadonnées sans valeurs et validation de génération sont codés et testés localement. Sur OpenBao Azure réel, KV v2, CAS et versionnement ont été vérifiés avec des valeurs fictives ; le rôle JWT est configuré et un JWT invalide est refusé. Le JWT du pod et les refus d'accès croisé n'ont pas encore été testés en réel ; la SPEC n'est pas `DONE`.
 
 ## Résultat fonctionnel
 
@@ -21,7 +21,7 @@ Pour Azure, le formulaire du portail reçoit temporairement la valeur avant son 
 ## Contrat technique
 
 - Un client OpenBao par domaine configuré par URL HTTPS, CA éventuelle, mount KV v2, méthode d'authentification et rôle. Les URLs et identités sont des paramètres de déploiement ; aucun compte cloud codé en dur.
-- Chemins distincts par application et environnement. Les permissions du portail et les rôles de lecture runtime respectent cette frontière ; une application ne lit jamais celle d'une autre ou l'autre environnement.
+- Chemins distincts par application et environnement. Le rôle OpenBao **du portail** a accès aux chemins des applications qu'il administre ; le portail vérifie l'appartenance avant l'appel. Les applications Azure ne reçoivent pas de token OpenBao : leurs identités Container Apps doivent être bornées à leur propre Key Vault d'environnement. Tester séparément ces deux frontières.
 - KV v2 versionné avec écriture conditionnelle (CAS) pour empêcher qu'une mise à jour concurrente écrase une valeur plus récente. La version logique et les versions physiques par domaine sont consignées sans valeur secrète.
 - Pour GCP PostgreSQL prod, la publication attend la présence vérifiée de la même révision logique dans GCP et AWS. Une écriture partielle reste non publiable et peut être reprise sans créer deux versions fonctionnelles différentes. Aucune réplication automatique d'OpenBao n'est présumée.
 - Un refus, une indisponibilité ou une lecture incomplète empêche la publication concernée avec un message opérable, sans afficher de valeur. Les applications déjà publiées gardent leurs références existantes.
@@ -37,4 +37,4 @@ Pour Azure, le formulaire du portail reçoit temporairement la valeur avant son 
 
 ## Préconditions fournies par le déploiement de la plateforme
 
-Endpoint et CA de chaque domaine, montages KV v2, identités/permissions du portail, et connectivité depuis le portail. Aucune clé racine ou token permanent ne doit être transmis au code ou au chat. Les éventuels changements d'identité/réseau sont déclarés en Terraform si nécessaires ; ni `terraform apply` ni push sur `cnp/cluster` avant accord explicite de l'utilisatrice.
+Endpoint et CA de chaque domaine, montages KV v2, identités/permissions du portail, et connectivité depuis le portail. L'endpoint Azure est disponible ; sa connectivité depuis le pod reste à prouver. Aucune clé racine ou token permanent ne doit être transmis au code ou au chat. Pour tout changement Azure, respecter l'autorisation donnée après pull de `cluster` et refuser un plan qui modifie ou supprime l'existant ; aucun push protégé n'est implicite.

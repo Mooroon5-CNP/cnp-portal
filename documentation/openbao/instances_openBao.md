@@ -1,8 +1,8 @@
 # Instances OpenBao — prérequis de préparation
 
-Ce document sert à préparer les instances nécessaires aux variables d'environnement des applications. Il ne contient ni secret, ni commande d'installation live. Le déploiement de la plateforme est assuré par l'utilisatrice. Les changements d'infrastructure seront de préférence déclarés en Terraform ; aucun `terraform apply` ni push sur `cnp/cluster` avant son accord.
+Ce document suit les instances nécessaires aux variables d'environnement des applications. Il ne contient aucun secret. Les changements Azure sont déclarés en Terraform ; l'utilisatrice a autorisé l'`apply` après pull de `cluster`, à condition de ne supprimer aucune ressource cloud. Aucun push sur une branche protégée n'est autorisé implicitement.
 
-**État du code au 15/11/2026 :** le formulaire accepte désormais des lignes manuelles et l'import local d'un `.env`. Le serveur refuse un déploiement avec variables si les endpoints OpenBao ou identités runtime requis ne sont pas configurés. Les adaptateurs GCP, Azure et AWS et le rendu des références sont testés localement. Aucune instance OpenBao ni aucun droit cloud n'a été installé ou vérifié en conditions réelles ; la recette applicative reste à faire après préparation de ces prérequis.
+**État au 18/11/2026 :** le formulaire accepte des lignes manuelles et l'import local d'un `.env`. Les adaptateurs GCP, Azure et AWS et le rendu des références sont testés localement. L'instance **Azure** est installée et testée côté serveur ; sa recette depuis le portail et une application Azure reste à faire. L'état réel des instances GCP et AWS doit être vérifié séparément.
 
 ## Instances nécessaires selon le formulaire actuel
 
@@ -21,7 +21,8 @@ Pour les nouvelles variables GCP, `cnp/gcp/14-openbao-runtime-identities.tf` pr�
 ## État constaté dans les dépôts
 
 - **GCP :** `config-repo/platform/openbao/` contient une Application Argo manuelle et des valeurs Helm OpenBao (chart 0.29.6, image 2.6.3, trois pods Raft, TLS, LoadBalancer interne et auto-unseal GCP KMS). Le dossier n'est découvert automatiquement par aucun ApplicationSet. Il référence encore le projet `cnp-terraform-512313`, le GSA `openbao-seal@cnp-terraform-512313.iam.gserviceaccount.com`, la zone `europe-west9-b` dans le runbook et la branche `fix/cloudrun-environment` dans l'Application. Il faudra les revoir lors du changement de compte. Aucune installation live n'est prouvée par ces fichiers.
-- **AWS et Azure :** aucune déclaration d'instance OpenBao n'a été trouvée dans `cnp/{aws,azure}` ou dans `config-repo` lors de l'inventaire du 15/11/2026. Leur architecture de stockage, leur chiffrement d'unseal, leurs endpoints et leur installation restent à préparer.
+- **Azure :** `cnp/azure/openbao-server/` déclare et a appliqué une VM `Standard_D2als_v7` en France Central, un disque Raft Premium SSD persistant, un Key Vault d'unseal avec clé RSA, une Managed Identity serveur limitée aux opérations cryptographiques sur cette clé, Caddy/HTTPS, audit et stockage privé de snapshots. L'endpoint est `https://cnpob8e885538.francecentral.cloudapp.azure.com`. L'instance a survécu à un redémarrage avec auto-unseal et données intactes. Elle n'a qu'un seul votant Raft ; la haute disponibilité et une restauration isolée ne sont pas validées.
+- **AWS :** suivre la préparation par l'autre chantier ; ne pas conclure de l'état Azure que le secours AWS est prêt.
 - **Vault existant :** `cnp/gcp/11-vault.tf` déclare un Vault HashiCorp distinct, à un pod et sans TLS. Il ne remplace pas OpenBao et ne doit pas être supprimé ou migré implicitement.
 
 ## Contrat à fournir pour chaque instance
@@ -36,14 +37,35 @@ Pour les **nouvelles variables Azure**, la livraison doit utiliser Azure Key Vau
 
 ### Préparation Azure Key Vault pour les nouvelles variables
 
-Le coffre existant dans `cnp/azure/9-key-vault.tf` utilise Azure RBAC. L'adaptateur du portail échange un jeton Kubernetes projeté contre un jeton Entra, écrit une version de secret dans ce coffre et ajoute sa référence au manifest Container App après une CI réussie. Les points suivants sont nécessaires avant une recette Azure :
+Le coffre d'unseal **serveur** `cnpob8e885538seal` est dédié à OpenBao et ne contient pas de variables applicatives. L'adaptateur du portail échange un jeton Kubernetes projeté contre un jeton Entra, écrit une version de secret dans un coffre **propre à l'application et à l'environnement**, puis ajoute sa référence au manifest Container App après une CI réussie. Les points suivants restent nécessaires avant une recette Azure de bout en bout :
 
 1. Déclarer en Terraform une identité managée **distincte de celle de Crossplane** pour le service account Kubernetes `cnp-portal`, avec fédération sur l'issuer OIDC du cluster GKE et l'audience `api://AzureADTokenExchange`. Monter dans le pod un jeton projeté avec cette audience. Donner à cette identité le droit de créer et lire les secrets du coffre, sans rôle Azure Resource Manager global.
 2. Fournir au portail `CNP_AZURE_TENANT_ID`, `CNP_AZURE_PORTAL_CLIENT_ID` (sortie Terraform), `CNP_AZURE_FEDERATED_TOKEN_FILE`, `AZURE_SUBSCRIPTION_ID` et `CNP_AZURE_RUNTIME_RESOURCE_GROUP` (nom du groupe partagé) après installation. Ce sont des paramètres d'identité et d'adresse, pas des clés statiques. `CNP_AZURE_VAULT_URL` n'est utilisé que pour l'ancien mode à coffre commun.
 3. `cnp/azure/14-openbao-runtime-identities.tf` prépare pour chaque entrée de `openbao_runtime_environments` une identité managée et un **coffre dédié à cet environnement**, avec `Key Vault Secrets User` borné à ce coffre ; le portail seul reçoit `Key Vault Secrets Officer`. L'identité ACR commune ne lit aucun de ces coffres. Avec `CNP_OPENBAO_DERIVED_IDENTITIES=true`, le portail calcule les noms des coffres et des identités depuis l'abonnement, le groupe partagé, l'application et l'environnement ; `CNP_AZURE_RUNTIME_IDENTITIES` reste accepté temporairement pour les applications existantes. Le coffre de mots de passe PostgreSQL actuel est séparé et inchangé.
-4. Vérifier que la version de `provider-azure-containerapp` installée accepte `secret[].keyVaultSecretId` et `secret[].identity` ; le portail émet déjà ces champs. Conserver `DB_PASSWORD` et ses `nameSecretRef`/`valueSecretRef` actuels.
+4. Le schéma de `provider-azure-containerapp` **installé** accepte `secret[].keyVaultSecretId`, `secret[].identity` et `identity.identityIds` ; vérifier maintenant leur fonctionnement lors d'une publication réelle. Conserver `DB_PASSWORD` et ses `nameSecretRef`/`valueSecretRef` actuels.
 
-L'écriture dans Key Vault crée une nouvelle version et renvoie une URL versionnée. Aucun secret applicatif n'est transmis au dépôt GitOps. Le formulaire est disponible, mais le serveur refuse la préparation si les paramètres d'instance ou d'identité requis manquent ; les droits et le schéma du provider restent à valider en réel. Ajouter l'environnement dans les variables Terraform et appliquer avant de déployer une application avec variables.
+L'écriture dans Key Vault crée une nouvelle version et renvoie une URL versionnée. Aucun secret applicatif n'est transmis au dépôt GitOps. Le formulaire est disponible, mais le serveur refuse la préparation si les paramètres d'instance ou d'identité requis manquent. Ajouter l'environnement dans les variables Terraform, revoir un plan **sans changement ni suppression de l'existant**, puis appliquer avant de déployer une application avec variables. L'identité fédérée du portail, les coffres runtime et leurs droits ne sont pas encore appliqués.
+
+### Ce qui reste testable sans déployer le portail
+
+Les contrôles HTTPS, l'auto-unseal depuis la VM, KV v2/CAS/versionnement avec des valeurs fictives, le refus d'un JWT invalide, l'audit, un snapshot et la persistance après redémarrage ont déjà réussi. On peut encore vérifier le plan ciblé des identités/coffres Azure, préparer les paramètres non secrets du pod et organiser une restauration sur une instance **isolée**. Ces essais ne remplacent pas le JWT réellement émis au pod ni le scénario utilisateur complet.
+
+Pour le test de bout en bout, il faut **d'abord** les identités/coffres applicatifs Azure et la configuration du pod, **ensuite** un portail en cours d'exécution et une application témoin Container Apps. Le déploiement de la plateforme n'est donc pas le seul travail restant, mais il est nécessaire pour prouver la connexion et la livraison réelles. Voir `cnp/azure/openbao-server/README.md`.
+
+**Préparation du 18/11/2026 :** un plan Terraform **ciblé, non appliqué** pour
+`openbao-smoke/dev` et `openbao-smoke/prod` prévoit 10 créations, 0 modification
+et 0 suppression : identité portail et credential fédéré, deux coffres protégés
+contre la purge avec rétention 90 jours, deux identités runtime et quatre rôles
+RBAC bornés aux coffres. Le plan et ses limites sont décrits dans
+`cnp/azure/openbao-server/DELIVERY-PLAN.md`.
+L'overlay `k8s/overlays/dev` contient maintenant l'endpoint OpenBao Azure, les
+identifiants non secrets connus et un jeton projeté pour Entra. Le Client ID
+portail sera lu dans la ConfigMap `cnp-openbao-azure-identity`, créée après
+l'`apply` depuis la sortie Terraform ; le pod ne sera pas prêt sans elle.
+Le ServiceAccount `cnp-portal` possède l'annotation GSA attendue, mais aucun
+Deployment du portail n'était présent au contrôle. La recette de restauration
+isolée (`cnp/azure/openbao-server/RESTORE-TEST.md`) est organisée et reste à
+exécuter sur une VM et un disque distincts.
 
 ### Préparation AWS Secrets Manager pour le secours
 
@@ -56,7 +78,7 @@ L'adaptateur AWS du portail crée `cnp/failover/<application>/env-<hash>` et ret
 
 **Changement de comptes :** la provenance CI exige maintenant `CNP_AWS_ACCOUNT_ID` et `CNP_AWS_REGION`. Les scripts de rendu et d'opération acceptent `GCP_PROJECT`, `GCP_REGION`, `CNP_AWS_ACCOUNT_ID`, `CNP_AWS_REGION`, `CNP_AWS_ROUTE53_ZONE_ID`, `APPLICATIONS_BASE_DOMAIN`, `CNP_AWS_ALB_DNS_NAME`, `CNP_AWS_ALB_ZONE_ID`, `CNP_AWS_VPC_ID`, `CNP_AWS_PUBLIC_SUBNET_IDS`, `CNP_AWS_ECS_SECURITY_GROUP_ID` et `CNP_AWS_HTTPS_LISTENER_ARN`. Les scripts conservent des valeurs par défaut de l'ancien compte pour ne pas modifier la plateforme en service avant la bascule ; **renseigner toutes les valeurs du nouveau compte dans l'environnement du portail et du worker avant d'utiliser le failover sur les nouveaux comptes**. Les autres déclarations Terraform et les démonstrations historiques doivent être relues avant migration ; aucune bascule n'est faite ici.
 
-La pile `cnp/deployment/failover-phase1/platform/` demande désormais `aws_account_id` et `ecs_cluster_arn` dans son `terraform.tfvars` non versionné. Pour un nouveau compte, y remplacer aussi le groupe de sécurité, les sous-réseaux, les images du worker/bootstrap et toute sortie réseau encore liée à l'ancien compte. Son backend S3 se fournit au `terraform init -backend-config=backend.hcl` avec `bucket`, `key`, `region`, `encrypt` et `use_lockfile` du nouveau compte. Les trois nouveaux fichiers `cnp/{gcp,azure,aws}/*openbao-runtime-identities.tf` attendent un inventaire d'applications et un plan Terraform revu avant tout `apply`. Aucun fichier Terraform de cette branche n'a été appliqué ni poussé.
+La pile `cnp/deployment/failover-phase1/platform/` demande désormais `aws_account_id` et `ecs_cluster_arn` dans son `terraform.tfvars` non versionné. Pour un nouveau compte, y remplacer aussi le groupe de sécurité, les sous-réseaux, les images du worker/bootstrap et toute sortie réseau encore liée à l'ancien compte. Son backend S3 se fournit au `terraform init -backend-config=backend.hcl` avec `bucket`, `key`, `region`, `encrypt` et `use_lockfile` du nouveau compte. Les trois fichiers `cnp/{gcp,azure,aws}/*openbao-runtime-identities.tf` attendent un inventaire d'applications et un plan Terraform revu avant leur `apply`. Le module **serveur Azure**, séparé, est déjà appliqué ; les identités runtime ne le sont pas.
 
 ## Paramètres attendus par le code du portail
 

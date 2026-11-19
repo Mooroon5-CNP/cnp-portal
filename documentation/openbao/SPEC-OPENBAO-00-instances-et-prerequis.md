@@ -1,15 +1,28 @@
 # SPEC-OPENBAO-00 — Instances OpenBao et prérequis de raccordement
 
-**Ordre : 0/3, préalable de plateforme sous responsabilité de l'utilisatrice.** Cette SPEC décrit le contrat nécessaire au portail ; elle ne demande ni application Terraform ni déploiement depuis la branche du portail.
+**Ordre : 0/3, préalable de plateforme.** Cette SPEC décrit le contrat nécessaire au portail et sa recette réelle.
 
-**Statut : À FAIRE (acceptation).** Les prérequis sont documentés ; les trois instances, leurs politiques et leur accès depuis le portail n'ont pas été vérifiés en réel. Ne pas marquer `DONE` avant les quatre contrôles d'acceptation ci-dessous.
+**Statut au 18 novembre 2026 : PARTIEL, acceptation ouverte.** L'instance Azure est déployée et plusieurs tests serveur sont passés. Le JWT du pod portail, la livraison à Container Apps et la restauration isolée ne sont pas encore validés. L'état GCP et AWS doit être suivi séparément. Ne pas marquer `DONE` avant tous les contrôles d'acceptation ci-dessous.
 
-## État des dépôts constaté le 15 novembre 2026
+## État des dépôts et du cloud
 
 - `config-repo/platform/openbao/` prépare une installation **GCP opt-in** par Application Argo manuelle. Son fichier de valeurs mentionne encore le projet et le compte GCP actuels ; ce n'est pas une preuve d'installation live.
-- Aucune installation OpenBao AWS ou Azure n'est déclarée dans les dossiers inspectés. Ces domaines doivent être préparés avant la recette des modes correspondants.
+- **Azure, constat réel du 18 novembre 2026 :** `cnp/azure/openbao-server/` (commit local `41237e7` sur `cluster`) déclare la VM `cnp-openbao-az-vm`, son disque Raft persistant, le coffre d'unseal `cnpob8e885538seal`, la clé `openbao-unseal`, l'identité serveur `cnp-openbao-az-server-id` et le stockage privé des snapshots. Le serveur est initialisé, auto-unsealed et répond en HTTPS sur `https://cnpob8e885538.francecentral.cloudapp.azure.com`. L'instance est indépendante de GCP et AWS. Le plan de cette racine Terraform indique 0 création, 0 modification et 0 suppression.
 - `cnp/gcp/11-vault.tf` déclare un **Vault HashiCorp** séparé, avec son propre chart et son propre stockage. Il ne constitue pas l'instance OpenBao demandée ; aucune migration ou suppression de ce Vault n'est implicite.
-- Le changement prochain des comptes GCP, AWS et Azure impose de revoir les identités, réseaux, KMS et références avant installation. Les changements d'infrastructure seront préparés de préférence en Terraform et revus sans `apply`.
+- Les changements de comptes GCP et AWS imposent toujours de revoir identités, réseaux, KMS et références. Pour Azure, la connexion Entra et les rôles IAM du principal Terraform sont vérifiés ; le certificat opérateur expire le 16 février 2027.
+
+## Résultats Azure déjà obtenus
+
+- Certificat HTTPS vérifié ; `/v1/sys/health` a répondu HTTP 200 après redémarrage de la VM.
+- Identité managée du serveur testée **depuis la VM** : `get`, `wrap`, `unwrap`, `encrypt` et `decrypt` sur la seule clé d'unseal.
+- KV v2 `cnp-runtime` avec CAS obligatoire : écriture/lecture, refus d'un CAS périmé et relecture de l'ancienne version avec valeurs fictives.
+- Un JWT malformé est refusé. Le rôle `cnp-control` est lié au sujet numérique du compte de service GCP du portail et à l'audience de l'endpoint Azure ; un JWT réel émis au pod reste à vérifier.
+- Audit fichier déclaré dans la configuration OpenBao 2.6 ; snapshot Raft transféré au conteneur privé ; auto-unseal et données Raft conservés après redémarrage.
+- Les cinq parts de récupération, seuil trois, sont chiffrées avec le certificat opérateur et sauvegardées dans un blob privé. Leur distribution à plusieurs responsables et la révocation du jeton initial sont requises avant la production.
+
+Le runbook `cnp/azure/openbao-server/README.md` fournit les noms, commandes,
+limites et coût. Les fichiers sont disponibles dans la copie locale de travail
+`cnp-cluster/azure/openbao-server/`.
 
 ## Instances requises
 
@@ -32,8 +45,8 @@ Les modes GCP SQLite et GCP PostgreSQL dev ne nécessitent aucune écriture dans
 ## Critères d'acceptation avant activation du portail
 
 1. Chaque endpoint requis répond sur HTTPS avec une chaîne de confiance vérifiée depuis le portail.
-2. Un rôle de test peut écrire puis lire une version KV v2 dans son périmètre, et ne peut pas accéder à une autre application ou à l'autre environnement.
+2. Le JWT **réel du portail** peut écrire puis lire une version KV v2 dans son périmètre ; un client applicatif ne peut pas accéder à une autre application ou à l'autre environnement. Le rôle de contrôle du portail a, par conception, accès à toutes les applications qu'il administre : vérifier séparément les contrôles d'appartenance dans le portail et les identités runtime bornées à leur coffre.
 3. Le domaine AWS reste lisible sans GCP pour le mode GCP PostgreSQL prod ; aucun secret des modes GCP sans secours n'y est créé.
 4. Aucune valeur secrète n'apparaît dans Terraform state affiché, Git, les logs de test ou la réponse utilisateur.
 
-Tout ajustement d'infrastructure nécessaire est préparé de préférence en Terraform, avec un plan revu séparément. Aucun `terraform apply` et aucun push sur `cnp/cluster` avant accord explicite de l'utilisatrice.
+Pour la recette Azure de bout en bout, appliquer les identités fédérées et les coffres par application/environnement de `cnp/azure/14-openbao-runtime-identities.tf` uniquement après un plan ciblé sans modification ni suppression de ressources existantes. Configurer puis déployer le portail, exécuter le scénario Container App et tester la restauration isolée. L'accord de l'utilisatrice autorise l'`apply` Azure après pull de `cluster`, sous la contrainte explicite de ne retirer aucune ressource cloud. Aucun push sur branche protégée n'est implicite.
