@@ -407,6 +407,8 @@ function readiness(dep) {
       // cloudRunUrl : la page du déploiement compare ce champ à l'adresse affichée et se recharge s'ils diffèrent ; absent ici,
       // elle se rechargeait toutes les ~8 s une fois la prod en service (constaté le 15/11/2026). Même valeur, comme pour Azure.
       applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, cloudRunUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state,
+      // Révision servie (dernier runtime publié) : sans elle, la colonne « Dernier tag » de la liste restait vide (19/11).
+      revision: runtimeRevision(dep.appName),
       ...(gcp ? { gcpAvailable: gcp.available && gcp.fresh, gcpMessage: gcp.message } : {}) };
   }
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`

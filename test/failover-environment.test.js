@@ -243,6 +243,10 @@ test('la disponibilité refuse les preuves d’un ancien profil et les dates fut
   expect(service.readiness(dep).phase).toBe('success');
   // La page du déploiement se recharge si cloudRunUrl ne correspond pas à l'adresse affichée : les deux doivent être présents.
   expect(service.readiness(dep)).toMatchObject({ applicationUrl: `https://${APP}.apps.mooroon5.fr`, cloudRunUrl: `https://${APP}.apps.mooroon5.fr` });
+  // La liste affiche « Dernier tag » à partir de la révision : celle du dernier runtime publié, ou rien sans image connue.
+  expect(service.readiness(dep).revision).toBeNull();
+  db.prepare('UPDATE failover_candidates SET image_record=? WHERE id=?').run(JSON.stringify({ app: APP, revision: 'd'.repeat(40) }), 'runtime');
+  expect(service.readiness(dep).revision).toBe('d'.repeat(40));
   db.prepare('UPDATE failover_operations SET result=? WHERE id=?').run(JSON.stringify({ verified: true, observed_at: Date.now() / 1000 + 600 }), 'health-proof');
   expect(service.readiness(dep).phase).toBe('deploying');
 });
