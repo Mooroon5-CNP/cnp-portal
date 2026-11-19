@@ -13,10 +13,7 @@ spec:
     matchLabels:
       app.kubernetes.io/name: cnp-portal
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   template:
     metadata:
       labels:
@@ -45,7 +42,8 @@ spec:
           envFrom:
             - secretRef:
                 name: cnp-portal-cloud-env
-                optional: true
+            - secretRef:
+                name: cnp-portal-app-env
           env:
             - name: NODE_ENV
               value: "production"
@@ -53,6 +51,8 @@ spec:
               value: "3000"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: DB_PATH
+              value: /app/data/cnp-portal.sqlite
             - name: DD_ENV
               valueFrom:
                 fieldRef:
@@ -65,32 +65,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['tags.datadoghq.com/version']
-            - name: SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: cnp-portal-dev-session-secret
-                  key: SESSION_SECRET
-            - name: GITHUB_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: cnp-portal-dev-github-oauth
-                  key: GITHUB_CLIENT_ID
-            - name: GITHUB_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: cnp-portal-dev-github-oauth
-                  key: GITHUB_CLIENT_SECRET
-            - name: GITHUB_REDIRECT_URI
-              valueFrom:
-                secretKeyRef:
-                  name: cnp-portal-dev-github-oauth
-                  key: GITHUB_REDIRECT_URI
-            - name: DATADOG_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: cnp-portal-dev-datadog-api-key
-                  key: DATADOG_API_KEY
-                  optional: true
           resources:
             requests:
               cpu: "100m"
@@ -121,6 +95,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: data
+              mountPath: /app/data
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: cnp-portal-data

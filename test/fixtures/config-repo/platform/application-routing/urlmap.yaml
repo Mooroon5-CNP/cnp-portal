@@ -1,0 +1,33 @@
+apiVersion: compute.gcp.upbound.io/v1beta1
+kind: URLMap
+metadata:
+  name: cnp-application-routing
+  annotations:
+    crossplane.io/external-name: cnp-apps-urlmap
+    cnp.io/route-cnp-demo-gcp-dev: cnp-demo-gcp.dev.apps.mooroon5.fr
+    cnp.io/route-cnp-demo-gcp-prod: cnp-demo-gcp.apps.mooroon5.fr
+spec:
+  deletionPolicy: Orphan
+  managementPolicies:
+    - Observe
+    - Update
+  providerConfigRef:
+    name: default
+  forProvider:
+    project: cnp-terraform-512313
+    defaultService: >-
+      https://www.googleapis.com/compute/v1/projects/cnp-terraform-512313/global/backendServices/cnp-apps-backend
+    hostRule:
+      - hosts:
+          - cnp-demo-gcp.dev.apps.mooroon5.fr
+        pathMatcher: cnp-cnp-demo-gcp-dev
+      - hosts:
+          - cnp-demo-gcp.apps.mooroon5.fr
+        pathMatcher: cnp-cnp-demo-gcp-prod
+    pathMatcher:
+      - name: cnp-cnp-demo-gcp-dev
+        defaultService: >-
+          https://www.googleapis.com/compute/v1/projects/cnp-terraform-512313/global/backendServices/cnp-cnp-demo-gcp-dev-backend
+      - name: cnp-cnp-demo-gcp-prod
+        defaultService: >-
+          https://www.googleapis.com/compute/v1/projects/cnp-terraform-512313/global/backendServices/cnp-cnp-demo-gcp-prod-backend

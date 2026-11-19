@@ -1,0 +1,41 @@
+name: CNP Portal release image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cnp-portal-release.yml'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'apps/**'
+      - 'packages/**'
+      - 'public/**'
+      - 'scripts/failover/**'
+      - 'documentation/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cnp-portal-image-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    uses: Mooroon5-CNP/ci-templates/.github/workflows/pipeline.yml@main
+    with:
+      app_name: cnp-portal
+      app_port: '3000'
+      node_version: '22'
+      target_cloud: gcp
+      config_repo_url: https://github.com/Mooroon5-CNP/config-repo
+      gitops_mode: portal
+    secrets:
+      # The reusable workflow requires this input. gitops_mode=portal skips every
+      # config-repo write job, so this repository-scoped token is never used there.
+      CONFIG_REPO_TOKEN: ${{ github.token }}

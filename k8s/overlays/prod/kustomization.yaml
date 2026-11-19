@@ -13,26 +13,50 @@ patches:
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 2
+        value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal:1.0.0
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal:pending
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
         value: "production"
+      - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: cnp-portal
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: {name: openbao-ca, configMap: {name: openbao-ca}}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_GCP_ADDR, value: "https://openbao.openbao.svc:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_GCP_AUDIENCE, value: "https://openbao.openbao.svc:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_GCP_ROLE, value: "cnp-control"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_GCP_MOUNT, value: "cnp-runtime"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_GCP_CA_FILE, value: "/etc/openbao-ca/ca.crt"}
   - target:
       kind: Ingress
       name: cnp-portal
     patch: |-
       - op: replace
         path: /spec/tls/0/hosts/0
-        value: cnp-portal.example.com
+        value: portal.apps.mooroon5.fr
       - op: replace
         path: /spec/rules/0/host
-        value: cnp-portal.example.com
+        value: portal.apps.mooroon5.fr
       - op: replace
         path: /metadata/annotations/cert-manager.io~1cluster-issuer
         value: letsencrypt-prod
@@ -45,5 +69,5 @@ patches:
         value: "INFO"
 
 images:
-  - name: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal
-    newTag: "1.0.0"
+  - name: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal
+    newTag: pending

@@ -11,8 +11,8 @@ const db = require('../src/models/db');
 const github = require('../src/clients/github');
 const deployment = require('../src/services/environment-deployment');
 const service = require('../src/services/environment-failover');
-// Contenu GitOps réel du config-repo voisin, pour simuler les lectures GitHub ; les gabarits du moteur sont dans ce dépôt.
-const root = path.resolve(__dirname, '../../config-repo');
+// Un instantané minimal du contrat GitOps rend ce test indépendant des droits GitHub et du checkout voisin.
+const root = path.resolve(__dirname, 'fixtures/config-repo');
 const templates = path.resolve(__dirname, '../scripts/failover/engine/templates');
 const APP = 'demo-api';
 const dir = `apps/${APP}/crossplane/prod`;
