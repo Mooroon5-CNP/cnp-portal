@@ -11,7 +11,15 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw new Error('TLS verif
 if (process.env.NODE_ENV === 'production') throw new Error('Native local launcher requires development mode.');
 const secret = process.env.MCP_JWT_SECRET;
 if (!secret || Buffer.byteLength(secret) < 32) throw new Error('Invalid local signing configuration');
-const server = createHttpServer({ auth: { secret: new TextEncoder().encode(secret) }, adapters: createNativeAdapters({ SourceError }),
+// Gemini Cloud Assist (optional): OAuth through local ADC (`gcloud auth application-default login`), never an API key.
+let gca, requestTimeoutMs;
+if (process.env.GCA_ENABLED === 'true') {
+  const { createGcaClient, createGcaService, gcaConfigFromEnv } = await load('gca.js');
+  const config = gcaConfigFromEnv(process.env);
+  gca = createGcaService({ ...config, call: createGcaClient(config) });
+  requestTimeoutMs = config.timeoutMs * (config.maxRetries + 1) + 10_000;
+}
+const server = createHttpServer({ auth: { secret: new TextEncoder().encode(secret) }, adapters: createNativeAdapters({ SourceError }), gca, requestTimeoutMs,
   allowedHosts: ['127.0.0.1', 'localhost'], origins: ['http://localhost:3001'],
   audit: (record) => process.stderr.write(JSON.stringify(record) + '\n') });
 await server.listen({ host: '127.0.0.1', port: 3000 });
