@@ -96,25 +96,50 @@
         </div>
       </div>
 
-      <%
-        const azure = new Set(services.filter(s => s.cloud === 'azure').map(s => s.service));
-        const silent = metrics.filter(m => !m.cloudRun && !m.ecs);
-        const silentAzure = silent.filter(m => azure.has(m.service));
-        const silentOther = silent.filter(m => !azure.has(m.service));
-      %>
-      <% if (silentOther.length > 0) { %>
+      <% const az = metrics.filter(m => m.azure); %>
+      <% if (az.length > 0 || services.some(s => s.cloud === 'azure')) { %>
       <div class="card mb-6">
-        <div class="card-body text-muted" style="font-size:13px;">
-          Sans métrique sur la période : <%= silentOther.map(m => m.service).join(', ') %>.
-          Les métriques Cloud Run arrivent avec quelques minutes de retard et seulement quand l'app reçoit du trafic.
+        <div class="card-header">
+          <span class="card-title" title="Container Apps est le service de conteneurs d’Azure, où tournent les applications déployées sur Azure.">Container Apps (Azure) <span class="text-muted" style="font-weight:400;">— <%= window.label %></span></span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr>
+              <th>Application</th>
+              <%- th('Requêtes', 'Nombre de requêtes HTTP reçues sur la période. Indique si l’application est utilisée.') %>
+              <%- th('Erreurs 5xx', 'Réponses en erreur serveur (500, 502, 503…) et leur part du total. Au-dessus de 1 %, quelque chose ne va pas dans l’application.') %>
+              <%- th('Temps de réponse moy. / pic', 'Temps de réponse moyen des requêtes, puis la pire valeur de la période (Azure ne fournit pas de p95).') %>
+              <%- th('CPU moy. / pic', 'Part du processeur alloué réellement utilisée : moyenne de la période, puis maximum. Proche de 100 %, l’application sature et ralentit.') %>
+              <%- th('Mémoire moy. / pic', 'Part de la mémoire allouée utilisée : moyenne, puis maximum. À 100 %, Azure redémarre l’application.') %>
+              <%- th('Réplicas moy. / max', 'Nombre de copies de l’application qui tournaient. Azure en lance selon le trafic et peut descendre à zéro.') %>
+            </tr></thead>
+            <tbody>
+              <% az.forEach(m => { const a = m.azure; %>
+              <tr>
+                <td><a href="<%= logsLink(m.service) %>" class="font-mono" title="Voir les logs de cette application"><%= m.service %></a></td>
+                <td><%= show(a.requests) %></td>
+                <td style="<%= a.errors > 0 ? 'color:var(--danger)' : '' %>"><%= show(a.errors) %><% if (a.errorRate !== null) { %> <span class="text-muted">(<%= a.errorRate %> %)</span><% } %></td>
+                <td><%= a.latency === null ? '—' : a.latency + ' ms' %> <span class="text-muted">/</span> <%= a.latencyPeak === null ? '—' : a.latencyPeak + ' ms' %></td>
+                <td><span style="<%= hot(a.cpu) %>"><%= pct(a.cpu) %></span> <span class="text-muted">/</span> <span style="<%= hot(a.cpuPeak) %>"><%= pct(a.cpuPeak) %></span></td>
+                <td><span style="<%= hot(a.memory) %>"><%= pct(a.memory) %></span> <span class="text-muted">/</span> <span style="<%= hot(a.memoryPeak) %>"><%= pct(a.memoryPeak) %></span></td>
+                <td><%= show(a.replicas) %> <span class="text-muted">/</span> <%= show(a.replicasMax) %></td>
+              </tr>
+              <% }) %>
+              <% if (az.length === 0) { %>
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">Aucune métrique Azure sur cette période.</td></tr>
+              <% } %>
+            </tbody>
+          </table>
         </div>
       </div>
       <% } %>
-      <% if (silentAzure.length > 0) { %>
+
+      <% const silent = metrics.filter(m => !m.cloudRun && !m.ecs && !m.azure); %>
+      <% if (silent.length > 0) { %>
       <div class="card">
         <div class="card-body text-muted" style="font-size:13px;">
-          Applications Azure : <%= silentAzure.map(m => m.service).join(', ') %>.
-          Le portail n'affiche pas encore les métriques Azure Container Apps : consultez leurs logs, ou Datadog pour les métriques.
+          Sans métrique sur la période : <%= silent.map(m => m.service).join(', ') %>.
+          Les métriques arrivent avec quelques minutes de retard et seulement quand l'app reçoit du trafic.
         </div>
       </div>
       <% } %>

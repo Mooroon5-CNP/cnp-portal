@@ -102,6 +102,17 @@ describe('mise en forme des logs', () => {
     expect(logs).toEqual([expect.objectContaining({ service: 'obs-beta-dev', message: 'scaling', source: 'Azure' })]);
   });
 
+  test('logs des bases de données : Cloud SQL, RDS et PostgreSQL Azure', async () => {
+    jest.spyOn(datadogClient, 'searchServiceLogs').mockResolvedValue([
+      { attributes: { service: 'obs-alpha-dev', message: 'checkpoint', tags: ['source:gcp.cloudsql.database'], attributes: { data: { textPayload: 'checkpoint' } } } },
+      { attributes: { service: 'obs-alpha-prod', message: 'FATAL', tags: ['source:postgresql'],
+        attributes: { aws: { awslogs: { logGroup: '/aws/rds/instance/obs-alpha-prod-db/postgresql' } } } } },
+      { attributes: { service: 'obs-alpha-dev', message: 'connection', tags: ['source:postgresql'], attributes: { azure: {}, postgres: {} } } },
+    ]);
+    const logs = await datadogService.getLogs(['obs-alpha-dev', 'obs-alpha-prod']);
+    expect(logs.map(l => l.source)).toEqual(['Cloud SQL', 'RDS', 'Azure DB']);
+  });
+
   test('entrée de requête HTTP Cloud Run', () => {
     expect(datadogService.messageOf({ attributes: { data: { httpRequest: { requestMethod: 'GET', requestUrl: '/x', status: 200 } } } }))
       .toBe('GET /x 200');
@@ -127,7 +138,21 @@ describe('métriques', () => {
     expect(a.ecs).toBeNull();
     expect(b.cloudRun).toBeNull();
     expect(b.ecs).toEqual({ cpu: 4, cpuPeak: 12, memory: 8, memoryPeak: 9, running: 1 });
-    expect(c).toEqual({ service: 'c-dev', cloudRun: null, ecs: null });
+    expect(c).toEqual({ service: 'c-dev', cloudRun: null, ecs: null, azure: null });
+  });
+
+  test('Azure Container Apps : requêtes, erreurs, temps de réponse, CPU, mémoire, réplicas', async () => {
+    jest.spyOn(datadogClient, 'getServiceMetrics').mockResolvedValue({
+      azRequests: { 'z-dev': [[1, 150], [2, 50]] }, azErrors: { 'z-dev': [[1, 4]] },
+      azLatency: { 'z-dev': [[1, 50], [2, 70]] }, azLatencyPeak: { 'z-dev': [[1, 112]] },
+      azCpu: { 'z-dev': [[1, 0.2], [2, 0.4]] }, azCpuPeak: { 'z-dev': [[1, 0.4]] },
+      azMemory: { 'z-dev': [[1, 4]] }, azMemoryPeak: { 'z-dev': [[1, 4]] },
+      azReplicas: { 'z-dev': [[1, 0], [2, 1]] },
+    });
+    const [z] = await datadogService.getMetrics(['z-dev'], datadogService.resolveWindow({ range: '24h' }));
+    expect(z.cloudRun).toBeNull();
+    expect(z.azure).toEqual({ requests: 200, errors: 4, errorRate: 2, latency: 60, latencyPeak: 112,
+      cpu: 0.3, cpuPeak: 0.4, memory: 4, memoryPeak: 4, replicas: 0.5, replicasMax: 1 });
   });
 });
 
@@ -162,6 +187,28 @@ describe('période, recherche et export', () => {
     expect(datadogService.normalizeSearch('timeout" OR service:(*)')).toBe('timeout OR service:');
     expect(datadogService.normalizeSearch('   ')).toBeNull();
     expect(datadogService.normalizeSearch('x'.repeat(300))).toHaveLength(100);
+  });
+
+  test.each([
+    ['app', ' -source:(gcp.cloudsql.database OR postgresql)'],
+    ['db', ' source:(gcp.cloudsql.database OR postgresql)'],
+    ['source:*', ''],
+  ])('filtre d\'origine %s : fragment fixe ajouté à la requête Datadog, valeur inconnue ignorée', async (origin, fragment) => {
+    const spy = jest.spyOn(datadogClient, 'searchServiceLogs').mockResolvedValue([]);
+    await datadogService.getLogs(['obs-alpha-dev'], { origin });
+    expect(spy.mock.calls[0][0].origin).toBe(datadogService.normalizeOrigin(origin));
+    spy.mockRestore();
+    const post = jest.fn().mockResolvedValue({ data: { data: [] } });
+    jest.spyOn(require('axios'), 'create').mockReturnValue({ post, get: jest.fn() });
+    const dd = require('../src/config/env').config.datadog;
+    const keys = { apiKey: dd.apiKey, appKey: dd.appKey };
+    Object.assign(dd, { apiKey: 'k', appKey: 'k' });
+    try {
+      await datadogClient.searchServiceLogs({ services: ['obs-alpha-dev'], origin: datadogService.normalizeOrigin(origin) });
+    } finally {
+      Object.assign(dd, keys);
+    }
+    expect(post.mock.calls[0][1].filter.query).toBe(datadogClient.logsScopeQuery(['obs-alpha-dev']) + fragment);
   });
 
   test('le CSV neutralise les formules de tableur et échappe les guillemets', () => {

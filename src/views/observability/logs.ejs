@@ -19,6 +19,7 @@
       </div>
 
       <%- include('../partials/observability-nav', { active: 'logs' }) %>
+<% const sourceBadge = src => ({ 'Cloud Run': 'badge-info', 'Cloud SQL': 'badge-info', ECS: 'badge-warning', RDS: 'badge-warning', Azure: 'badge-purple', 'Azure DB': 'badge-purple' })[src] || 'badge-gray'; %>
 
       <% if (services.length > 0) { %>
       <div class="card">
@@ -42,7 +43,7 @@
           <% } else { %>
             <div class="log-line obs-log-line obs-log-head">
               <span>Date</span><span>Niveau</span><span>Application</span>
-              <span title="Où tournait l'application quand elle a écrit ce log : Cloud Run (GCP), ECS (AWS, secours après une bascule) ou Azure (Container Apps)">Source ⓘ</span>
+              <span title="D'où vient le log. L'application : Cloud Run (GCP), ECS (AWS, secours après une bascule) ou Azure. Sa base de données : Cloud SQL (GCP), RDS (AWS) ou Azure DB (PostgreSQL Azure).">Source ⓘ</span>
               <span>Message</span>
             </div>
             <% logs.forEach(log => { %>
@@ -50,7 +51,7 @@
               <span class="log-ts"><%= log.timestamp ? new Date(log.timestamp).toLocaleString('fr-FR') : '—' %></span>
               <span class="log-level-<%= log.level %>"><%= log.level %></span>
               <span class="log-service"><%= log.service %></span>
-              <span><span class="badge <%= log.source === 'ECS' ? 'badge-warning' : (log.source === 'Azure' ? 'badge-purple' : 'badge-info') %>"><%= log.source || '—' %></span></span>
+              <span><span class="badge <%= sourceBadge(log.source) %>" title="<%= log.source || '' %>"><%= log.source || '—' %></span></span>
               <span class="obs-log-message"><%= log.message %></span>
             </div>
             <% }) %>

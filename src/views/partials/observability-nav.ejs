@@ -53,6 +53,17 @@
     <button type="submit" class="btn btn-secondary btn-sm">Appliquer</button>
   </span>
   <% } %>
+  <% if (locals.origins) { %>
+  <label title="L'application elle-même (Cloud Run, ECS, Azure) ou sa base de données (Cloud SQL, RDS, Azure DB)">
+    <span>Origine</span>
+    <select name="origin" onchange="this.form.submit()">
+      <option value="">Toutes</option>
+      <% Object.entries(origins).forEach(([key, label]) => { %>
+      <option value="<%= key %>" <%= key === origin ? 'selected' : '' %>><%= label %></option>
+      <% }) %>
+    </select>
+  </label>
+  <% } %>
   <% if (locals.levels) { %>
   <label>
     <span>Niveau</span>
