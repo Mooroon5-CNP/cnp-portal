@@ -37,10 +37,12 @@ From the portal repository after `npm ci`:
 kubectl -n cnp-portal get serviceaccount cnp-portal
 kubectl -n cnp-portal get configmap openbao-ca
 kubectl -n cnp-portal get secret cnp-portal-cloud-env
-node scripts/deploy/apply-app-secret.js /secure/path/credentials.env
+node scripts/deploy/apply-app-secret.js /secure/path/credentials.env --oauth-callback-registered
 ```
 
-The script allowlists application credentials. It generates a strong session key if needed and preserves an existing key. It obtains Argo CD's certificate from `argocd/argocd-secret` and overrides the legacy public-IP/insecure endpoint with verified `https://argocd-server.argocd.svc`; Argo credentials stay in the Terraform Secret. Re-run the script when Argo rotates its certificate, then restart the portal pod. The OAuth redirect is set to `https://portal.apps.mooroon5.fr/auth/github/callback`; the GitHub OAuth application must register that callback.
+The script allowlists application credentials. It generates a strong session key if needed and preserves an existing key. It obtains Argo CD's certificate from `argocd/argocd-secret` and overrides the legacy public-IP/insecure endpoint with verified `https://argocd-server.argocd.svc`; Argo credentials stay in the Terraform Secret. Re-run the script when Argo rotates its certificate, then restart the portal pod.
+
+**OAuth registration gate:** the local `.env` used on 19 November has `GITHUB_REDIRECT_URI=http://localhost:3001/auth/github/callback`. Its client ID and secret are installed unchanged in the portal Secret, while the bootstrap script sets the production callback to `https://portal.apps.mooroon5.fr/auth/github/callback`. Before passing `--oauth-callback-registered`, open the OAuth app associated with that client ID under GitHub **Settings → Developer settings → OAuth apps**, add the exact production URL as another callback, and save. Keep the localhost callback if local development needs it. Then complete a real browser sign-in; a redirect from `/auth/github` alone does not prove registration. If the GitHub app is owned by another account or organization, its owner must make this change.
 
 ## Build and promote an image
 
@@ -66,7 +68,7 @@ curl --fail https://portal.apps.mooroon5.fr/ready
 curl --fail https://portal.apps.mooroon5.fr/api/health
 ```
 
-`/api/health` must report `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Log in with the administrator account, then test the Datadog logs/metrics views and the Argo CD view. Test a real GitHub OAuth login after updating the registered callback. GCP OpenBao's JWT login was verified from the portal pod; a complete variable write/read/isolation/rotation exercise remains a separate acceptance test. Do not claim Azure, AWS, private cloud or failover variable delivery until those instances and runtime identities pass the same live tests.
+`/api/health` must report `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Log in with the administrator account, then test the Datadog logs/metrics views and the Argo CD view. **Complete a real GitHub OAuth login**; `/api/health` checks the separate GitHub App API and does not check the OAuth callback registration. GCP OpenBao's JWT login was verified from the portal pod; a complete variable write/read/isolation/rotation exercise remains a separate acceptance test. Do not claim Azure, AWS, private cloud or failover variable delivery until those instances and runtime identities pass the same live tests.
 
 ## Back up and restore
 
