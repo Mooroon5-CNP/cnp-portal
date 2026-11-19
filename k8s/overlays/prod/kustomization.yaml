@@ -16,7 +16,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal:pending
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:bf88f0ca8feedf977c78ede20a6c5293047d65031eea115d05f6cab83d8fad2c
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
@@ -68,6 +68,3 @@ patches:
         path: /spec/template/spec/containers/0/env/1/value
         value: "INFO"
 
-images:
-  - name: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal
-    newTag: pending
