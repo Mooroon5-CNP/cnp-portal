@@ -63,9 +63,20 @@ describe('isolation', () => {
     }
   });
 
-  test('réseau en refus par défaut ; ouvertures limitées au DNS, à Traefik vers l\'app et à l\'app vers sa base', () => {
+  test('réseau en refus par défaut ; ouvertures limitées au DNS, à Traefik (app et validation ACME) et à l\'app vers sa base', () => {
     const policies = all('dev').map(o => o.spec.forProvider.manifest).filter(m => m.kind === 'NetworkPolicy');
-    expect(policies.map(p => p.metadata.name).sort()).toEqual(['app-vers-base', 'base-depuis-app', 'dns', 'refus-par-defaut', 'traefik-vers-app']);
+    expect(policies.map(p => p.metadata.name).sort()).toEqual(
+      ['app-vers-base', 'base-depuis-app', 'dns', 'refus-par-defaut', 'traefik-vers-app', 'traefik-vers-validation-acme']);
+    // Sans elle, le pod de validation HTTP-01 de cert-manager est injoignable (502) et le certificat n'est jamais délivré.
+    expect(policies.find(p => p.metadata.name === 'traefik-vers-validation-acme').spec).toEqual({
+      podSelector: { matchLabels: { 'acme.cert-manager.io/http01-solver': 'true' } },
+      policyTypes: ['Ingress'],
+      ingress: [{
+        from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+          podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
+        ports: [{ protocol: 'TCP', port: 8089 }],
+      }],
+    });
     expect(policies.find(p => p.metadata.name === 'refus-par-defaut').spec).toEqual({ podSelector: {}, policyTypes: ['Ingress', 'Egress'] });
     // Aucune ouverture par plage d'adresses (donc ni Internet ni l'IMDS 169.254.169.254).
     expect(JSON.stringify(policies)).not.toContain('ipBlock');
