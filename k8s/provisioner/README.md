@@ -17,8 +17,15 @@ To reproduce or update the deployment:
    `kubectl kustomize k8s/overlays/prod` before syncing Argo CD.
 4. From the portal, create a new application with one fictitious variable on
    GCP and Azure. Confirm runtime identity and permissions, read after restart,
-   rotation and denial across applications. Do not promote the AWS failover
-   path until its separate account permissions and ECS role are verified.
+   rotation and denial across applications.
+5. AWS failover (GCP PostgreSQL prod): apply `cnp/aws/20-openbao-runtime-aws-identities.tf`
+   (OIDC provider for the GKE issuer, roles `cnp-portal-gke` and
+   `cnp-openbao-provisioner`, boundary `cnp-runtime/cnp-runtime-exec-boundary`,
+   Crossplane `iam:PassRole` on `role/cnp-runtime/*`). Both pods then obtain AWS
+   credentials from a projected token (audience `sts.amazonaws.com`), no key.
+   For each new failover app the provisioner creates `role/cnp-runtime/cnp-<hash>-exec`,
+   reads it back and simulates it (own `env-*`/`runtime-*` allowed, another
+   app and the database admin secrets denied) before the portal publishes.
 
 The provisioner listens only inside the cluster. Kubernetes TokenReview
 accepts the `cnp-portal` service account with the dedicated audience; the

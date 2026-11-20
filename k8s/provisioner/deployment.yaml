@@ -24,7 +24,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: provisioner
-          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:498298ed2d7dd09d64d21a59a27f37d21d24087b0412be6b388842f5c1f1d4a6
+          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:fe6bab514eb53b66167e5a9fd108790224e8ef6e73a8dce6b289119cc70ee074
           imagePullPolicy: Always
           command: [node, src/services/openbao-runtime-provisioner-server.js]
           ports:
@@ -55,9 +55,27 @@ spec:
                   key: portalPrincipalId
             - name: CNP_AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
+            # Secours AWS : rôle cnp-openbao-provisioner par OIDC GKE (cnp/aws/20), aucune clé. Valeurs non secrètes.
+            - name: CNP_AWS_ACCOUNT_ID
+              value: "626278345026"
+            - name: CNP_AWS_REGION
+              value: eu-west-3
+            - name: CNP_AWS_RUNTIME_BOUNDARY_ARN
+              value: arn:aws:iam::626278345026:policy/cnp-runtime/cnp-runtime-exec-boundary
+            - name: AWS_ROLE_ARN
+              value: arn:aws:iam::626278345026:role/cnp-openbao-provisioner
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: /var/run/secrets/aws/tokens/token
+            - name: AWS_REGION
+              value: eu-west-3
+            - name: AWS_STS_REGIONAL_ENDPOINTS
+              value: regional
           volumeMounts:
             - name: azure-federated-token
               mountPath: /var/run/secrets/azure/tokens
+              readOnly: true
+            - name: aws-web-identity-token
+              mountPath: /var/run/secrets/aws/tokens
               readOnly: true
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -80,3 +98,10 @@ spec:
                   audience: api://AzureADTokenExchange
                   expirationSeconds: 3600
                   path: azure-identity-token
+        - name: aws-web-identity-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: sts.amazonaws.com
+                  expirationSeconds: 3600
+                  path: token

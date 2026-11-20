@@ -26,6 +26,15 @@ class TestObservedRuntimeVariables(unittest.TestCase):
         self.assertFalse(operate.runtime_variables_match(expected,
             {'template': {'containers': [{'env': [{**gcp, 'valueSource': {'secretKeyRef': {'secret': 'cnp-feature', 'version': '6'}}}]}]}}, containers))
 
+    def test_task_must_use_the_application_execution_role(self):
+        role = 'arn:aws:iam::123456789012:role/cnp-runtime/cnp-' + 'a' * 20 + '-exec'
+        expected = {'gcp': [], 'aws': [], 'ownedNames': [], 'aws_execution_role': role}
+        self.assertTrue(operate.aws_execution_role_match(expected, role))
+        self.assertFalse(operate.aws_execution_role_match(expected, 'arn:aws:iam::123456789012:role/ecs-execution-role'))
+        self.assertFalse(operate.aws_execution_role_match(expected, None))
+        # Publication sans variable : pas d'exigence de rôle propre.
+        self.assertTrue(operate.aws_execution_role_match({'gcp': [], 'aws': [], 'ownedNames': []}, 'anything'))
+
 
 if __name__ == '__main__':
     unittest.main()

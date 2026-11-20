@@ -6,6 +6,7 @@ const fs = require('fs');
 const https = require('https');
 const { ensureGcpIdentity } = require('./openbao-gcp-identity');
 const { ensureAzureIdentity } = require('./openbao-azure-identity');
+const { ensureAwsRole } = require('./openbao-aws-identity');
 
 const API = `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT || 443}`;
 const SERVICE_ACCOUNT = 'system:serviceaccount:cnp-portal:cnp-portal';
@@ -33,11 +34,14 @@ app.post('/ensure', async (req, res) => {
     if (!await authorized(token)) return res.status(403).json({ error: 'Identité du portail refusée.' });
     const deployment = req.body || {};
     if (!['gcp', 'azure'].includes(deployment.targetCluster)) return res.status(400).json({ error: 'Cloud non pris en charge.' });
-    if (deployment.targetCluster === 'gcp') await ensureGcpIdentity(deployment);
-    else await ensureAzureIdentity(deployment);
+    if (deployment.targetCluster === 'gcp') {
+      await ensureGcpIdentity(deployment);
+      // Secours AWS (GCP PostgreSQL prod) : rôle d'exécution ECS propre à l'app, créé puis relu et simulé.
+      if (deployment.failoverRequested === true && deployment.environment === 'prod') await ensureAwsRole(deployment);
+    } else await ensureAzureIdentity(deployment);
     return res.json({ ready: true });
   } catch (error) {
-    const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration) [^.]{1,170}\.)$/.test(error.message)
+    const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration|Rôle|Isolation) [^.]{1,170}\.)$/.test(error.message)
       ? error.message : 'Provisionnement runtime indisponible. Réessayez après correction.';
     console.error('OpenBao runtime provisioner:', message);
     return res.status(503).json({ error: message });

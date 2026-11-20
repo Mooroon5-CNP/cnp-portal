@@ -30,7 +30,7 @@ test('portal calls the dedicated service and refuses an unconfirmed identity', a
     readFile: () => 'portal-token', transport };
   await expect(provisionerClient.ensure(dep, options)).resolves.toBeUndefined();
   expect(transport.post).toHaveBeenCalledWith('http://provisioner.test:3001/ensure',
-    { appName: 'test-app', environment: 'dev', targetCluster: 'gcp' },
+    { appName: 'test-app', environment: 'dev', targetCluster: 'gcp', failoverRequested: false },
     expect.objectContaining({ headers: { Authorization: 'Bearer portal-token' } }));
   transport.post.mockResolvedValue({ data: { ready: false } });
   await expect(provisionerClient.ensure(dep, options)).rejects.toThrow('non confirmée');

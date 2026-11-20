@@ -89,6 +89,12 @@ NAMES = {
 TASK_FAMILY = r'cnp-failover-platform-(bootstrap|worker)'
 
 
+def aws_execution_role_match(expected, observed_role):
+    """Rôle d'exécution propre à l'app, quand la publication en porte un : la tâche doit l'utiliser, rien d'autre."""
+    role = expected.get('aws_execution_role') if isinstance(expected, dict) else None
+    return role is None or (isinstance(role, str) and observed_role == role)
+
+
 def aws_runtime_variables_match(expected, containers):
     """Require the exact AWS pins before promoting an ECS task definition."""
     if not isinstance(expected, dict) or not isinstance(containers, list) or len(containers) != 1:
@@ -341,7 +347,8 @@ def execute(request):
         registered = bool(task) and ready(task) and images['aws'] in (observed.get('containerDefinitions') or '')
         if registered and request.get('runtime_variables') is not None:
             try:
-                registered = aws_runtime_variables_match(request['runtime_variables'], json.loads(observed['containerDefinitions']))
+                registered = (aws_runtime_variables_match(request['runtime_variables'], json.loads(observed['containerDefinitions']))
+                              and aws_execution_role_match(request['runtime_variables'], observed.get('executionRoleArn')))
             except (ValueError, TypeError, KeyError):
                 registered = False
         arn = observed.get('arn') or ''
@@ -375,12 +382,14 @@ def execute(request):
         variable_expectation = request.get('runtime_variables')
         variables_ready = variable_expectation is None
         if (images or variable_expectation is not None) and services:
-            containers = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']['containerDefinitions']
+            definition = client.describe_task_definition(taskDefinition=services[0]['taskDefinition'])['taskDefinition']
+            containers = definition['containerDefinitions']
             primary_image = cloudrun.get('template', {}).get('containers', [{}])[0].get('image')
             if images:
                 images_ready = primary_image == images['gcp'] and any(value.get('image') == images['aws'] for value in containers)
             if variable_expectation is not None:
-                variables_ready = runtime_variables_match(variable_expectation, cloudrun, containers)
+                variables_ready = (runtime_variables_match(variable_expectation, cloudrun, containers)
+                                   and aws_execution_role_match(variable_expectation, definition.get('executionRoleArn')))
         return {'verified': primary_ready and standby_ready and target_ready and images_ready and variables_ready,
             'primary_ready': primary_ready, 'standby_ready': standby_ready, 'target_ready': target_ready,
             'images_ready': images_ready, 'variables_ready': variables_ready, 'observed_at': int(time.time())}
