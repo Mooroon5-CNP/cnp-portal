@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnp-portal-azure-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  # cnp/azure: terraform output -json portal_environment (20 November 2026).
+  AZURE_ACRPULL_IDENTITY_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cnp-sov-fr-acrpull-id
+  AZURE_ACR_LOGIN_SERVER: cnpsovfr8e885538.azurecr.io
+  AZURE_CLIENT_ID: 857d9fd0-a948-4451-aa43-64e31550d70c
+  AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN: lemoncliff-141cfc76.francecentral.azurecontainerapps.io
+  AZURE_CONTAINERAPP_ENVIRONMENT_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.App/managedEnvironments/cnp-sov-fr-cae
+  AZURE_COPY_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-it-vnet/subnets/snet-data
+  AZURE_COPY_LOCATION: italynorth
+  AZURE_COPY_REGION_KEY: it
+  AZURE_COPY_RESOURCE_GROUP: cnp-sov-it-rg
+  AZURE_DB_DNS_ZONE_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.Network/privateDnsZones/cnp-sov.postgres.database.azure.com
+  AZURE_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-fr-vnet/subnets/snet-data
+  AZURE_KEY_VAULT_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.KeyVault/vaults/cnpsovkv8e885538
+  AZURE_LOCATION: francecentral
+  AZURE_NAME_PREFIX: cnp-sov
+  AZURE_NAME_SUFFIX: 8e885538
+  AZURE_PUBLIC_DOMAIN: eu.mooroon5.fr
+  AZURE_REGION_KEY: fr
+  AZURE_RESOURCE_GROUP: cnp-sov-fr-rg
+  AZURE_SUBSCRIPTION_ID: 8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e
+  AZURE_TENANT_ID: 17c98ba4-ddf8-454c-ba05-95d5326dcf56

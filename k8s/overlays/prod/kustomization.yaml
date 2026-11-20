@@ -5,6 +5,8 @@ namespace: cnp-portal
 
 resources:
   - ../../base
+  - azure-platform-config.yaml
+  - azure-openbao-identity.yaml
 
 patches:
   - target:
@@ -26,6 +28,9 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: "3000"
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value: {configMapRef: {name: cnp-portal-azure-platform}}
       - op: add
         path: /spec/template/spec/serviceAccountName
         value: cnp-portal
@@ -95,7 +100,6 @@ patches:
             configMapKeyRef:
               name: cnp-openbao-azure-identity
               key: clientId
-              optional: true
   - target:
       kind: Ingress
       name: cnp-portal
