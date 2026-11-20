@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/cnp-portal-release.yml'
+      - '.gitleaksignore'
       - 'Dockerfile'
       - '.dockerignore'
       - 'package.json'
