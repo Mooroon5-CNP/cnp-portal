@@ -7,8 +7,59 @@ resources:
   - ../../base
   - azure-platform-config.yaml
   - azure-openbao-identity.yaml
+  - ../../provisioner
 
 patches:
+  - target:
+      kind: Deployment
+      name: cnp-portal
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cnp-portal
+      spec:
+        template:
+          spec:
+            volumes:
+              - name: openbao-provisioner-token
+                projected:
+                  sources:
+                    - serviceAccountToken:
+                        audience: cnp-runtime-provisioner
+                        expirationSeconds: 600
+                        path: token
+              # Identité AWS du portail (Secrets Manager du secours, opérations failover) : rôle cnp-portal-gke par
+              # OIDC GKE (cnp/aws/20), aucune clé. Jamais les identifiants de Crossplane.
+              - name: aws-web-identity-token
+                projected:
+                  sources:
+                    - serviceAccountToken:
+                        audience: sts.amazonaws.com
+                        expirationSeconds: 3600
+                        path: token
+            containers:
+              - name: cnp-portal
+                env:
+                  - name: CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR
+                    value: http://openbao-runtime-provisioner.cnp-portal.svc:3001
+                  - name: CNP_OPENBAO_RUNTIME_PROVISIONER_TOKEN_FILE
+                    value: /var/run/secrets/openbao-provisioner/token
+                  - name: AWS_ROLE_ARN
+                    value: arn:aws:iam::626278345026:role/cnp-portal-gke
+                  - name: AWS_WEB_IDENTITY_TOKEN_FILE
+                    value: /var/run/secrets/aws/tokens/token
+                  - name: AWS_REGION
+                    value: eu-west-3
+                  - name: AWS_STS_REGIONAL_ENDPOINTS
+                    value: regional
+                volumeMounts:
+                  - name: openbao-provisioner-token
+                    mountPath: /var/run/secrets/openbao-provisioner
+                    readOnly: true
+                  - name: aws-web-identity-token
+                    mountPath: /var/run/secrets/aws/tokens
+                    readOnly: true
   - target:
       kind: Deployment
       name: cnp-portal
@@ -18,7 +69,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:bf88f0ca8feedf977c78ede20a6c5293047d65031eea115d05f6cab83d8fad2c
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:498298ed2d7dd09d64d21a59a27f37d21d24087b0412be6b388842f5c1f1d4a6
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"

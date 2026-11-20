@@ -1,21 +1,20 @@
-# OpenBao runtime provisioner (staged)
+# OpenBao runtime provisioner
 
-This overlay is **not included** in `k8s/overlays/prod`. The current portal
-continues to use its existing identity mappings. Promotion requires:
+This overlay is included in `k8s/overlays/prod`. The dedicated service creates
+runtime identities for new application/environment pairs when variables are used.
+To reproduce or update the deployment:
 
-1. Merge `cnp/feat/openbao-runtime-provisioner`, then apply its GCP and Azure
-   identity resources from reviewed plans with no unexpected changes or deletes.
-   A GCP project IAM administrator must grant the dedicated GSA its declared
-   roles; the current operator account cannot do so.
+1. Apply `cnp/cluster` Terraform GCP and Azure identity resources from reviewed
+   plans. The GCP provisioner service account has the project IAM and service
+   account administration roles; the Azure UAI has three roles scoped to
+   `cnp-sov-shared-rg`.
 2. Verify the non-secret `clientId` and `portalPrincipalId` in
    `azure-identity-config.yaml` against the provisioner UAI and existing portal
    UAI after Azure apply. Verify the projected Azure token can exchange for an
    ARM token from the provisioner pod.
-3. Build the portal image from reviewed `main`, replace
-   `REPLACE_WITH_REVIEWED_PORTAL_DIGEST` with that immutable digest, add this
-   directory to `k8s/overlays/prod/kustomization.yaml` resources, and add
-   `portal-patch.yaml` to its patches. Render and review `kubectl kustomize`
-   before syncing Argo CD.
+3. Build the portal image from reviewed `main`, update the same immutable digest
+   in this Deployment and `k8s/overlays/prod/kustomization.yaml`, and review
+   `kubectl kustomize k8s/overlays/prod` before syncing Argo CD.
 4. From the portal, create a new application with one fictitious variable on
    GCP and Azure. Confirm runtime identity and permissions, read after restart,
    rotation and denial across applications.
