@@ -63,8 +63,11 @@ class Iam:
         def decide(arn):
             ok = any(arn.startswith(pattern.rstrip("*")) for pattern in allowed)
             return "allowed" if ok else "implicitDeny"
-        return {"EvaluationResults": [{"EvalActionName": ActionNames[0], "EvalResourceName": arn, "EvalDecision": decide(arn)}
-                                      for arn in ResourceArns]}
+        # Forme réelle d'AWS pour plusieurs ressources : gabarit au niveau de l'action, décisions dans ResourceSpecificResults.
+        specific = [{"EvalResourceName": arn, "EvalResourceDecision": decide(arn)} for arn in ResourceArns]
+        return {"EvaluationResults": [{"EvalActionName": ActionNames[0],
+                                       "EvalResourceName": "arn:aws:secretsmanager:${Region}:${Account}:secret:${SecretId}",
+                                       "EvalDecision": "implicitDeny", "ResourceSpecificResults": specific}]}
 
 
 class TestAwsRuntimeRole(unittest.TestCase):

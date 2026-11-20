@@ -106,7 +106,16 @@ def _simulate(iam, arn, app, account, region):
         if _code(error) in {"NoSuchEntity", "NoSuchEntityException"}:
             raise NotReady() from None
         raise
-    decisions = {item.get("EvalResourceName"): item.get("EvalDecision") for item in results}
+    # Plusieurs ressources pour une action : AWS renvoie un seul résultat dont EvalResourceName est un gabarit
+    # (arn:aws:secretsmanager:${Region}:...) et place les décisions par ressource dans ResourceSpecificResults
+    # (forme relevée le 20/11/2026 sur le compte réel). Une ressource absente de la réponse compte comme refusée.
+    decisions = {}
+    for item in results:
+        specific = item.get("ResourceSpecificResults") or []
+        if specific:
+            decisions.update({entry.get("EvalResourceName"): entry.get("EvalResourceDecision") for entry in specific})
+        else:
+            decisions[item.get("EvalResourceName")] = item.get("EvalDecision")
     for resource, wanted in expected.items():
         allowed = decisions.get(resource) == "allowed"
         if allowed != (wanted == "allowed"):
