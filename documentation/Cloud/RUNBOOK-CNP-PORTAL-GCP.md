@@ -8,6 +8,8 @@
 - URL: `https://portal.apps.mooroon5.fr` via ingress-nginx `34.163.88.46`.
 - One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
+- Production revision on 20 November 2026: `77d3985f8ba43bcda51b68aaa39547288c22c046` (PR #52). Argo CD reported `Synced/Healthy`, the rollout completed, and `/api/health` returned HTTP 200 with GitHub, Argo CD, Datadog, Kubernetes and Crossplane all `ok`. The public URL returned HTTP 302 to sign-in. These checks do not prove an application deployment with variables.
+- Current variable-mode status and the remaining automation work: [OpenBao deployment status](../openbao/ETAT-DEPLOIEMENT-20261120.md).
 - GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and the current `cnp/cluster` AWS and private OpenBao endpoints also accepted the portal pod's JWT during read-only checks. The private JWT audience is `https://openbao.prive.apps.mooroon5.fr:8200` **without a trailing slash**; the slash form returns HTTP 400. Application runtime identities and real variable delivery still require verification before these modes can be declared ready.
 
 ## Recreate the platform bootstrap
