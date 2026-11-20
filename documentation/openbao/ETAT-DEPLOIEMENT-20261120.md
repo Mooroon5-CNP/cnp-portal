@@ -71,12 +71,19 @@ droits sont présents et bornés à cette application. En cas d'échec, il pourr
 reprendre la même demande sans élargir les droits du portail ni laisser de
 ressources en double.
 
-Les accès actuels ne suffisent pas à l'installer : le compte `gcloud` actif est
-`epita.bucamp@gmail.com`, avec les rôles Editor et Container Admin, mais sans
-droit d'accorder des rôles IAM. Dans `cnp/cluster`, Thomas, Basile et Nazim
-sont listés comme administrateurs IAM. Le compte AWS de secours
-`626278345026` reste inaccessible. Tant que ces accès et le provisionneur ne
-sont pas en place, aucun mode avec variables n'est déclaré prêt.
+**Azure :** un plan Terraform ciblé (5 ajouts, 0 modification, 0 destruction)
+a appliqué et vérifié l'identité managée `cnp-sov-openbao-provisioner-id`, sa
+fédération pour la KSA `cnp-portal/openbao-runtime-provisioner` et trois rôles
+attribués au niveau du groupe de ressources partagé. Son Client ID non secret
+est `c5956a60-a4fc-4942-a229-d135e9ca4342`. Cela prépare les droits du
+provisionneur ; les identités applicatives ne sont pas créées. Le code du
+provisionneur du portail reste en PR brouillon #54, désactivé en production.
+
+**GCP :** le compte `gcloud` actif `epita.bucamp@gmail.com` a les rôles Editor
+et Container Admin, mais ne peut pas accorder de rôles IAM. Dans `cnp/cluster`,
+Thomas, Basile et Nazim sont listés comme administrateurs IAM. **AWS :** le
+compte de secours `626278345026` reste inaccessible. Le provisionneur n'est
+donc pas actif et aucun mode avec variables n'est déclaré prêt.
 
 En une heure, avec les accès actuels, on peut vérifier les chemins GCP/Azure,
 faire une recette privée si le cluster et l'application témoin sont accessibles,
