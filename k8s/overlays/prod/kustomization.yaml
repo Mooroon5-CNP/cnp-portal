@@ -73,12 +73,9 @@ patches:
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/0/value
-        value: "production"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/1/value
-        value: "3000"
+      # Pas de remplacement par position dans env (NODE_ENV/PORT sont déjà production/3000 dans la base) : le patch
+      # ci-dessus insère des variables en tête de liste, et env/0, env/1 écrasaient alors l'adresse du provisionneur
+      # et le chemin de son jeton (21/11/2026). Ajouter des variables par env/- ou par nom, jamais par indice.
       - op: add
         path: /spec/template/spec/containers/0/envFrom/-
         value: {configMapRef: {name: cnp-portal-azure-platform}}
