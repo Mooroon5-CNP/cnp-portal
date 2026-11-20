@@ -124,6 +124,24 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: PRIVATE_CERT_ISSUER, value: "letsencrypt-prod"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_AWS_ADDR, value: "https://openbao-aws.apps.mooroon5.fr:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_AWS_AUDIENCE, value: "https://openbao-aws.apps.mooroon5.fr:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_AWS_ROLE, value: "cnp-control"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_AWS_MOUNT, value: "cnp-runtime"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_AWS_ACCOUNT_ID, value: "626278345026"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_AWS_REGION, value: "eu-west-3"}
   - target:
       kind: Ingress
       name: cnp-portal
