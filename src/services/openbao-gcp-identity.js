@@ -24,13 +24,19 @@ async function request(transport, token, method, url, data) {
     return response.data;
   } catch (error) {
     const status = error.response?.status;
+    // Compte de service tout juste créé, pas encore visible d'IAM : 400 « Service account … does not exist »
+    // (relevé le 21/11/2026 sur setIamPolicy du projet, juste après la création). Seul cas réessayé.
+    const notYetVisible = status === 400 && /does not exist/i.test(String(error.response?.data?.error?.message || ''));
     throw Object.assign(new Error(`Provisionnement GCP indisponible ou accès refusé${Number.isInteger(status) ? ` (HTTP ${status})` : ''}.`),
-      { status: Number.isInteger(status) ? status : undefined });
+      { status: Number.isInteger(status) ? status : undefined, notYetVisible });
   }
 }
 
-async function addMember(transport, token, readMethod, readUrl, writeUrl, role, member) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function addMember(transport, token, readMethod, readUrl, writeUrl, role, member, sleep = wait) {
+  // 3 essais pour les conflits d'etag (409), 12 attentes de 5 s au plus pour la propagation d'un compte neuf.
+  for (let attempt = 0, waits = 0; attempt < 3; attempt += 1) {
     const policy = await request(transport, token, readMethod, readUrl,
       readMethod === 'POST' ? { options: { requestedPolicyVersion: 3 } } : undefined);
     const binding = (policy.bindings || []).find(item => item.role === role && !item.condition);
@@ -41,13 +47,16 @@ async function addMember(transport, token, readMethod, readUrl, writeUrl, role, 
     try {
       await request(transport, token, 'POST', writeUrl, { policy: { ...policy, bindings } });
       return;
-    } catch (error) { if (error.status !== 409 || attempt === 2) throw error; }
+    } catch (error) {
+      if (error.notYetVisible && waits < 12) { waits += 1; attempt -= 1; await sleep(5000); continue; }
+      if (error.status !== 409 || attempt === 2) throw error;
+    }
   }
 }
 
 async function ensureGcpIdentity(deployment, { project = process.env.GCP_PROJECT,
   crossplaneServiceAccount = process.env.CNP_GCP_CROSSPLANE_SA,
-  transport = axios, accessToken = googleAccessToken } = {}) {
+  transport = axios, accessToken = googleAccessToken, sleep = wait } = {}) {
   const account = accountFor(deployment, project);
   if (!EMAIL.test(crossplaneServiceAccount || '') || crossplaneServiceAccount === account.email) {
     throw new Error('Identité GCP Crossplane manquante ou invalide.');
@@ -72,10 +81,10 @@ async function ensureGcpIdentity(deployment, { project = process.env.GCP_PROJECT
   }
   const resource = `${base}/${existing.uniqueId || account.email}`;
   await addMember(transport, token, 'POST', `${resource}:getIamPolicy`, `${resource}:setIamPolicy`,
-    'roles/iam.serviceAccountUser', `serviceAccount:${crossplaneServiceAccount}`);
+    'roles/iam.serviceAccountUser', `serviceAccount:${crossplaneServiceAccount}`, sleep);
   const projectBase = `https://cloudresourcemanager.googleapis.com/v1/projects/${project}`;
   await addMember(transport, token, 'POST', `${projectBase}:getIamPolicy`, `${projectBase}:setIamPolicy`,
-    'roles/cloudsql.client', `serviceAccount:${account.email}`);
+    'roles/cloudsql.client', `serviceAccount:${account.email}`, sleep);
   return account.email;
 }
 
