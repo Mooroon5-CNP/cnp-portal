@@ -38,6 +38,11 @@ patches:
                         audience: sts.amazonaws.com
                         expirationSeconds: 3600
                         path: token
+              # Paramètres du failover communs à toutes les apps (Runbook/PORTAIL-CLUSTER.md §3) : identifiants de ressources
+              # et CA publique de RDS, aucun secret. automation.kube_context à null : le moteur prend la config du pod.
+              - name: failover-platform
+                configMap:
+                  name: cnp-failover-platform
             containers:
               - name: cnp-portal
                 env:
@@ -60,6 +65,9 @@ patches:
                   - name: aws-web-identity-token
                     mountPath: /var/run/secrets/aws/tokens
                     readOnly: true
+                  - name: failover-platform
+                    mountPath: /etc/cnp-failover
+                    readOnly: true
   - target:
       kind: Deployment
       name: cnp-portal
@@ -69,7 +77,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:536b9a26a0e235aa28952f721a9ee4f5be1194bfc9bb99486ea4eb84595a227a
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:cbad971e89d24923b29b8208277e1b3847f20a22456bc135cdadbe8bf5ea5733
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
@@ -190,6 +198,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: CNP_AWS_REGION, value: "eu-west-3"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_FAILOVER_PLATFORM, value: "/etc/cnp-failover/failover-platform.json"}
   - target:
       kind: Ingress
       name: cnp-portal
@@ -204,3 +215,7 @@ patches:
         path: /metadata/annotations/cert-manager.io~1cluster-issuer
         value: letsencrypt-prod
 
+configMapGenerator:
+  - name: cnp-failover-platform
+    files:
+      - failover-platform.json
