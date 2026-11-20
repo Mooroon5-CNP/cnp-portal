@@ -61,6 +61,23 @@ déterministe, vérifier ses rôles, attendre leur propagation, enregistrer son
 identifiant puis seulement publier les variables et le déploiement. Une reprise
 après panne doit éviter les ressources orphelines et les doubles droits.
 
+### Provisionneur dédié
+
+Le provisionnement sera un outil ou service séparé du portail. Il créera de
+façon idempotente les identités et droits d'une application et d'un
+environnement, dans le projet GCP et le groupe de ressources Azure partagés.
+Avant toute publication de variables, il vérifiera que les ressources et leurs
+droits sont présents et bornés à cette application. En cas d'échec, il pourra
+reprendre la même demande sans élargir les droits du portail ni laisser de
+ressources en double.
+
+Les accès actuels ne suffisent pas à l'installer : le compte `gcloud` actif est
+`epita.bucamp@gmail.com`, avec les rôles Editor et Container Admin, mais sans
+droit d'accorder des rôles IAM. Dans `cnp/cluster`, Thomas, Basile et Nazim
+sont listés comme administrateurs IAM. Le compte AWS de secours
+`626278345026` reste inaccessible. Tant que ces accès et le provisionneur ne
+sont pas en place, aucun mode avec variables n'est déclaré prêt.
+
 En une heure, avec les accès actuels, on peut vérifier les chemins GCP/Azure,
 faire une recette privée si le cluster et l'application témoin sont accessibles,
 et préparer le changement général. On ne peut **pas prouver 100 % des modes en
