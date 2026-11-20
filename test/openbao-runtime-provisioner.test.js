@@ -91,6 +91,56 @@ test('GCP provisioner creates a dedicated account and only expected IAM members'
     || item.url.includes(':getIamPolicy'))).toBe(true);
 });
 
+test('GCP provisioner waits for a new account to become visible to IAM', async () => {
+  const account = accountFor(dep, 'test-project-12345');
+  let serviceAccount;
+  let invisible = 2;
+  const policies = { service: { bindings: [] }, project: { bindings: [] } };
+  const transport = { request: jest.fn(async ({ method, url, data }) => {
+    if (url.endsWith(`/serviceAccounts/${account.email}`) && method === 'GET') {
+      if (!serviceAccount) throw missing(404);
+      return { data: serviceAccount };
+    }
+    if (url.endsWith('/serviceAccounts') && method === 'POST') {
+      serviceAccount = { email: account.email, displayName: data.serviceAccount.displayName };
+      return { data: serviceAccount };
+    }
+    if (url.includes(':getIamPolicy')) return { data: url.includes('cloudresourcemanager') ? policies.project : policies.service };
+    if (url.includes('cloudresourcemanager') && url.includes(':setIamPolicy') && invisible > 0) {
+      invisible -= 1;
+      throw Object.assign(new Error('400'), { response: { status: 400,
+        data: { error: { message: `Exception calling IAM: Service account ${account.email} does not exist.` } } } });
+    }
+    if (url.includes(':setIamPolicy')) {
+      policies[url.includes('cloudresourcemanager') ? 'project' : 'service'] = data.policy;
+      return { data: data.policy };
+    }
+    throw new Error(`Unexpected ${method} ${url}`);
+  }) };
+  const sleep = jest.fn(async () => {});
+  await expect(ensureGcpIdentity(dep, { project: 'test-project-12345',
+    crossplaneServiceAccount: 'crossplane@test-project-12345.iam.gserviceaccount.com',
+    transport, accessToken: async () => 'fake-token', sleep })).resolves.toBe(account.email);
+  expect(sleep).toHaveBeenCalledTimes(2);
+  expect(policies.project.bindings).toEqual([{ role: 'roles/cloudsql.client', members: [`serviceAccount:${account.email}`] }]);
+});
+
+test('GCP provisioner does not retry other HTTP 400 errors', async () => {
+  const account = accountFor(dep, 'test-project-12345');
+  const transport = { request: jest.fn(async ({ method, url }) => {
+    if (url.endsWith(`/serviceAccounts/${account.email}`) && method === 'GET') {
+      return { data: { email: account.email, displayName: account.displayName } };
+    }
+    if (url.includes(':getIamPolicy')) return { data: { bindings: [] } };
+    throw Object.assign(new Error('400'), { response: { status: 400, data: { error: { message: 'Invalid argument.' } } } });
+  }) };
+  const sleep = jest.fn(async () => {});
+  await expect(ensureGcpIdentity(dep, { project: 'test-project-12345',
+    crossplaneServiceAccount: 'crossplane@test-project-12345.iam.gserviceaccount.com',
+    transport, accessToken: async () => 'fake-token', sleep })).rejects.toThrow('HTTP 400');
+  expect(sleep).not.toHaveBeenCalled();
+});
+
 test('GCP provisioner refuses an existing account with another owner label', async () => {
   const account = accountFor(dep, 'test-project-12345');
   const transport = { request: jest.fn(async () => ({ data: { email: account.email, displayName: 'Other owner' } })) };
