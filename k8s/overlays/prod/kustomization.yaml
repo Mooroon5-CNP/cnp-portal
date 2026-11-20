@@ -7,8 +7,39 @@ resources:
   - ../../base
   - azure-platform-config.yaml
   - azure-openbao-identity.yaml
+  - ../../provisioner
 
 patches:
+  - target:
+      kind: Deployment
+      name: cnp-portal
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cnp-portal
+      spec:
+        template:
+          spec:
+            volumes:
+              - name: openbao-provisioner-token
+                projected:
+                  sources:
+                    - serviceAccountToken:
+                        audience: cnp-runtime-provisioner
+                        expirationSeconds: 600
+                        path: token
+            containers:
+              - name: cnp-portal
+                env:
+                  - name: CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR
+                    value: http://openbao-runtime-provisioner.cnp-portal.svc:3001
+                  - name: CNP_OPENBAO_RUNTIME_PROVISIONER_TOKEN_FILE
+                    value: /var/run/secrets/openbao-provisioner/token
+                volumeMounts:
+                  - name: openbao-provisioner-token
+                    mountPath: /var/run/secrets/openbao-provisioner
+                    readOnly: true
   - target:
       kind: Deployment
       name: cnp-portal
@@ -18,7 +49,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:bf88f0ca8feedf977c78ede20a6c5293047d65031eea115d05f6cab83d8fad2c
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:498298ed2d7dd09d64d21a59a27f37d21d24087b0412be6b388842f5c1f1d4a6
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
