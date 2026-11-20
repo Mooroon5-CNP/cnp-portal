@@ -1,7 +1,6 @@
 'use strict';
 
 const { randomUUID } = require('crypto');
-const metadata = require('../models/deployment_variables');
 const { domainsForDeployment } = require('./openbao-routing');
 const { OpenBaoClient } = require('./openbao-client');
 
@@ -22,7 +21,10 @@ function validate(values) {
   return entries;
 }
 
-function service({ model = metadata, clientFor = domain => OpenBaoClient.fromEnvironment(domain), uuid = randomUUID } = {}) {
+// Base SQLite chargée à l'appel de service(), pas à l'import : le provisionneur des identités runtime importe validate()
+// par openbao-delivery-gcp/azure, sans base ni disque inscriptible (readOnlyRootFilesystem). Un chargement à l'import
+// le faisait planter au démarrage (SQLITE_CANTOPEN, 21/11/2026). Pour le portail, rien ne change.
+function service({ model = require('../models/deployment_variables'), clientFor = domain => OpenBaoClient.fromEnvironment(domain), uuid = randomUUID } = {}) {
   async function prepare(deployment, values, { allowEmpty = false } = {}) {
     const entries = validate(values);
     if (!entries.length && !allowEmpty) return null;
