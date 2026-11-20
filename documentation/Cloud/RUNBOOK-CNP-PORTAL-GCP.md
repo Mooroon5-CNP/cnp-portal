@@ -8,7 +8,7 @@
 - URL: `https://portal.apps.mooroon5.fr` via ingress-nginx `34.163.88.46`.
 - One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
-- GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and private OpenBao also accept the portal pod's JWT. The private JWT audience is `https://openbao.prive.apps.mooroon5.fr:8200` **without a trailing slash**; the slash form returns HTTP 400. AWS OpenBao is not installed in the checked failover account. Runtime identities, cloud settings and real variable delivery still need verification before these modes can be declared ready.
+- GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and the current `cnp/cluster` AWS and private OpenBao endpoints also accepted the portal pod's JWT during read-only checks. The private JWT audience is `https://openbao.prive.apps.mooroon5.fr:8200` **without a trailing slash**; the slash form returns HTTP 400. Application runtime identities and real variable delivery still require verification before these modes can be declared ready.
 
 ## Recreate the platform bootstrap
 
@@ -66,7 +66,9 @@ kubectl -n cnp-portal rollout status deployment/cnp-portal --timeout=120s
 
 Check that the rendered Deployment has `PORT=3000`, one replica and the intended digest before syncing. `Recreate` prevents concurrent SQLite writers.
 
-The production overlay includes the Azure endpoint, a projected Entra token and an optional `cnp-openbao-azure-identity` ConfigMap reference. The optional reference keeps the portal available before that identity is provisioned; it does **not** make Azure variable delivery ready. The private endpoint and JWT audience are present. `PRIVATE_ECR_REGISTRY` is set to the account and region recorded in `cnp-cluster/Runbook/CLOUD-PRIVE-K3S.md`; compare it to the live private-cloud Terraform `portal_environment` output before testing a private deployment. Do not enable derived runtime identities or AWS routing until the corresponding cloud resources exist.
+The Azure platform ConfigMap in this overlay is generated from `cnp/azure`'s non-secret `terraform output -json portal_environment`; the Azure identity ConfigMap holds `terraform output -raw openbao_portal_client_id`. Re-export and review both values after an Azure infrastructure replacement before syncing the portal. The portal's projected Kubernetes token successfully exchanged for an Entra token on 20 November 2026. This proves portal federation, but each Azure application still needs its own runtime identity and Key Vault before deployment with variables.
+
+The private endpoint and JWT audience are prepared in a separate PR. The four `PRIVATE_*` values in that PR match the private-cloud Terraform `portal_environment` output supplied on 20 November 2026. Verify an application deployment on k3s before declaring variable delivery ready. Do not enable derived runtime identities or AWS routing until the corresponding cloud resources exist.
 
 ## Verify the release
 

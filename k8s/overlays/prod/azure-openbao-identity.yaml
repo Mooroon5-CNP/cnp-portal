@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnp-openbao-azure-identity
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  # cnp/azure: terraform output -raw openbao_portal_client_id (20 November 2026).
+  clientId: e488f747-5da1-44c8-a9d4-a9611227bfdc

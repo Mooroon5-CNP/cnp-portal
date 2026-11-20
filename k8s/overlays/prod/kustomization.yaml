@@ -5,6 +5,8 @@ namespace: cnp-portal
 
 resources:
   - ../../base
+  - azure-platform-config.yaml
+  - azure-openbao-identity.yaml
 
 patches:
   - target:
@@ -26,6 +28,9 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: "3000"
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value: {configMapRef: {name: cnp-portal-azure-platform}}
       - op: add
         path: /spec/template/spec/serviceAccountName
         value: cnp-portal
@@ -95,7 +100,6 @@ patches:
             configMapKeyRef:
               name: cnp-openbao-azure-identity
               key: clientId
-              optional: true
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: CNP_OPENBAO_PRIVATE_ADDR, value: "https://openbao.prive.apps.mooroon5.fr:8200"}
@@ -114,6 +118,12 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: PRIVATE_ECR_REGISTRY, value: "626278345026.dkr.ecr.eu-west-3.amazonaws.com"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: PRIVATE_PROVIDER_CONFIG, value: "cnp-prive"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: PRIVATE_CERT_ISSUER, value: "letsencrypt-prod"}
   - target:
       kind: Ingress
       name: cnp-portal
