@@ -104,6 +104,12 @@ test('Azure provisioner creates isolated resources and verifies role assignments
   const names = namesFor(dep, subscription, 'cnp-shared');
   const resources = new Map();
   const transport = { request: jest.fn(async ({ method, url, data }) => {
+    if (method === 'GET' && url.includes('/roleDefinitions?')) {
+      const roleName = decodeURIComponent(url).includes('Key Vault Secrets Officer')
+        ? 'Key Vault Secrets Officer' : 'Key Vault Secrets User';
+      return { data: { value: [{ id: `/subscriptions/${subscription}/providers/Microsoft.Authorization/roleDefinitions/${roleName.split(' ').pop().toLowerCase()}`,
+        properties: { roleName } }] } };
+    }
     if (method === 'GET') {
       if (!resources.has(url)) throw missing(404);
       return { data: resources.get(url) };

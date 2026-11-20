@@ -11,8 +11,8 @@ const API = 'https://management.azure.com';
 const IDENTITY_VERSION = '2024-11-30';
 const VAULT_VERSION = '2024-11-01';
 const RBAC_VERSION = '2022-04-01';
-const SECRETS_OFFICER = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7';
-const SECRETS_USER = '4633458b-17de-408a-b874-0445c86b69e6';
+const SECRETS_OFFICER = 'Key Vault Secrets Officer';
+const SECRETS_USER = 'Key Vault Secrets User';
 
 function namesFor(deployment, subscription, group) {
   if (!APP.test(deployment?.appName || '') || !['dev', 'prod'].includes(deployment.environment)
@@ -61,15 +61,25 @@ async function getOrCreate(transport, token, path, body) {
   return resource;
 }
 
-async function ensureAssignment(transport, token, vaultId, role, principal) {
-  const id = assignmentGuid(vaultId, role, principal);
+async function roleDefinition(transport, token, vaultId, roleName) {
+  const filter = encodeURIComponent(`roleName eq '${roleName}'`);
+  const result = await request(transport, token, 'GET',
+    `${vaultId}/providers/Microsoft.Authorization/roleDefinitions?$filter=${filter}&api-version=${RBAC_VERSION}`);
+  const matches = (result.value || []).filter(item => item.properties?.roleName === roleName);
+  if (matches.length !== 1 || !matches[0].id?.startsWith('/subscriptions/')) {
+    throw new Error('Définition du rôle Azure introuvable.');
+  }
+  return matches[0].id;
+}
+
+async function ensureAssignment(transport, token, vaultId, roleId, principal) {
+  const id = assignmentGuid(vaultId, roleId, principal);
   const path = `${vaultId}/providers/Microsoft.Authorization/roleAssignments/${id}?api-version=${RBAC_VERSION}`;
-  const expectedRole = `/subscriptions/${vaultId.split('/')[2]}/providers/Microsoft.Authorization/roleDefinitions/${role}`;
   const assignment = await getOrCreate(transport, token, path, { properties: {
-    roleDefinitionId: expectedRole, principalId: principal, principalType: 'ServicePrincipal',
+    roleDefinitionId: roleId, principalId: principal, principalType: 'ServicePrincipal',
   } });
   if (assignment.properties?.principalId?.toLowerCase() !== principal.toLowerCase()
-    || assignment.properties?.roleDefinitionId?.toLowerCase() !== expectedRole.toLowerCase()) {
+    || assignment.properties?.roleDefinitionId?.toLowerCase() !== roleId.toLowerCase()) {
     throw new Error('Attribution Azure existante hors du périmètre attendu.');
   }
 }
@@ -100,8 +110,10 @@ async function ensureAzureIdentity(deployment, { subscription = process.env.AZUR
     || vault.tags?.cnp_environment !== names.key || vault.properties?.enableRbacAuthorization !== true) {
     throw new Error('Coffre Azure existant hors du périmètre attendu.');
   }
-  await ensureAssignment(transport, token, names.vault, SECRETS_OFFICER, portalPrincipalId);
-  await ensureAssignment(transport, token, names.vault, SECRETS_USER, identity.properties.principalId);
+  const officer = await roleDefinition(transport, token, names.vault, SECRETS_OFFICER);
+  const user = await roleDefinition(transport, token, names.vault, SECRETS_USER);
+  await ensureAssignment(transport, token, names.vault, officer, portalPrincipalId);
+  await ensureAssignment(transport, token, names.vault, user, identity.properties.principalId);
   return { identity: names.identity, vault: names.vault };
 }
 
