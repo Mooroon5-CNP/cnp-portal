@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnp-openbao-provisioner-azure
+  namespace: cnp-portal
+data:
+  clientId: c5956a60-a4fc-4942-a229-d135e9ca4342
+  portalPrincipalId: 7508160e-f9d8-4173-8e68-e3494f20849a
