@@ -83,6 +83,8 @@ test('GCP provisioner creates a dedicated account and only expected IAM members'
     members: ['serviceAccount:crossplane@test-project-12345.iam.gserviceaccount.com'] }]);
   expect(policies.project.bindings).toEqual([{ role: 'roles/cloudsql.client',
     members: [`serviceAccount:${account.email}`] }]);
+  expect(requests.filter(item => item.url.includes(':getIamPolicy')).every(item =>
+    item.data.options.requestedPolicyVersion === 3)).toBe(true);
   const firstCount = requests.length;
   await ensureGcpIdentity(dep, options);
   expect(requests.slice(firstCount).every(item => !['PUT', 'POST'].includes(item.method)

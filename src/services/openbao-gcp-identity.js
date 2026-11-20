@@ -54,21 +54,24 @@ async function ensureGcpIdentity(deployment, { project = process.env.GCP_PROJECT
   }
   const token = await accessToken(transport);
   const base = `https://iam.googleapis.com/v1/projects/${project}/serviceAccounts`;
-  const resource = `${base}/${account.email}`;
+  const lookup = `${base}/${account.email}`;
   let existing;
-  try { existing = await request(transport, token, 'GET', resource); }
+  try { existing = await request(transport, token, 'GET', lookup); }
   catch (error) { if (error.status !== 404) throw error; }
   if (!existing) {
     try {
-      await request(transport, token, 'POST', base, { accountId: account.id,
+      existing = await request(transport, token, 'POST', base, { accountId: account.id,
         serviceAccount: { displayName: account.displayName } });
-    } catch (error) { if (error.status !== 409) throw error; }
-    existing = await request(transport, token, 'GET', resource);
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      existing = await request(transport, token, 'GET', lookup);
+    }
   }
   if (existing.email !== account.email || existing.displayName !== account.displayName) {
     throw new Error('Compte GCP runtime existant hors du périmètre attendu.');
   }
-  await addMember(transport, token, 'GET', `${resource}:getIamPolicy?options.requestedPolicyVersion=3`, `${resource}:setIamPolicy`,
+  const resource = `${base}/${existing.uniqueId || account.email}`;
+  await addMember(transport, token, 'POST', `${resource}:getIamPolicy`, `${resource}:setIamPolicy`,
     'roles/iam.serviceAccountUser', `serviceAccount:${crossplaneServiceAccount}`);
   const projectBase = `https://cloudresourcemanager.googleapis.com/v1/projects/${project}`;
   await addMember(transport, token, 'POST', `${projectBase}:getIamPolicy`, `${projectBase}:setIamPolicy`,

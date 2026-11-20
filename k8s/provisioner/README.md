@@ -7,9 +7,9 @@ continues to use its existing identity mappings. Promotion requires:
    identity resources from reviewed plans with no unexpected changes or deletes.
    A GCP project IAM administrator must grant the dedicated GSA its declared
    roles; the current operator account cannot do so.
-2. Create `cnp-portal/cnp-openbao-provisioner-azure` with the non-secret
-   `clientId` output of the provisioner UAI and `portalPrincipalId` of the
-   existing portal UAI. Verify the projected Azure token can exchange for an
+2. Verify the non-secret `clientId` and `portalPrincipalId` in
+   `azure-identity-config.yaml` against the provisioner UAI and existing portal
+   UAI after Azure apply. Verify the projected Azure token can exchange for an
    ARM token from the provisioner pod.
 3. Build the portal image from reviewed `main`, replace
    `REPLACE_WITH_REVIEWED_PORTAL_DIGEST` with that immutable digest, add this
