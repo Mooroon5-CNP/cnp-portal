@@ -128,20 +128,19 @@ def _simulate(iam, arn, app, account, region):
 def ensure(request, iam, sleep=time.sleep, attempts=8):
     app, account, region, boundary = _validate(request)
     name = role_name(app)
+    # Création tentée d'emblée, sans GetRole préalable : pour un rôle absent, IAM évalue GetRole sur role/<nom> SANS le
+    # chemin, que la politique du provisionneur (role/cnp-runtime/*) n'autorise pas → AccessDenied au lieu de
+    # NoSuchEntity (relevé le 21/11/2026 sur le compte réel). Un rôle homonyme hors du chemin fait échouer la création
+    # (EntityAlreadyExists, noms uniques) puis la relecture ci-dessous (AccessDenied) : refus, jamais d'adoption.
     try:
-        iam.get_role(RoleName=name)
-    except Exception as error:
-        if _code(error) != "NoSuchEntity":
+        iam.create_role(Path=PATH, RoleName=name, AssumeRolePolicyDocument=json.dumps(trust(account)),
+                        PermissionsBoundary=boundary, MaxSessionDuration=3600,
+                        Description=f"CNP secours AWS : execution ECS de {app} (variables)",
+                        Tags=[{"Key": "Application", "Value": app}, {"Key": "Environment", "Value": "prod"},
+                              {"Key": "ManagedBy", "Value": MANAGED_BY}])
+    except Exception as create_error:
+        if _code(create_error) != "EntityAlreadyExists":
             raise
-        try:
-            iam.create_role(Path=PATH, RoleName=name, AssumeRolePolicyDocument=json.dumps(trust(account)),
-                            PermissionsBoundary=boundary, MaxSessionDuration=3600,
-                            Description=f"CNP secours AWS : execution ECS de {app} (variables)",
-                            Tags=[{"Key": "Application", "Value": app}, {"Key": "Environment", "Value": "prod"},
-                                  {"Key": "ManagedBy", "Value": MANAGED_BY}])
-        except Exception as create_error:
-            if _code(create_error) != "EntityAlreadyExists":
-                raise
     # Politique écrite avant la relecture : un rôle créé lors d'un essai interrompu est complété, jamais élargi
     # (la condition IAM sur la limite de droits interdit l'écriture sinon, et _check refuse tout autre écart).
     role = iam.get_role(RoleName=name)["Role"]

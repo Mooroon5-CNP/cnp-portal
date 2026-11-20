@@ -31,13 +31,17 @@ class Iam:
         self.created = []
 
     def get_role(self, RoleName):
-        if RoleName not in self.roles:
-            raise AwsError("NoSuchEntity")
+        # Comportement réel : un rôle absent est évalué sur role/<nom> sans chemin, hors des droits du provisionneur.
+        # Un rôle hors de /cnp-runtime/ est de même illisible pour lui.
+        if RoleName not in self.roles or self.roles[RoleName]["Path"] != "/cnp-runtime/":
+            raise AwsError("AccessDenied")
         return {"Role": copy.deepcopy(self.roles[RoleName])}
 
     def create_role(self, **kwargs):
-        self.created.append(kwargs)
         name = kwargs["RoleName"]
+        if name in self.roles:
+            raise AwsError("EntityAlreadyExists")
+        self.created.append(kwargs)
         self.roles[name] = {"RoleName": name, "Path": kwargs["Path"], "Arn": f"arn:aws:iam::{ACCOUNT}:role{kwargs['Path']}{name}",
                             "PermissionsBoundary": {"PermissionsBoundaryArn": kwargs["PermissionsBoundary"]},
                             "AssumeRolePolicyDocument": json.loads(kwargs["AssumeRolePolicyDocument"]), "Tags": kwargs["Tags"]}
@@ -107,6 +111,14 @@ class TestAwsRuntimeRole(unittest.TestCase):
     def test_refuses_existing_role_outside_scope(self):
         name = identity.role_name("sample-app")
         iam = Iam(role={"RoleName": name, "Path": "/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/{name}", "Tags": []})
+        with self.assertRaises(AwsError):  # relecture refusée : arrêt, aucune politique écrite
+            identity.ensure(REQUEST, iam, sleep=lambda _: None)
+        self.assertEqual(iam.policies, {})
+
+    def test_refuses_foreign_role_in_runtime_path(self):
+        name = identity.role_name("sample-app")
+        iam = Iam(role={"RoleName": name, "Path": "/cnp-runtime/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/cnp-runtime/{name}",
+                        "Tags": []})
         with self.assertRaisesRegex(ValueError, "hors du périmètre"):
             identity.ensure(REQUEST, iam, sleep=lambda _: None)
         self.assertEqual(iam.policies, {})
