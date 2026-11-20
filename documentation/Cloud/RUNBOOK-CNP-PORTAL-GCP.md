@@ -1,6 +1,6 @@
 # CNP Portal on GKE — deployment runbook
 
-## Current release (19 November 2026)
+## Current release (20 November 2026)
 
 - Project: `cnp-terraform-512313`; cluster: `cnp-cluster-terraform` in `europe-west9-b`.
 - Portal source: `Mooroon5-CNP/cnp-portal`, branch `main`, overlay `k8s/overlays/prod`.
@@ -8,7 +8,7 @@
 - URL: `https://portal.apps.mooroon5.fr` via ingress-nginx `34.163.88.46`.
 - One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
-- GCP OpenBao is configured and the portal JWT login has been verified. Azure, AWS and private OpenBao routing and their runtime identities require separate live verification before variable deployment in those modes.
+- GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and the new `cnp/cluster` AWS and private OpenBao endpoints also accepted the portal pod's JWT during read-only checks. Application runtime identities and real variable delivery still require verification before these modes can be declared ready.
 
 ## Recreate the platform bootstrap
 
@@ -65,6 +65,8 @@ kubectl -n cnp-portal rollout status deployment/cnp-portal --timeout=120s
 ```
 
 Check that the rendered Deployment has `PORT=3000`, one replica and the intended digest before syncing. `Recreate` prevents concurrent SQLite writers.
+
+The Azure platform ConfigMap in this overlay is generated from `cnp/azure`'s non-secret `terraform output -json portal_environment`; the Azure identity ConfigMap holds `terraform output -raw openbao_portal_client_id`. Re-export and review both values after an Azure infrastructure replacement before syncing the portal. The portal's projected Kubernetes token successfully exchanged for an Entra token on 20 November 2026. This proves portal federation, but each Azure application still needs its own runtime identity and Key Vault before deployment with variables.
 
 ## Verify the release
 
