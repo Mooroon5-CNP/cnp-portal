@@ -1,7 +1,15 @@
 # SPEC — Déploiement reproductible de `cnp-portal` sur GCP
 
-Statut : **mise en œuvre en cours ; les vérifications live restent à consigner**
-Date : 19 novembre 2026
+> **Suivi au 20 novembre 2026 :** cette SPEC conserve l'inventaire et les
+> décisions du 19 novembre. Le portail est maintenant déployé sur
+> `portal.apps.mooroon5.fr` ; voir le
+> [runbook de production](RUNBOOK-CNP-PORTAL-GCP.md) et l'
+> [état des modes avec variables](../openbao/ETAT-DEPLOIEMENT-20261120.md)
+> pour les constats live. Les lignes « état actuel » ci-dessous sont les
+> constats initiaux, et non une photographie de la production au 20 novembre.
+
+Statut initial (19 novembre 2026) : **mise en œuvre en cours ; les vérifications live restaient à consigner**
+Date du document initial : 19 novembre 2026
 Décision acquise : **GKE + GitOps**, image construite depuis un commit validé de `main` et référencée par digest immuable.
 Point de départ vérifié : `cnp-portal/main` après la fusion OpenBao Azure (`1ec6ef3`) et la PR OpenBao privé #38. Relever à nouveau les SHA avant toute exécution : les dépôts et le cluster peuvent évoluer.
 
