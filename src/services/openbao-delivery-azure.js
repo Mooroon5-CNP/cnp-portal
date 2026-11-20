@@ -10,7 +10,8 @@ const VAULT = /^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/?$/;
 const VERSION = /^[0-9a-f]{32}$/i;
 
 function vaultUrlFor(deployment) {
-  if (process.env.CNP_OPENBAO_DERIVED_IDENTITIES !== 'true') return process.env.CNP_AZURE_VAULT_URL;
+  if (process.env.CNP_OPENBAO_DERIVED_IDENTITIES !== 'true'
+    && !process.env.CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR) return process.env.CNP_AZURE_VAULT_URL;
   const subscription = process.env.AZURE_SUBSCRIPTION_ID;
   if (!GUID.test(subscription || '') || !deployment?.appName || !['dev', 'prod'].includes(deployment.environment)) {
     throw new Error('Paramètres Azure des coffres applicatifs manquants.');
@@ -24,12 +25,13 @@ function secretName(deployment, variable) {
   return `cnp-${deployment.appName}-${deployment.environment}-var-${hash}`;
 }
 
-async function federatedAccessToken({ tenantId, clientId, tokenFile, transport = axios }) {
+async function federatedAccessToken({ tenantId, clientId, tokenFile, transport = axios,
+  scope = 'https://vault.azure.net/.default' }) {
   if (!GUID.test(tenantId) || !GUID.test(clientId) || !tokenFile) throw new Error('Identité Azure du portail non configurée.');
   // Read the projected token afresh: Kubernetes rotates it independently from Entra tokens.
   const assertion = fs.readFileSync(tokenFile, 'utf8').trim();
   if (!assertion) throw new Error('Jeton fédéré Azure du portail indisponible.');
-  const form = new URLSearchParams({ client_id: clientId, scope: 'https://vault.azure.net/.default',
+  const form = new URLSearchParams({ client_id: clientId, scope,
     grant_type: 'client_credentials', client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
     client_assertion: assertion });
   try {

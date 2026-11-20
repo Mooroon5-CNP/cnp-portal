@@ -22,13 +22,14 @@ function identityMap(envName, error) {
 }
 
 const suffix = deployment => createHash('sha256').update(`${deployment.appName}/${deployment.environment}`).digest('hex').slice(0, 20);
-const derived = () => process.env.CNP_OPENBAO_DERIVED_IDENTITIES === 'true';
+const derived = domain => process.env.CNP_OPENBAO_DERIVED_IDENTITIES === 'true'
+  || (domain !== 'aws' && !!process.env.CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR);
 
 function awsRuntimeRole(deployment) {
   const key = `${deployment.appName}/prod`;
-  const roles = derived() ? {} : identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
+  const roles = derived('aws') ? {} : identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
   const account = process.env.CNP_AWS_ACCOUNT_ID;
-  const role = derived() ? (/^[0-9]{12}$/.test(account || '')
+  const role = derived('aws') ? (/^[0-9]{12}$/.test(account || '')
     ? `arn:aws:iam::${account}:role/cnp-${suffix({ ...deployment, environment: 'prod' })}-exec` : null) : roles[key];
   if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]+$/.test(role || '')
     || Object.entries(roles).some(([other, value]) => other !== key && value === role)) {
@@ -38,11 +39,11 @@ function awsRuntimeRole(deployment) {
 }
 
 function azureRuntimeIdentity(deployment) {
-  const identities = derived() ? {} : identityMap('CNP_AZURE_RUNTIME_IDENTITIES', 'Identités Azure des applications invalides.');
+  const identities = derived('azure') ? {} : identityMap('CNP_AZURE_RUNTIME_IDENTITIES', 'Identités Azure des applications invalides.');
   const key = `${deployment.appName}/${deployment.environment}`;
   const subscription = process.env.AZURE_SUBSCRIPTION_ID;
   const group = process.env.CNP_AZURE_RUNTIME_RESOURCE_GROUP;
-  const identity = derived() ? (/^[0-9a-f-]{36}$/i.test(subscription || '')
+  const identity = derived('azure') ? (/^[0-9a-f-]{36}$/i.test(subscription || '')
     && /^[A-Za-z0-9_.()-]+$/.test(group || '')
     ? `/subscriptions/${subscription}/resourceGroups/${group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cnp-${suffix(deployment)}-vars` : null) : identities?.[key];
   if (!IDENTITY.test(identity || '') || identity.toLowerCase() === config.azure.pullIdentityId?.toLowerCase()
@@ -54,9 +55,9 @@ function azureRuntimeIdentity(deployment) {
 }
 
 function gcpRuntimeIdentity(deployment) {
-  const identities = derived() ? {} : identityMap('CNP_GCP_RUNTIME_IDENTITIES', 'Identités GCP des applications invalides.');
+  const identities = derived('gcp') ? {} : identityMap('CNP_GCP_RUNTIME_IDENTITIES', 'Identités GCP des applications invalides.');
   const key = `${deployment.appName}/${deployment.environment}`;
-  const identity = derived() ? (process.env.GCP_PROJECT
+  const identity = derived('gcp') ? (process.env.GCP_PROJECT
     ? `cnp-${suffix(deployment)}@${process.env.GCP_PROJECT}.iam.gserviceaccount.com` : null) : identities[key];
   const expected = new RegExp(`^[a-z][a-z0-9-]*@${String(process.env.GCP_PROJECT || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.iam\\.gserviceaccount\\.com$`);
   if (!expected.test(identity || '') || identity === config.gcp.cloudRunSa

@@ -8,6 +8,7 @@ jest.mock('../src/services/repository-database', () => ({ assertCompatible: jest
 jest.mock('../src/services/openbao-variables', () => ({ ...jest.requireActual('../src/services/openbao-variables'),
   service: jest.fn() }));
 jest.mock('../src/services/openbao-runtime', () => ({ assertReady: jest.fn() }));
+jest.mock('../src/services/openbao-runtime-provisioner-client', () => ({ ensure: jest.fn().mockResolvedValue() }));
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
 const guard = require('../src/services/repository-database');

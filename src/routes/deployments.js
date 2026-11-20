@@ -391,8 +391,12 @@ router.post('/', requireAuth, requirePermission('deployments:deploy'), async (re
     }
 
     if (Object.keys(variableValues).length) {
-        try { openbaoRuntime.assertReady({ appName, environment, targetCluster: targetCluster || 'gcp', failoverRequested,
-            persistentStorage: hasPersistentStorage }); }
+        try {
+            const request = { appName, environment, targetCluster: targetCluster || 'gcp', failoverRequested,
+                persistentStorage: hasPersistentStorage };
+            await require('../services/openbao-runtime-provisioner-client').ensure(request);
+            openbaoRuntime.assertReady(request);
+        }
         catch (error) {
             req.flash('error', `Variables indisponibles : ${error.message}`);
             return res.redirect('/deployments');
