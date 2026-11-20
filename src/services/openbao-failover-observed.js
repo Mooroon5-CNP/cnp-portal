@@ -21,7 +21,12 @@ function expected(files, app, currentNames, ownedNames) {
     || new Set(aws.map(item => item.name)).size !== currentNames.length) {
     throw new Error('Références de variables du secours incomplètes.');
   }
-  return { gcp, aws, ownedNames };
+  // Rôle d'exécution propre à l'app (render.py l'écrit avec les références) : vérifié chez AWS comme les épinglages.
+  const role = task?.spec?.forProvider?.executionRoleArn;
+  if (currentNames.length && !/^arn:aws:iam::[0-9]{12}:role\/cnp-runtime\/cnp-[0-9a-f]{20}-exec$/.test(role || '')) {
+    throw new Error('Rôle d’exécution AWS de l’application absent de la publication.');
+  }
+  return currentNames.length ? { gcp, aws, ownedNames, aws_execution_role: role } : { gcp, aws, ownedNames };
 }
 
 module.exports = { expected };

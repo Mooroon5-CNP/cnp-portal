@@ -24,7 +24,7 @@ test('derives distinct account-scoped runtime identities without per-app JSON ma
     expect(runtime.gcpRuntimeIdentity(prod)).toBe(`cnp-${prodHash.slice(0, 20)}@new-project-12345.iam.gserviceaccount.com`);
     expect(runtime.azureRuntimeIdentity(dev)).toBe(`/subscriptions/${process.env.AZURE_SUBSCRIPTION_ID}/resourceGroups/cnp-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cnp-${devHash.slice(0, 20)}-vars`);
     expect(vaultUrlFor(dev)).toBe(`https://cnp11111111${devHash.slice(0, 12)}.vault.azure.net`);
-    expect(runtime.awsRuntimeRole(prod)).toBe(`arn:aws:iam::123456789012:role/cnp-${prodHash.slice(0, 20)}-exec`);
+    expect(runtime.awsRuntimeRole(prod)).toBe(`arn:aws:iam::123456789012:role/cnp-runtime/cnp-${prodHash.slice(0, 20)}-exec`);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

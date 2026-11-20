@@ -5,6 +5,8 @@ const variables = require('./openbao-variables');
 const { GcpVariableDelivery } = require('./openbao-delivery-gcp');
 const { AzureVariableDelivery } = require('./openbao-delivery-azure');
 const awsDelivery = require('./openbao-delivery-aws');
+const { roleArnFor } = require('./openbao-aws-identity');
+const provisioner = require('./openbao-runtime-provisioner-client');
 const { OpenBaoClient } = require('./openbao-client');
 const { domainsForDeployment } = require('./openbao-routing');
 const { config } = require('../config/env');
@@ -22,15 +24,14 @@ function identityMap(envName, error) {
 }
 
 const suffix = deployment => createHash('sha256').update(`${deployment.appName}/${deployment.environment}`).digest('hex').slice(0, 20);
-const derived = domain => process.env.CNP_OPENBAO_DERIVED_IDENTITIES === 'true'
-  || (domain !== 'aws' && !!process.env.CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR);
+const derived = () => process.env.CNP_OPENBAO_DERIVED_IDENTITIES === 'true' || !!process.env.CNP_OPENBAO_RUNTIME_PROVISIONER_ADDR;
 
+// Avec le provisionneur, le rôle AWS est créé, relu et simulé avant d'être utilisé (openbao-aws-identity.js) ; son ARN,
+// sous /cnp-runtime/, se déduit du nom de l'app. Sans provisionneur, seule la table explicite est acceptée.
 function awsRuntimeRole(deployment) {
   const key = `${deployment.appName}/prod`;
   const roles = derived('aws') ? {} : identityMap('CNP_AWS_RUNTIME_EXECUTION_ROLES', 'Rôles AWS des applications invalides.');
-  const account = process.env.CNP_AWS_ACCOUNT_ID;
-  const role = derived('aws') ? (/^[0-9]{12}$/.test(account || '')
-    ? `arn:aws:iam::${account}:role/cnp-${suffix({ ...deployment, environment: 'prod' })}-exec` : null) : roles[key];
+  const role = derived('aws') ? roleArnFor(deployment.appName, process.env.CNP_AWS_ACCOUNT_ID) : roles[key];
   if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]+$/.test(role || '')
     || Object.entries(roles).some(([other, value]) => other !== key && value === role)) {
     throw new Error('Rôle AWS d’exécution dédié à cette application manquant.');
@@ -100,6 +101,8 @@ async function failoverReferences(deployment, profile, imageRecord) {
   if (!deployment.failoverRequested || deployment.environment !== 'prod' || deployment.targetCluster !== 'gcp') {
     throw new Error('Variables du secours réservées à GCP PostgreSQL prod.');
   }
+  // Reprise idempotente avant chaque publication : identités GCP et rôle AWS revérifiés chez les fournisseurs.
+  await provisioner.ensure(deployment);
   const serviceAccount = gcpRuntimeIdentity(deployment);
   if (profile?.gcp?.gcp_runtime?.service_account !== serviceAccount) {
     throw new Error('Le profil failover doit utiliser le compte GCP dédié avant la publication des variables.');

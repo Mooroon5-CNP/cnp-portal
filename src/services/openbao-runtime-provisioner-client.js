@@ -16,6 +16,7 @@ async function ensure(deployment, { transport = axios,
     if (!token) throw new Error('Identité du portail pour le provisionneur indisponible.');
     const { data } = await transport.post(`${address.replace(/\/$/, '')}/ensure`, {
       appName: deployment.appName, environment: deployment.environment, targetCluster: deployment.targetCluster,
+      failoverRequested: deployment.failoverRequested === true,
     }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000, maxRedirects: 0 });
     if (data?.ready !== true) throw new Error('Identité runtime non confirmée.');
   } catch (error) {
