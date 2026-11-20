@@ -96,6 +96,24 @@ patches:
               name: cnp-openbao-azure-identity
               key: clientId
               optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_PRIVATE_ADDR, value: "https://openbao.prive.apps.mooroon5.fr:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_PRIVATE_AUDIENCE, value: "https://openbao.prive.apps.mooroon5.fr:8200"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_PRIVATE_ROLE, value: "cnp-control"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: CNP_OPENBAO_PRIVATE_MOUNT, value: "cnp-runtime"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: PRIVATE_APPS_DOMAIN, value: "prive.apps.mooroon5.fr"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: PRIVATE_ECR_REGISTRY, value: "626278345026.dkr.ecr.eu-west-3.amazonaws.com"}
   - target:
       kind: Ingress
       name: cnp-portal
