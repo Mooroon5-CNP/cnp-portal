@@ -68,7 +68,9 @@ Check that the rendered Deployment has `PORT=3000`, one replica and the intended
 
 The Azure platform ConfigMap in this overlay is generated from `cnp/azure`'s non-secret `terraform output -json portal_environment`; the Azure identity ConfigMap holds `terraform output -raw openbao_portal_client_id`. Re-export and review both values after an Azure infrastructure replacement before syncing the portal. The portal's projected Kubernetes token successfully exchanged for an Entra token on 20 November 2026. This proves portal federation, but each Azure application still needs its own runtime identity and Key Vault before deployment with variables.
 
-The private endpoint and JWT audience are prepared in a separate PR. The four `PRIVATE_*` values in that PR match the private-cloud Terraform `portal_environment` output supplied on 20 November 2026. Verify an application deployment on k3s before declaring variable delivery ready. Do not enable derived runtime identities or AWS routing until the corresponding cloud resources exist.
+The private endpoint and JWT audience are deployed. The four `PRIVATE_*` values match the private-cloud Terraform `portal_environment` output supplied on 20 November 2026. OpenBao private accepted a fictitious KV v2 write/read and version destruction from the portal pod. Verify an application deployment and its ExternalSecret on k3s before declaring end-to-end delivery ready.
+
+The AWS OpenBao address, audience, role and mount come from `cnp/cluster/aws/19-openbao.tf`; the pod's JWT login and a fictitious KV v2 write/read/destruction succeeded at that endpoint. The account and region are `626278345026/eu-west-3`. The portal still needs its AWS Secrets Manager credentials and dedicated per-application ECS execution roles. Do not enable derived runtime identities until the GCP and AWS resources actually exist.
 
 ## Verify the release
 
