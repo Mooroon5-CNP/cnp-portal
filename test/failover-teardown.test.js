@@ -5,6 +5,7 @@ jest.mock('../src/services/failover-operations', () => ({ list: jest.fn(), start
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn() }));
 jest.mock('../src/services/environment-deployment', () => ({ commitFiles: jest.fn(), remove: jest.fn() }));
 jest.mock('../src/services/openbao-cleanup', () => ({ cleanup: jest.fn().mockResolvedValue() }));
+jest.mock('../src/services/environment-deletion', () => ({ cleanupRepository: jest.fn().mockResolvedValue() }));
 jest.mock('../src/models/deployment', () => ({ get: jest.fn(), delete: jest.fn() }));
 jest.mock('../src/models/deletion_request', () => ({ deleteByDeployment: jest.fn() }));
 // Le vrai retrait de route est testé avec le routage partagé ; ici, on vérifie qu'il est demandé pour cette app, en prod.

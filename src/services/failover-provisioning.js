@@ -142,6 +142,14 @@ const stepInfo = (steps, index) => {
 };
 // Avancement lisible d'une mise en service, pour la page de l'application (aucune action proposée) : étape en cours, temps
 // écoulé et estimé (étape et parcours), et « long » quand l'étape dure plus du double de l'habitude.
+// Indices des étapes qu'une mise à jour sans changement de schéma ne parcourt pas : entre la comparaison des schémas et le
+// contrôle de santé, tant que la comparaison n'est pas passée (au-delà, le parcours réel suit déjà l'une ou l'autre voie).
+function skippedWithoutMigration(steps, current) {
+  const diff = steps.findIndex(([, name]) => name === 'schema-diff');
+  const health = steps.findIndex(([, name]) => name === 'health');
+  if (diff < 0 || health < 0 || current > diff) return new Set();
+  return new Set(steps.map((_, index) => index).filter(index => index > diff && index < health));
+}
 function progress(app, now = Date.now()) {
   const row = get(app);
   if (!row) return null;
@@ -153,8 +161,13 @@ function progress(app, now = Date.now()) {
   const [label, estimate] = stepInfo(steps, index);
   const elapsed = Math.max(0, Math.round((now - Date.parse(row.step_started_at)) / 1000));
   const totalElapsed = Math.max(0, Math.round((now - Date.parse(row.started_at)) / 1000));
-  // Reste estimé : le reste de l'étape en cours (au moins rien) plus les étapes suivantes.
-  const remaining = Math.max(0, estimate - elapsed) + steps.slice(row.step + 1).reduce((sum, _, offset) => sum + stepInfo(steps, row.step + 1 + offset)[1], 0);
+  // Reste estimé : le reste de l'étape en cours (au moins rien) plus les étapes suivantes. Une mise à jour ne passe par la
+  // reconstruction de la copie AWS (pause, recopie, vérification, reprise) que si la migration a changé le schéma ; sinon elle
+  // saute de la comparaison des schémas au contrôle de santé. Tant que la comparaison n'a pas conclu, on estime le parcours
+  // court, le cas courant (variables, code sans migration) : avant le 21/11/2026, ~16 min annoncées pour ~8 min réelles.
+  const skipped = row.phase === 'update' ? skippedWithoutMigration(steps, row.step) : new Set();
+  const remaining = Math.max(0, estimate - elapsed) + steps.slice(row.step + 1).reduce((sum, _, offset) =>
+    sum + (skipped.has(row.step + 1 + offset) ? 0 : stepInfo(steps, row.step + 1 + offset)[1]), 0);
   return { ...value, label, elapsed, estimate, totalElapsed, totalEstimate: totalElapsed + remaining, slow: elapsed > 2 * estimate };
 }
 // Voyant d'une app servie par AWS : le dernier contrôle de santé dit si GCP est revenu (lecture seule, aucune action).

@@ -19,8 +19,10 @@ const cleanup = require('../src/services/environment-deletion');
 const user = { id: 'manager', role: 'manager' };
 let dep, files, bucket, api;
 
+let images;
 beforeEach(() => {
   jest.resetAllMocks();
+  images = jest.spyOn(cleanup, 'removeRegistryPackage').mockResolvedValue(true);
   db.exec('DROP TABLE IF EXISTS environment_deletions');
   db.prepare('DELETE FROM deployment_releases').run();
   db.prepare('DELETE FROM deployment_team_access').run();
@@ -76,6 +78,31 @@ test('complete deletion waits for bucket release and actual disappearance before
   expect(cleanup.get(dep.id).state).toBe('completed');
   expect(files.has('test-app/.github/workflows/cnp-test-app.yml')).toBe(false);
   expect(github.deleteSecret).toHaveBeenCalledWith('team', 'test-app', 'CONFIG_REPO_TOKEN');
+  expect(images).toHaveBeenCalledWith('test-app');
+});
+
+test('une autre app du même dépôt garde le jeton et les fichiers partagés, mais le workflow de l’app supprimée part', async () => {
+  deployments.create({ appName: 'other-app', environment: 'prod', githubRepoUrl: dep.githubRepoUrl, ownerUserId: user.id });
+  files.set('test-app/.cnp-platform-prod', 'CNP prod');
+  await cleanup.cleanupRepository(deployments.get(dep.id));
+  expect(files.has('test-app/.github/workflows/cnp-test-app.yml')).toBe(false);
+  expect(files.has('test-app/.cnp-platform-prod')).toBe(true);
+  expect(images).toHaveBeenCalledWith('test-app');
+  expect(github.deleteSecret).not.toHaveBeenCalled();
+});
+
+test('images GCP : seulement le paquet de l’app, absent accepté, refus remonté', async () => {
+  images.mockRestore();
+  const transport = { request: jest.fn().mockResolvedValue({ data: {} }) };
+  const options = { registryUrl: 'europe-west9-docker.pkg.dev/proj-12345/cnp-registry', transport, accessToken: async () => 'token' };
+  await expect(cleanup.removeRegistryPackage('test-app', options)).resolves.toBe(true);
+  expect(transport.request.mock.calls[0][0]).toMatchObject({ method: 'DELETE',
+    url: 'https://artifactregistry.googleapis.com/v1/projects/proj-12345/locations/europe-west9/repositories/cnp-registry/packages/test-app' });
+  transport.request.mockRejectedValueOnce({ response: { status: 404 } });
+  await expect(cleanup.removeRegistryPackage('test-app', options)).resolves.toBe(false);
+  transport.request.mockRejectedValueOnce({ response: { status: 403 } });
+  await expect(cleanup.removeRegistryPackage('test-app', options)).rejects.toThrow('HTTP 403');
+  await expect(cleanup.removeRegistryPackage('../other', options)).rejects.toThrow('invalide');
 });
 
 test('route waiting is retried automatically and persists across service reloads', async () => {

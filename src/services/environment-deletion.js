@@ -112,25 +112,50 @@ async function releaseBuckets(dep, row, api, repo) {
     return { [path]: docs.map(doc => yaml.dump(doc)).join('---\n') };
   }, `chore(${dep.appName}): authorize ${dep.environment} bucket and data deletion`);
 }
-async function cleanupRepository(dep) {
-  // The other environment, including legacy records, may still use this workflow and secret.
-  if (deployments.listForUser(null).some(row => row.id !== dep.id
-    && (row.app_name === dep.appName || row.github_repo_url === dep.githubRepoUrl))) return;
+// Images de l'app dans Artifact Registry (paquet <app> du dépôt de REGISTRY_URL, poussé par la CI) : la suppression les laissait
+// (constaté le 21/11/2026 sur trois apps de recette). Seul le paquet au nom exact de l'app ; absent = déjà fait.
+const APP = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/;
+async function removeRegistryPackage(appName, { registryUrl = config.github.registryUrl, transport = require('axios'),
+  accessToken = require('./openbao-delivery-gcp').googleAccessToken } = {}) {
+  const match = /^([a-z0-9-]+)-docker\.pkg\.dev\/([a-z][a-z0-9-]{4,62})\/([a-z][a-z0-9-]{0,62})$/.exec(registryUrl || '');
+  if (!match || !APP.test(appName || '')) throw new Error('Registre ou nom d’application invalide pour la suppression des images.');
+  const [, location, project, repository] = match;
+  const token = await accessToken(transport);
+  try {
+    await transport.request({ method: 'DELETE', timeout: 15000, maxRedirects: 0, headers: { Authorization: `Bearer ${token}` },
+      url: `https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${location}/repositories/${repository}/packages/${appName}` });
+  } catch (error) {
+    if (error.response?.status === 404) return false;
+    throw new Error(`Suppression des images GCP de ${appName} refusée ou indisponible${error.response?.status ? ` (HTTP ${error.response.status})` : ''}.`);
+  }
+  return true;
+}
+async function cleanupRepository(dep, { removeImages = name => module.exports.removeRegistryPackage(name) } = {}) {
+  const others = deployments.listForUser(null).filter(row => row.id !== dep.id);
+  // L'autre environnement de la même app utilise encore son workflow et ses images : rien à retirer.
+  if (others.some(row => row.app_name === dep.appName)) return;
+  // Jeton, variables GitHub et fichiers .cnp-platform-* sont ceux du DÉPÔT : gardés tant qu'une autre app y est déployée.
+  // Le workflow cnp-<app>.yml, lui, n'appartient qu'à cette app. Avant le 21/11/2026, une app qui partageait son dépôt
+  // gardait son workflow, qui se relançait à chaque push et recréait ses images (dépôts ECR recréés après suppression).
+  const shared = others.some(row => row.github_repo_url === dep.githubRepoUrl);
   const repo = require('./github').parseRepoUrl(dep.githubRepoUrl);
   if (!repo) throw new Error('Dépôt applicatif invalide.');
   const api = await github.getInstallationOctokit();
   const service = require('./environment-deployment');
+  const paths = [`.github/workflows/${service.workflowName(dep.appName)}`, ...(shared ? [] : ['.cnp-platform-dev', '.cnp-platform-prod'])];
   for (const branch of ['main', 'prod']) {
     try {
       await service.commitFiles(api, repo, async head => {
         const files = {};
-        for (const path of [`.github/workflows/${service.workflowName(dep.appName)}`, '.cnp-platform-dev', '.cnp-platform-prod']) {
+        for (const path of paths) {
           if (await read(api, repo, path, head) !== null) files[path] = null;
         }
         return files;
       }, `chore(${dep.appName}): remove generated CNP deployment workflow`, branch);
     } catch (error) { if (error.status !== 404) throw error; }
   }
+  if (dep.targetCluster === 'gcp') await removeImages(dep.appName);
+  if (shared) return;
   await github.deleteSecret(repo.owner, repo.repo, 'CONFIG_REPO_TOKEN');
   // Remove only values still matching the GCP variables injected by onboarding.
   // A variable edited by the application owner is outside this cleanup scope.
@@ -217,4 +242,4 @@ async function tick() {
 }
 // Ordre des étapes, pour le suivi affiché (deletion-progress).
 const STEPS = ['inventory', 'release', 'release_wait', 'remove', 'verify', 'variables', 'repository'];
-module.exports = { STEPS, get, start, advance, tick };
+module.exports = { STEPS, get, start, advance, tick, cleanupRepository, removeRegistryPackage };
