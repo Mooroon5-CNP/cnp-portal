@@ -1,0 +1,11 @@
+apiVersion: noodle/v1alpha1
+kind: View
+type: catalog
+title: CNP · Service catalogue
+subtitle: What can an application team request through the platform?
+meta:
+  - "Scope: implemented portal offerings"
+  - "Out of scope: direct generic AWS hosting and future remote MCP"
+  - "Version: 2026-11-21 · source: cnp-portal/main"
+include: [gcp-sqlite, gcp-postgres, azure-postgres, private-postgres, app-variables, observability]
+columns: 2

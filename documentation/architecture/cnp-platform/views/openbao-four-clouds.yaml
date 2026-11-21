@@ -1,0 +1,54 @@
+apiVersion: noodle/v1alpha1
+kind: View
+type: landscape
+title: CNP · OpenBao across four paths
+subtitle: Where do variable versions live, and how does each runtime receive them?
+meta:
+  - "Scope: one variable path per target, shown at equal granularity"
+  - "Out of scope: token exchange messages and cloud network details"
+  - "Each row lists equal capabilities; columns are not a request sequence"
+  - "Version: 2026-11-21 · source: cnp-portal/main, cnp/cluster"
+bands:
+  - id: control
+    title: Shared control plane
+    sub: portal owns versions; provisioner creates identities
+    color: cyan
+    sections:
+      - {title: Portal, items: [portal]}
+      - {title: Identity creation, items: [provisioner]}
+  - id: gcp
+    title: GCP
+    sub: Cloud Run variable path
+    color: emerald
+    sections:
+      - {title: Version store, items: [gcp-openbao]}
+      - {title: Runtime identity, items: [gcp-identity]}
+      - {title: Delivery, items: [gcp-delivery]}
+      - {title: Application, items: [gcp-runtime]}
+  - id: azure
+    title: Azure
+    sub: Container Apps variable path
+    color: sky
+    sections:
+      - {title: Version store, items: [azure-openbao]}
+      - {title: Runtime identity, items: [azure-identity]}
+      - {title: Delivery, items: [azure-delivery]}
+      - {title: Application, items: [azure-runtime]}
+  - id: aws
+    title: AWS failover
+    sub: eligible GCP PostgreSQL production only
+    color: amber
+    sections:
+      - {title: Version store, items: [aws-openbao]}
+      - {title: Runtime identity, items: [aws-identity]}
+      - {title: Delivery, items: [aws-delivery]}
+      - {title: Application, items: [aws-runtime]}
+  - id: private
+    title: Private k3s
+    sub: no cloud secret copy; ESO reads OpenBao
+    color: violet
+    sections:
+      - {title: Version store, items: [private-openbao]}
+      - {title: Runtime identity, items: [private-identity]}
+      - {title: Delivery, items: [private-delivery]}
+      - {title: Application, items: [private-runtime]}

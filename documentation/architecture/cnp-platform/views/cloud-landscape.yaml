@@ -1,0 +1,39 @@
+apiVersion: noodle/v1alpha1
+kind: View
+type: landscape
+title: CNP · Cloud platform
+subtitle: How does one portal deliver applications across the four cloud paths?
+meta:
+  - "Scope: deployed platform and supported application paths"
+  - "Out of scope: individual VPCs, subnets, and release retries"
+  - "Version: 2026-11-21 · source: cnp-portal/main, cnp/cluster, config-repo/main"
+bands:
+  - id: delivery
+    title: Delivery
+    sub: request to desired state
+    color: cyan
+    flow: true
+    sections:
+      - {title: Request, items: [user, portal]}
+      - {title: Build, items: [github]}
+      - {title: GitOps, items: [config-repo, argocd]}
+      - {title: Provision, items: [crossplane]}
+  - id: runtimes
+    title: Application runtimes
+    sub: the four supported destinations
+    color: emerald
+    sections:
+      - {title: GCP, items: [gcp-runtime, gcp-data]}
+      - {title: Azure, items: [azure-runtime, azure-data]}
+      - {title: AWS failover, items: [aws-runtime, aws-data]}
+      - {title: Private k3s, items: [private-runtime, private-data]}
+  - id: secrets
+    title: Variables
+    sub: platform-owned source and scoped delivery
+    color: violet
+    sections:
+      - {title: OpenBao, items: [gcp-openbao, azure-openbao, aws-openbao, private-openbao]}
+      - {title: Runtime identity, items: [provisioner]}
+side:
+  - {title: Infrastructure, color: amber, items: [terraform]}
+  - {title: Operations, color: rose, items: [datadog, mcp]}

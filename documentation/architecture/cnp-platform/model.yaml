@@ -1,0 +1,82 @@
+apiVersion: noodle/v1alpha1
+kind: Model
+elements:
+  - {id: user, kind: frontend, icon: user, title: Application team, tech: Portal user, desc: Requests an application environment}
+  - {id: portal, kind: backend, icon: k8s-deploy, title: CNP Portal, tech: Node.js on GKE, desc: Selects a stack and publishes releases}
+  - {id: provisioner, kind: backend, icon: k8s-deploy, title: Identity provisioner, tech: GKE service, desc: Creates scoped runtime identities}
+  - {id: github, kind: external, icon: github, title: GitHub Actions, tech: CI pipelines, desc: Builds application images}
+  - {id: config-repo, kind: external, icon: github, title: Config repository, tech: GitOps manifests, desc: Holds desired application state}
+  - {id: argocd, kind: backend, icon: argo, title: Argo CD, tech: GitOps controller, desc: Synchronizes desired state}
+  - {id: crossplane, kind: backend, icon: k8s-crd, title: Crossplane, tech: Cloud providers, desc: Reconciles cloud resources}
+  - {id: terraform, kind: tool, icon: terraform, title: Terraform, tech: Infrastructure as code, desc: Builds platform foundations}
+  - {id: datadog, kind: external, icon: datadog, title: Datadog, tech: Monitoring, desc: Observes platform and applications}
+  - {id: mcp, kind: external, icon: globe, title: Remote MCP, tech: HTTP client, desc: Optional tool integration, status: planned, target: Later release}
+  - {id: gcp-runtime, kind: backend, icon: google-cloud, title: Cloud Run, tech: GCP, desc: Runs GCP applications}
+  - {id: gcp-data, kind: database, icon: google-cloud, title: GCS or Cloud SQL, tech: GCP, desc: SQLite files or PostgreSQL data}
+  - {id: azure-runtime, kind: backend, icon: azure, title: Container Apps, tech: Azure, desc: Runs Azure applications}
+  - {id: azure-data, kind: database, icon: azure, title: Flexible Server, tech: Azure PostgreSQL, desc: Private application database}
+  - {id: aws-runtime, kind: backend, icon: aws, title: ECS, tech: AWS failover, desc: Serves GCP production standby}
+  - {id: aws-data, kind: database, icon: aws, title: RDS, tech: AWS PostgreSQL, desc: Stores failover data}
+  - {id: private-runtime, kind: backend, icon: kubernetes, title: k3s, tech: Private AWS cloud, desc: Runs private applications}
+  - {id: private-data, kind: database, icon: kubernetes, title: PostgreSQL, tech: Private k3s, desc: Stores private app data}
+  - {id: gcp-openbao, kind: security, icon: openbao, title: OpenBao GCP, tech: KV v2 and JWT, desc: Stores GCP variable versions}
+  - {id: gcp-identity, kind: security, icon: google-cloud, title: GCP runtime SA, tech: Per app and environment, desc: Bounds secret and service access}
+  - {id: gcp-delivery, kind: security, icon: google-cloud, title: Secret Manager, tech: Pinned version, desc: Delivers variables to Cloud Run}
+  - {id: azure-openbao, kind: security, icon: openbao, title: OpenBao Azure, tech: KV v2 and JWT, desc: Stores Azure variable versions}
+  - {id: azure-identity, kind: security, icon: azure, title: Azure managed ID, tech: Per app and environment, desc: Bounds Key Vault access}
+  - {id: azure-delivery, kind: security, icon: azure, title: Key Vault, tech: Pinned secret ID, desc: Delivers variables to Container Apps}
+  - {id: aws-openbao, kind: security, icon: openbao, title: OpenBao AWS, tech: KV v2 and JWT, desc: Stores failover variable versions}
+  - {id: aws-identity, kind: security, icon: aws, title: ECS execution role, tech: Per application, desc: Bounds failover secret access}
+  - {id: aws-delivery, kind: security, icon: aws, title: Secrets Manager, tech: Versioned secrets, desc: Delivers variables to ECS}
+  - {id: private-openbao, kind: security, icon: openbao, title: OpenBao private, tech: KV v2 and JWT, desc: Stores private variable versions}
+  - {id: private-identity, kind: security, icon: k8s-sa, title: ESO service account, tech: Kubernetes auth, desc: Reads only scoped KV paths}
+  - {id: private-delivery, kind: security, icon: k8s-secret, title: External Secret, tech: Pinned KV version, desc: Injects app variable keys}
+offerings:
+  - id: gcp-sqlite
+    title: GCP application with SQLite
+    icon: google-cloud
+    summary: Cloud Run application with persistent SQLite files in GCS.
+    provides: [Dev or prod environment, CI and GitOps release, HTTPS route]
+    request: "Portal: new deployment → GCP SQLite → dev or prod"
+    backed_by: [portal, github, config-repo, argocd, crossplane, gcp-runtime, gcp-data]
+    owner: CNP platform
+  - id: gcp-postgres
+    title: GCP application with PostgreSQL
+    icon: google-cloud
+    summary: Cloud Run and Cloud SQL; production includes AWS failover.
+    provides: [Dev or prod environment, PostgreSQL, production failover]
+    request: "Portal: new deployment → GCP PostgreSQL → dev or prod"
+    backed_by: [portal, gcp-runtime, gcp-data, aws-runtime, aws-data]
+    owner: CNP platform
+  - id: azure-postgres
+    title: Azure application with PostgreSQL
+    icon: azure
+    summary: Container Apps with a private PostgreSQL Flexible Server.
+    provides: [Dev or prod environment, PostgreSQL, HTTPS route]
+    request: "Portal: new deployment → Azure PostgreSQL → dev or prod"
+    backed_by: [portal, crossplane, azure-runtime, azure-data]
+    owner: CNP platform
+  - id: private-postgres
+    title: Private Kubernetes application
+    icon: kubernetes
+    summary: App and PostgreSQL in private AWS-hosted k3s.
+    provides: [Dev or prod environment, Kubernetes runtime, PostgreSQL]
+    request: "Portal: new deployment → Private PostgreSQL → dev or prod"
+    backed_by: [portal, crossplane, private-runtime, private-data]
+    owner: CNP platform
+  - id: app-variables
+    title: Versioned application variables
+    icon: openbao
+    summary: OpenBao is the source; each runtime receives only its own versioned values.
+    provides: [Scoped access, Versioned delivery, Rotation and restore]
+    request: "Portal: add or update variables on an environment"
+    backed_by: [portal, provisioner, gcp-openbao, azure-openbao, aws-openbao, private-openbao]
+    owner: CNP platform
+  - id: observability
+    title: Application observability
+    icon: datadog
+    summary: Datadog metrics and logs are accessible through the platform.
+    provides: [Health and operational visibility]
+    request: "Portal: open observability for an authorized application"
+    backed_by: [portal, datadog]
+    owner: CNP platform
