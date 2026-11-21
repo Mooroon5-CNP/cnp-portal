@@ -209,7 +209,8 @@
                 <% } %>
                 <% if (environmentStatus) { %>
                   <% const alertStyle = { outage: ['#b45309', 'GCP ne répond plus'], switching: ['#c2410c', 'Bascule vers AWS en cours'],
-                       blocked: ['#b91c1c', 'Bascule arrêtée'], aws: ['#1d4ed8', 'Servi par AWS'] }[environmentStatus.failoverAlert]; %>
+                       blocked: ['#b91c1c', 'Bascule arrêtée'], aws: ['#1d4ed8', 'Servi par AWS'],
+                       returning: ['#1d4ed8', 'Retour vers GCP en cours'], restoring: ['#15803d', 'Servi par GCP · secours AWS en reconstruction'] }[environmentStatus.failoverAlert]; %>
                   <div class="card" style="margin-bottom:16px;<%= alertStyle ? `border-left:4px solid ${alertStyle[0]};` : '' %>" id="environment-status-card" data-phase="<%= environmentStatus.phase %>" data-failover-alert="<%= environmentStatus.failoverAlert || '' %>">
                     <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span>
                       <% if (alertStyle) { %><span class="badge" style="background:<%= alertStyle[0] %>;color:#fff;"><%= alertStyle[1] %></span><% } %></div>

@@ -6,7 +6,8 @@ jest.mock('../src/services/environment-deletion', () => ({ STEPS: ['inventory', 
   'variables', 'repository'], get: jest.fn() }));
 const teardown = require('../src/services/failover-teardown');
 const deletion = require('../src/services/environment-deletion');
-const { failoverAlert, awsSince } = require('../src/services/environment-failover');
+const { failoverAlert, awsSince, failbackStatus } = require('../src/services/environment-failover');
+const operations = require('../src/services/failover-operations');
 const progress = require('../src/services/deletion-progress');
 
 const now = Date.parse('2026-11-21T11:40:00Z');
@@ -68,5 +69,28 @@ describe('suivi de suppression', () => {
     teardown.get.mockReturnValue({ deployment_id: 'other', state: 'running', step: 0, started_at: '2026-11-21T11:30:00Z' });
     deletion.get.mockReturnValue(null);
     expect(progress.message(dep, now)).toBeNull();
+  });
+});
+
+describe('retour vers GCP', () => {
+  const dep = { appName: 'sample-app' };
+  const step = index => ({ phase: 'failback', state: 'running', step: index, total: 11, label: 'Étape', elapsed: 30, estimate: 120,
+    totalElapsed: 300, totalEstimate: 1500, slow: false });
+  afterEach(() => jest.restoreAllMocks());
+
+  test('avant la copie vérifiée : retour en cours, l’app reste sur AWS', () => {
+    const value = failbackStatus(dep, step(3));
+    expect(value).toEqual(expect.objectContaining({ phase: 'deploying', failoverAlert: 'returning' }));
+    expect(value.message).toContain('reste servie par AWS');
+    expect(value.cloudRunUrl).toBeUndefined();
+  });
+  test('après la copie : servie par GCP, secours AWS en reconstruction, lien de l’app affiché', () => {
+    jest.spyOn(operations, 'list').mockReturnValue([{ action: 'failback-reset', created_at: '2026-11-21T10:45:30Z' },
+      { action: 'failback-sync', created_at: '2026-11-21T10:42:00Z' }]);
+    const value = failbackStatus(dep, step(5));
+    expect(value).toEqual(expect.objectContaining({ phase: 'success', failoverAlert: 'restoring',
+      applicationUrl: 'https://sample-app.apps.mooroon5.fr' }));
+    expect(value.message).toMatch(/^L’application est de nouveau servie par GCP depuis 11:45\. Remise en place du secours AWS en cours \(étape 6\/11\)/);
+    expect(value.message).toContain('ne serait pas couverte');
   });
 });
