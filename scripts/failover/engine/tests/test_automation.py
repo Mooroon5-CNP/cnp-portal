@@ -497,3 +497,37 @@ class PrivateProbeTests(unittest.TestCase):
             raise ConnectionRefusedError()
         with patch("sys.stdout", new_callable=io.StringIO):
             self.assertFalse(a.private_reachable(self.APP, sleep=lambda _: None, connect=connect))
+
+
+class ConnectRetryTests(unittest.TestCase):
+    def test_a_connection_that_never_opened_is_retried_then_used(self):
+        attempts, waits = [], []
+        def connect():
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise TimeoutError("timed out connecting to 10.20.30.40 password=secret")
+            return "connexion"
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(a.connect_with_retry(connect, "source", sleep=waits.append), "connexion")
+        self.assertEqual((len(attempts), waits), (3, [2, 2]))
+        self.assertIn("CONNECT_TIMEOUT", output.getvalue())
+        self.assertNotIn("10.20.30.40", output.getvalue())
+        self.assertNotIn("secret", output.getvalue())
+        for line in output.getvalue().splitlines():                          # jamais lu comme un résultat par operate.py
+            with self.assertRaises(ValueError):
+                json.loads(line)
+
+    def test_other_causes_and_the_last_attempt_are_raised(self):
+        class AuthError(Exception):
+            sqlstate = "28P01"
+        calls = []
+        def refuse():
+            calls.append(1)
+            raise AuthError("password authentication failed")
+        with self.assertRaises(AuthError):
+            a.connect_with_retry(refuse, "target", sleep=lambda _: None)
+        self.assertEqual(len(calls), 1)                                       # authentification : aucun nouvel essai
+        def timeout():
+            raise TimeoutError()
+        with patch("sys.stdout", new_callable=io.StringIO), self.assertRaises(TimeoutError):
+            a.connect_with_retry(timeout, "source", sleep=lambda _: None)
