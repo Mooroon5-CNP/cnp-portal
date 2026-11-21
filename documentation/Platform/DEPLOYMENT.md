@@ -9,7 +9,7 @@
 - One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
 - Both the portal and the dedicated OpenBao runtime provisioner currently use image `sha256:6769759244337d47ed4ba2fdde1adc69a94fdf70bd2d371e7f633e190c32edd9`. On 21 November both Deployments were `1/1`, Argo CD reported `Synced/Healthy` for the portal and Dancing Duck prod, and `/api/health` returned `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Recheck these facts before each release; they are a dated observation, not a permanent guarantee.
-- [OpenBao deployment status from 20 November](../openbao/ETAT-DEPLOIEMENT-20261120.md) is an archived incident snapshot. It predates the provisioner and later AWS failover work; do not use its blocked-mode table as current readiness.
+- [OpenBao deployment status from 20 November](OPENBAO.md) is an archived incident snapshot. It predates the provisioner and later AWS failover work; do not use its blocked-mode table as current readiness.
 - GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and the current `cnp/cluster` AWS and private OpenBao endpoints also accepted the portal pod's JWT during read-only checks. The private JWT audience is `https://openbao.prive.apps.mooroon5.fr:8200` **without a trailing slash**; the slash form returns HTTP 400. Application runtime identities and real variable delivery still require verification before these modes can be declared ready.
 
 ## Recreate the platform bootstrap
