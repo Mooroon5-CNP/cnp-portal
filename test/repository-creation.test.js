@@ -25,6 +25,8 @@ test.each(['sqlite', 'postgres'])('creates the actual %s template without CI or 
     expect(files['app.py']).toContain(template === 'sqlite' ? 'sqlite3.connect' : 'psycopg.connect');
     expect(files['app.py']).toContain('demo-app');
     expect(files.Dockerfile).toContain('EXPOSE 8080');
+    expect(files.Dockerfile).toContain('USER 10001:10001');
+    if (template === 'postgres') expect(files['app.py']).toContain("@app.get('/health')");
     expect(files['requirements.txt']).toContain('Flask');
     expect(Object.keys(files).sort()).toEqual(['.dockerignore', '.flake8', '.gitignore', 'Dockerfile', 'README.md', 'app.py', 'requirements.txt', 'test_app.py']);
     expect(JSON.stringify(files)).not.toContain('{{');
