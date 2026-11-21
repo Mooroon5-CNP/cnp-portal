@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Apply only the portal's application credentials. Platform credentials are
+// Update only the portal's application credentials. Platform credentials are
 // supplied by Terraform in cnp-portal-cloud-env and must not be imported here.
+// Existing keys outside this command's input are retained for future features.
 const fs = require('fs');
 const { randomBytes } = require('crypto');
 const { spawnSync } = require('child_process');
@@ -55,13 +56,8 @@ if (existing.status !== 0 && !existing.stderr.includes('NotFound')) {
   process.exit(existing.status || 1);
 }
 const existingSecret = existing.status === 0 ? JSON.parse(existing.stdout) : null;
-// A later general credential refresh must not silently disable the voice
-// feature when its keys were published with update-voice-secret.js.
 for (const key of voiceKeys) {
   if (source[key]?.trim()) stringData[key] = source[key].trim();
-  else if (existingSecret?.data?.[key]) {
-    stringData[key] = Buffer.from(existingSecret.data[key], 'base64').toString('utf8');
-  }
 }
 const prior = existingSecret?.data?.SESSION_SECRET;
 stringData.SESSION_SECRET = prior
@@ -102,8 +98,11 @@ const secret = {
   metadata: { name: 'cnp-portal-app-env', namespace: 'cnp-portal',
     ...(existingSecret && { resourceVersion: existingSecret.metadata.resourceVersion }) },
   type: 'Opaque',
-  data: Object.fromEntries(Object.entries(stringData)
-    .map(([key, value]) => [key, Buffer.from(value).toString('base64')])),
+  // A replacement must not erase feature-specific keys published by another
+  // targeted command. Only the explicitly supplied keys are changed here.
+  data: { ...existingSecret?.data,
+    ...Object.fromEntries(Object.entries(stringData)
+      .map(([key, value]) => [key, Buffer.from(value).toString('base64')])) },
 };
 const result = spawnSync('kubectl', [existingSecret ? 'replace' : 'create', '-f', '-'], {
   input: JSON.stringify(secret), encoding: 'utf8',

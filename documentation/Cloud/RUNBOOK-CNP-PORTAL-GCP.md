@@ -42,7 +42,15 @@ kubectl -n cnp-portal get secret cnp-portal-cloud-env
 node scripts/deploy/apply-app-secret.js /secure/path/credentials.env --oauth-file /secure/path/oauth-prod.env --oauth-callback-registered
 ```
 
-The script allowlists application credentials. It generates a strong session key if needed and preserves an existing key. It obtains Argo CD's certificate from `argocd/argocd-secret` and overrides the legacy public-IP/insecure endpoint with verified `https://argocd-server.argocd.svc`; Argo credentials stay in the Terraform Secret. Re-run the script when Argo rotates its certificate, then restart the portal pod.
+The script **updates only keys explicitly supplied** and preserves all other keys already present in `cnp-portal-app-env`, including voice, future integrations, optional settings and the session key. It generates a strong session key only if none exists. It obtains Argo CD's certificate from `argocd/argocd-secret` and overrides the legacy public-IP/insecure endpoint with verified `https://argocd-server.argocd.svc`; Argo credentials stay in the Terraform Secret. Re-run the script when Argo rotates its certificate, then restart the portal pod. The scripts for voice and OAuth also merge their targeted keys into the existing Secret. **Never delete and recreate this Secret or use an `apply` manifest containing only a subset of its keys**: that would erase the others. `cnp-portal-cloud-env` is a separate Terraform-managed Secret; these scripts do not modify it.
+
+Before and after a credential change, compare **key names only**, never values:
+
+```sh
+kubectl -n cnp-portal get secret cnp-portal-app-env -o json | node -e 'let s=""; process.stdin.on("data", c => s += c).on("end", () => console.log(Object.keys(JSON.parse(s).data).sort().join("\n")))'
+```
+
+Retain the first list with the release record and confirm that no unrelated key disappeared. Keep the private source files outside Git or ignored with mode `0600`.
 
 **Voice configuration:** the initial production Secret omitted the Scaleway keys and `VOICE_DEPLOYMENT_ANALYSIS_MODEL` even though the local `.env` contained them. This made the voice wizard report “Le nom du modèle d’analyse manque.” To enable or rotate only voice settings, run `node scripts/deploy/update-voice-secret.js /secure/path/private.env`. The script requires the two keys and model name, checks the GKE context, preserves every unrelated Secret key, restarts the portal and checks voice readiness. A later `apply-app-secret.js` run retains previously published voice keys when its input omits them. On 21 November a synthetic analysis from the pod succeeded and `/api/health` remained all `ok`. Keep the private file outside Git or ignored, mode `0600`. The model currently configured is `mistral-small-3.2-24b-instruct-2506`.
 
@@ -87,6 +95,14 @@ The AWS OpenBao address, audience, role and mount come from `cnp/cluster/aws/19-
 | An existing GitOps environment blocks deployment | `apps/<app>/crossplane/<env>` may belong to an earlier deployment. Inspect its owner and live resources before adoption. For a confirmed disposable test, request deletion through the portal and wait for completion before retrying. Never erase an owned application to clear this guard. |
 | Voice wizard says analysis model missing | Publish the five allowlisted voice settings with `update-voice-secret.js`, then verify `voice-deployment.configured()` and a synthetic model call from the pod. |
 | Portal or provisioner fails after image promotion | Verify the same immutable digest in both manifests, `kubectl kustomize`, server-side dry run, both rollouts, and Argo CD. Keep the provisioner separate from SQLite and avoid positional `env` patches. |
+| Fresh GCP service account is created but IAM/Cloud Run rejects it | IAM propagation is asynchronous. Keep the provisioner's visibility wait and retry; do not add a shared runtime principal or skip its scoped permission check. |
+| GCP variable version is rejected as malformed | A Google Secret Manager version resource includes the numeric project identifier. Keep the GCP delivery parser and its regression test when changing version references. |
+| AWS role creation fails on `GetRole` | The failover identity code creates the dedicated ECS role without requiring a preliminary `GetRole`. Review the create/verify permissions before changing its bootstrap sequence. |
+| Failover engine cannot call Kubernetes | The portal's production pod needs its projected Kubernetes service-account token; the base manifest disables automatic mounting. Verify the `kube-api-access` volume and mount after rendering the overlay. |
+| `cnp-failover-platform` appears missing | Kustomize adds a content hash to the generated ConfigMap name. Read the `failover-platform` volume's actual `configMap.name` from the Deployment and verify that resource; do not create a second un-hashed ConfigMap. |
+| Failback opens DNS before GCP is closed | The failback engine must close GCP traffic itself before reopening the DNS route. Retain the failback regression test and inspect the route state in a failback exercise. |
+| Datadog integration flags an expected HTTP 501 as an error | The private k3s observability path excludes this expected response from error counting. Check actual logs and metrics in the portal after a release, beyond `/api/health`. |
+| A credential refresh removes another feature's key | All three targeted Secret scripts preserve existing `cnp-portal-app-env` keys. Compare key names before/after; run the Secret preservation regression test. Never replace the Secret with a partial manifest. |
 | Failover application deletion takes time | Inventory the exact app and owner **before** confirming deletion. The portal's asynchronous teardown can wait for cloud resources. Watch its state until `completed`; do not remove cloud resources directly or claim completion while it is running. |
 
 If the platform Terraform must be reapplied, the actual GCP state bucket is `cnp-tfstate-512313`; the legacy provider file still mentions `cnp-tfstate-508716`. Initialize explicitly with `terraform init -backend-config=bucket=cnp-tfstate-512313`, use approved credentials and review the plan before apply. Avoid carrying this discrepancy into an unreviewed full apply.
@@ -103,6 +119,114 @@ curl --fail https://portal.apps.mooroon5.fr/api/health
 ```
 
 `/api/health` must report `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Log in with the administrator account, then test the Datadog logs/metrics views and the Argo CD view. **Complete a real GitHub OAuth login**; `/api/health` checks the separate GitHub App API and does not check the OAuth callback registration. Confirm voice status and a synthetic analysis if voice settings changed. Confirm both Deployments `1/1`. For a deployment-path change, submit a disposable application through the **portal UI/API**, wait for its pipeline and runtime, then delete it through the portal and verify teardown. A direct cloud deployment does not exercise this workflow. Check only the affected cloud modes plus the shared health and failover gates; no runbook can guarantee zero errors.
+
+| Service | Post-release evidence |
+| --- | --- |
+| Public portal, TLS and SQLite | HTTPS responds; certificate is ready; portal pod and PVC are healthy; login and existing deployment list load. |
+| GitHub | `/api/health` reports the GitHub App `ok`; a **browser OAuth round trip** reaches the portal with the registered production callback. |
+| Argo CD and Crossplane | `/api/health` reports both `ok`; portal application is `Synced/Healthy`; inspect an existing application's Argo view. |
+| Datadog | `/api/health` reports `ok`; open a real application's logs and metrics in the portal. |
+| Voice | Readiness returns true and a synthetic model analysis succeeds; transcription still needs a real WAV test if that code or credentials changed. |
+| OpenBao and runtime provisioner | Both Deployments are ready; for a changed cloud mode, let the portal create a disposable application with variables and verify scoped delivery and teardown. Do not infer this from JWT login alone. |
+| AWS failover and failback | For changes to this path, exercise promotion and return through the portal and check the DNS route; do not infer success from a healthy GCP pod. |
+| MCP | Portal UI/code remain present; the real remote MCP-CNP service is a later release, so mark it unavailable rather than treating test data as a live service. |
+
+For a read-only OpenBao availability check from the portal pod, query
+`/v1/sys/health?standbyok=true` with the configured TLS trust. The bare GCP
+health endpoint returned HTTP 429 once while the `standbyok=true` check
+returned HTTP 200, `initialized=true`, `sealed=false` on 21 November. A
+standby response alone is not proof of an outage. TLS availability is not a
+substitute for JWT authorization or a real application variable test.
+
+### Copyable checks and resource names
+
+Run these from a machine with the approved GKE context. They read state only;
+they do not create an application or print Secret values.
+
+| Resource | Name or endpoint |
+| --- | --- |
+| GKE context | `gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform` |
+| Namespace | `cnp-portal` |
+| Portal and provisioner Deployments | `cnp-portal`, `openbao-runtime-provisioner` |
+| Portal SQLite PVC | `cnp-portal-data` |
+| Portal TLS Certificate and Ingress | `cnp-portal-tls`, `cnp-portal` |
+| Portal application Secret / Terraform cloud Secret | `cnp-portal-app-env` / `cnp-portal-cloud-env` |
+| Public portal | `https://portal.apps.mooroon5.fr` |
+| Argo CD application | `argocd/cnp-portal` |
+| OpenBao CA ConfigMap | `cnp-portal/openbao-ca` |
+| Failover configuration ConfigMap | `cnp-portal/cnp-failover-platform-<Kustomize hash>`; read the actual name from the Deployment volume |
+
+```sh
+kubectl config current-context
+kubectl -n cnp-portal get deployment cnp-portal openbao-runtime-provisioner
+kubectl -n cnp-portal get pod,pvc,certificate,ingress
+kubectl -n cnp-portal get secret cnp-portal-app-env cnp-portal-cloud-env
+kubectl -n cnp-portal get configmap openbao-ca
+kubectl -n cnp-portal get deployment cnp-portal -o json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).spec.template.spec.volumes.find(v=>v.name==="failover-platform").configMap.name))'
+kubectl -n cnp-portal get configmap -o name | rg '^configmap/cnp-failover-platform-'
+kubectl -n argocd get application cnp-portal
+kubectl get providers.pkg.crossplane.io
+curl -fsS https://portal.apps.mooroon5.fr/healthz
+curl -fsS https://portal.apps.mooroon5.fr/ready
+curl -fsS https://portal.apps.mooroon5.fr/api/health
+```
+
+Both Deployments should be `1/1`; the PVC `Bound`; the Certificate `Ready=True`;
+Argo CD `Synced/Healthy`; and the five `/api/health` integrations `ok`.
+`kubectl get providers.pkg.crossplane.io` shows each installed provider's
+`Healthy` condition. For the production example application retained on 21
+November, run `kubectl -n argocd get application app-2-dancingduck-prod`.
+
+Check the exact OAuth redirect without exposing the Client ID:
+
+```sh
+node -e 'fetch("https://portal.apps.mooroon5.fr/auth/github",{redirect:"manual"}).then(r=>{const u=new URL(r.headers.get("location"));const ok=r.status===302&&u.hostname==="github.com"&&u.searchParams.get("redirect_uri")==="https://portal.apps.mooroon5.fr/auth/github/callback"&&!!u.searchParams.get("client_id");console.log({oauthRedirect:ok});process.exitCode=ok?0:1})'
+```
+
+This checks the outgoing URL. A human must still complete a browser login to
+prove GitHub accepts the callback and the portal session works.
+
+Check the provisioner and voice readiness from their pods:
+
+```sh
+kubectl -n cnp-portal exec deploy/openbao-runtime-provisioner -- node -e 'fetch("http://127.0.0.1:3001/healthz").then(r=>{console.log({provisioner:r.status});process.exitCode=r.ok?0:1})'
+kubectl -n cnp-portal exec deploy/cnp-portal -- node -e 'const ok=require("./src/services/voice-deployment").configured();console.log({voiceConfigured:ok});process.exitCode=ok?0:1'
+```
+
+For OpenBao, the portal pod uses `CNP_OPENBAO_GCP_ADDR`,
+`CNP_OPENBAO_AZURE_ADDR`, `CNP_OPENBAO_AWS_ADDR` and
+`CNP_OPENBAO_PRIVATE_ADDR`. Query the four TLS endpoints from the pod using
+the GCP CA file `/etc/openbao-ca/ca.crt`; HTTP 200 with `standbyok=true`
+means the server is available, not that application permissions work. The
+21 November read-only results were GCP, Azure, AWS and private all 200.
+
+```sh
+kubectl -n cnp-portal exec deploy/cnp-portal -- node -e '
+const https = require("https"), fs = require("fs");
+const targets = [["GCP","CNP_OPENBAO_GCP_ADDR"],["Azure","CNP_OPENBAO_AZURE_ADDR"],["AWS","CNP_OPENBAO_AWS_ADDR"],["Private","CNP_OPENBAO_PRIVATE_ADDR"]];
+Promise.all(targets.map(([name,key]) => new Promise(resolve => {
+  const addr = process.env[key];
+  if (!addr) return resolve({name,error:"address missing"});
+  const options = {timeout:7000};
+  if (name === "GCP") options.ca = fs.readFileSync("/etc/openbao-ca/ca.crt");
+  const req = https.get(addr.replace(/\/$/,"") + "/v1/sys/health?standbyok=true", options, res => {
+    res.resume(); resolve({name,status:res.statusCode});
+  });
+  req.on("timeout", () => req.destroy(new Error("timeout")));
+  req.on("error", e => resolve({name,error:e.code || e.message}));
+}))).then(rows => {
+  console.log(JSON.stringify(rows));
+  process.exitCode = rows.every(row => row.status === 200) ? 0 : 1;
+});'
+```
+
+When changing a deployment mode, use the **portal** to create a disposable
+`<app>/<env>`, then follow its pipeline, Argo CD application, runtime and
+variable delivery. Record the exact app name, environment, owner and GitOps
+path `config-repo/apps/<app>/crossplane/<env>` before testing deletion. The
+portal's deletion status must reach `completed`; verify the GitOps path and
+Argo CD application disappeared. Do not substitute direct cloud commands or
+delete an application owned by someone else.
 
 ## Back up and restore
 
