@@ -43,6 +43,25 @@ patches:
               - name: failover-platform
                 configMap:
                   name: cnp-failover-platform
+              # Jeton standard du compte de service cnp-portal pour le moteur Python du failover (load_incluster_config) :
+              # la base désactive le montage automatique. Même identité que KUBE_TOKEN (déjà dans le pod), mais courte et
+              # renouvelée par le kubelet. Sans lui, initialize-secrets échoue (ConfigException, 21/11/2026).
+              - name: kube-api-access
+                projected:
+                  sources:
+                    - serviceAccountToken:
+                        expirationSeconds: 3607
+                        path: token
+                    - configMap:
+                        name: kube-root-ca.crt
+                        items:
+                          - key: ca.crt
+                            path: ca.crt
+                    - downwardAPI:
+                        items:
+                          - path: namespace
+                            fieldRef:
+                              fieldPath: metadata.namespace
             containers:
               - name: cnp-portal
                 env:
@@ -67,6 +86,9 @@ patches:
                     readOnly: true
                   - name: failover-platform
                     mountPath: /etc/cnp-failover
+                    readOnly: true
+                  - name: kube-api-access
+                    mountPath: /var/run/secrets/kubernetes.io/serviceaccount
                     readOnly: true
   - target:
       kind: Deployment
