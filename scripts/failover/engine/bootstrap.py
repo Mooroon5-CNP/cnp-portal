@@ -169,8 +169,11 @@ def main(argv=None):
             raise ValueError("Compte AWS inattendu.")
         print(json.dumps(execute(config, args.operation, session.client("secretsmanager", config=settings))))
         return 0
-    except Exception:
-        print("Bootstrap interrompu ; aucun secret affiché. Vérifier droits, état SQL et confiance TLS côté RDS.", file=sys.stderr)
+    except Exception as exc:
+        # Cause classée, jamais le message : le portail la lit dans les journaux de la tâche (operate.py) et l'affiche.
+        cause = automation.failure_cause(exc)
+        print(json.dumps({"operation": args.operation, "failed": True, "cause": cause}))
+        print(f"Bootstrap interrompu ({args.operation}) : {automation.FAILURE_CAUSES[cause]}. Aucun secret affiché.", file=sys.stderr)
         return 1
 
 

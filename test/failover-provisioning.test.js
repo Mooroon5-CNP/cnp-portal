@@ -336,6 +336,36 @@ describe('retour manuel vers GCP', () => {
     expect(operations.retry).toHaveBeenCalledWith(route.id, expect.objectContaining({ id: manager.id }));
   });
 });
+test('un échec de la vérification de la réplication est réessayé 10 min avant de bloquer', async () => {
+  workflow.start('weather-api', manager);
+  for (let i = 0; i < 60 && tasks.at(-1)?.action !== 'verify'; i++) {
+    await tick();
+    if (tasks.at(-1)?.state === 'running' && tasks.at(-1).action !== 'verify') succeed();
+  }
+  const verify = tasks.at(-1);
+  expect(verify.action).toBe('verify');
+  verify.state = 'failed';
+  verify.result = { error: 'Tâche verify-replication en échec : délai de connexion dépassé (tunnel ou base injoignable) (CONNECT_TIMEOUT).',
+    cause: 'CONNECT_TIMEOUT', transient: true };
+  let row = await tick();
+  expect(row.state).toBe('waiting');
+  expect(row.message).toContain('CONNECT_TIMEOUT');
+  expect(operations.retry).toHaveBeenCalledWith(verify.id, expect.objectContaining({ id: manager.id }));
+  db.prepare('UPDATE failover_provisioning SET step_started_at=? WHERE app=?').run(new Date(Date.now() - 11 * 60000).toISOString(), 'weather-api');
+  verify.state = 'failed';
+  row = await tick();
+  expect(row.state).toBe('blocked');
+});
+test('un échec de vérification non passager (droit SQL manquant) bloque aussitôt', async () => {
+  workflow.start('weather-api', manager);
+  db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('verify'), 'weather-api');
+  await tick();
+  Object.assign(tasks.at(-1), { state: 'failed', result: { error: 'Tâche verify-replication en échec : droit SQL manquant (SQL_PERMISSION).',
+    cause: 'SQL_PERMISSION', transient: false } });
+  const row = await tick();
+  expect(row.state).toBe('blocked');
+  expect(row.message).toContain('SQL_PERMISSION');
+});
 test('le suivi donne l’étape en clair, le temps écoulé et estimé, et signale une étape anormalement longue', () => {
   workflow.start('weather-api', manager);
   const start = Date.now();

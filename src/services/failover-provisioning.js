@@ -50,6 +50,13 @@ const UPDATE_CHECK_MS = 30000;
 const lastUpdateCheck = new Map();
 // worker-failback-route : un passage du worker commencé avant la pause garde son bail jusqu'à 2 min ; on réessaie.
 const WAITABLE = new Set(['observe', 'runtime-rollout', 'runtime-verify', 'health', 'schema-check', 'worker-failback-route']);
+// Preuve de réplication (verify) : une preuve NÉGATIVE bloque toujours aussitôt. Seule une tâche ECS en échec sur une cause
+// passagère (tunnel, base qui redémarre, limitation AWS) ou non classée est réessayée, 10 min au plus : avant le 21/11/2026,
+// un seul échec de connexion bloquait la mise en service (gab-recette-aws-2111, seconde vérification ratée 8 min après une
+// première entièrement verte, tunnel sain à la mesure).
+const RETRY_TRANSIENT_MS = { verify: 600000 };
+const transientFailure = (action, operation) => Boolean(RETRY_TRANSIENT_MS[action]) && operation.state === 'failed'
+  && (operation.result?.transient === true || operation.result?.cause === 'UNKNOWN');
 // Une publication contrôlée s'approuve seule : la seule décision humaine reste l'approbation de production.
 function schema() {
   db.exec(`CREATE TABLE IF NOT EXISTS failover_provisioning (
@@ -287,12 +294,15 @@ async function advance(app) {
     if (operation.state === 'completed' && (!requiresProof || operation.result?.verified === true)) {
       save('running', `${action} vérifié.`, null, true); return;
     }
-    if (WAITABLE.has(action) && Date.now() - Date.parse(row.step_started_at) < 3600000) {
+    if ((WAITABLE.has(action) || transientFailure(action, operation))
+      && Date.now() - Date.parse(row.step_started_at) < (RETRY_TRANSIENT_MS[action] || 3600000)) {
       // Read-only readiness checks can be repeated while providers converge.
       // A completed negative check starts a new observation; a failed check
       // reuses its durable operation, never a new SQL initialization.
       // Le message dit au manager quoi faire (ex. appeler l'application) : le lire sur la lecture qui vient de se terminer.
-      const hint = operation.result?.message;
+      // Échec d'une tâche ECS : sa cause classée (operate.public_failure), jamais d'autre texte.
+      const hint = operation.result?.message || (operation.state === 'failed' && operation.result?.cause
+        ? `Nouvel essai de ${action} : ${operation.result.error}` : null);
       if (operation.state === 'failed') operations.retry(operation.id, actor);
       else operation = operations.start(app, action, actor);
       save('waiting', hint || `Attente de disponibilité : ${action}.`, `operation:${operation.id}`); return;

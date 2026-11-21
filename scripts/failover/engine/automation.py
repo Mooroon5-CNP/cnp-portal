@@ -45,6 +45,68 @@ class Blocked(Exception):
     """Code public constant ; jamais de secret ou d'exception fournisseur brute."""
 
 
+# Cause d'un échec, en code constant : jamais le texte de l'exception (DSN, requête, mot de passe possibles), seulement sa
+# classe, son code SQLSTATE ou le code d'erreur AWS, ramenés à une liste fermée. Écrite dans les journaux des tâches ECS et
+# remontée au portail, elle dit enfin pourquoi une étape a échoué (avant le 21/11/2026 : « Bootstrap interrompu », sans plus).
+FAILURE_CAUSES = {
+    "CONNECT_TIMEOUT": "délai de connexion dépassé (tunnel ou base injoignable)",
+    "CONNECT_REFUSED": "connexion refusée ou coupée par la base",
+    "TLS": "échec TLS (certificat ou nom du serveur)",
+    "SQL_AUTH": "authentification SQL refusée",
+    "SQL_UNAVAILABLE": "base temporairement indisponible (démarrage, arrêt ou trop de connexions)",
+    "SQL_PERMISSION": "droit SQL manquant",
+    "SQL_ERROR": "erreur SQL",
+    "AWS_ACCESS": "accès AWS refusé",
+    "AWS_THROTTLED": "AWS limite le débit des appels",
+    "AWS_ERROR": "erreur d'un service AWS",
+    "PROOF": "contrôle du moteur non satisfait",
+    "UNKNOWN": "cause non classée",
+}
+TRANSIENT_CAUSES = {"CONNECT_TIMEOUT", "CONNECT_REFUSED", "SQL_UNAVAILABLE", "AWS_THROTTLED"}
+
+
+def failure_cause(exc):
+    """Code constant de FAILURE_CAUSES pour une exception ; ne lit jamais son message."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        names = {kind.__name__ for kind in type(exc).__mro__}
+        sqlstate = getattr(exc, "sqlstate", None) or ""
+        aws = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
+        # TLS d'abord : ssl.SSLCertVerificationError hérite aussi de ValueError.
+        if names & {"SSLError", "SSLCertVerificationError", "CertificateError"} or sqlstate.startswith("08P01"):
+            return "TLS"
+        if isinstance(exc, Blocked) or isinstance(exc, ValueError) and not sqlstate and not aws:
+            return "PROOF"
+        if names & {"TimeoutError", "timeout", "ConnectionTimeout", "ConnectTimeoutError", "ReadTimeoutError"}:
+            return "CONNECT_TIMEOUT"
+        if sqlstate.startswith("28"):
+            return "SQL_AUTH"
+        if sqlstate in {"53300", "57P01", "57P02", "57P03"}:
+            return "SQL_UNAVAILABLE"
+        if sqlstate == "42501":
+            return "SQL_PERMISSION"
+        if sqlstate:
+            return "SQL_ERROR"
+        if aws:
+            if aws in {"Throttling", "ThrottlingException", "TooManyRequestsException", "RequestLimitExceeded"}:
+                return "AWS_THROTTLED"
+            return "AWS_ACCESS" if "AccessDenied" in aws or aws == "UnauthorizedOperation" else "AWS_ERROR"
+        if names & {"ConnectionRefusedError", "ConnectionResetError", "BrokenPipeError", "EndpointConnectionError"}:
+            return "CONNECT_REFUSED"
+        if "OperationalError" in names:
+            # psycopg sans SQLSTATE : la connexion n'a pas abouti. Le délai est configuré court (connect_timeout) ;
+            # l'exception enchaînée, quand elle existe, précise la cause et est examinée au tour suivant.
+            nested = exc.__cause__ or exc.__context__
+            if nested is not None:
+                cause = failure_cause(nested)
+                if cause != "UNKNOWN":
+                    return cause
+            return "CONNECT_TIMEOUT" if "Timeout" in "".join(names) else "CONNECT_REFUSED"
+        exc = exc.__cause__ or exc.__context__
+    return "UNKNOWN"
+
+
 def require(condition, code="INVALID_CONFIG"):
     if not condition:
         raise Blocked(code)
@@ -634,9 +696,11 @@ class Worker:
             return state
         except Blocked as exc:
             state = str(exc)
-        except Exception:
-            # Erreurs SQL/AWS susceptibles de contenir DSN, SQL et mots de passe.
+        except Exception as exc:
+            # Erreurs SQL/AWS susceptibles de contenir DSN, SQL et mots de passe : l'état reste constant, la cause classée
+            # (code de FAILURE_CAUSES, jamais le message) va dans les journaux.
             state = "BLOCKED_OPERATION"
+            print(json.dumps({"app": app["app"], "state": state, "cause": failure_cause(exc)}))
         finally:
             try:
                 if not sql_active and state not in {"AWS_ACTIVE", "PAUSED_OR_LEASE_LOST"}:
@@ -766,8 +830,8 @@ def main(argv=None):
                 # Code public constant (jamais de détail fournisseur) : le portail l'affiche au manager.
                 print(json.dumps({"app": app["app"], "state": str(exc)}))
                 failed = True
-            except Exception:
-                print(json.dumps({"app": app["app"], "state": "BLOCKED_OPERATION"}))
+            except Exception as exc:
+                print(json.dumps({"app": app["app"], "state": "BLOCKED_OPERATION", "cause": failure_cause(exc)}))
                 failed = True
         return int(failed)
     except Exception:

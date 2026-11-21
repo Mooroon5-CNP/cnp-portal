@@ -148,6 +148,39 @@ class BootstrapOrchestrationTests(unittest.TestCase):
     def launched(self):
         return [call.kwargs['overrides']['containerOverrides'][0]['command'][0] for call in self.ecs.run_task.call_args_list]
 
+    def test_a_failed_task_reports_only_its_classified_cause(self):
+        failure = None
+        try:
+            self.run_failing({'operation': 'verify-replication', 'failed': True, 'cause': 'CONNECT_TIMEOUT', 'detail': 'password=x'})
+        except operator.TaskFailure as error:
+            failure = operator.public_failure(error)
+        self.assertEqual(failure['cause'], 'CONNECT_TIMEOUT')
+        self.assertTrue(failure['transient'])
+        self.assertIn('délai de connexion dépassé', failure['error'])
+        self.assertNotIn('password', json.dumps(failure))
+        # Cause hors de la liste fermée (ou absente) : non classée, jamais recopiée.
+        try:
+            self.run_failing({'cause': 'Tout autre texte'})
+        except operator.TaskFailure as error:
+            self.assertEqual(error.cause, 'UNKNOWN')
+            self.assertFalse(operator.public_failure(error)['transient'])
+
+    def run_failing(self, message):
+        sts, ecs, logs = Mock(), Mock(), Mock()
+        sts.get_caller_identity.return_value = {'Account': '626278345026'}
+        ecs.describe_task_definition.return_value = {'taskDefinition': {'family': 'cnp-failover-platform-bootstrap',
+            'taskDefinitionArn': 'task-definition', 'containerDefinitions': [{'name': 'bootstrap', 'logConfiguration':
+                {'options': {'awslogs-group': 'g', 'awslogs-stream-prefix': 'p'}}}]}}
+        ecs.run_task.return_value = {'tasks': [{'taskArn': 'task/failing'}]}
+        ecs.describe_tasks.return_value = {'tasks': [{'lastStatus': 'STOPPED', 'containers': [{'exitCode': 1}]}]}
+        logs.get_log_events.return_value = {'events': [{'message': 'Bootstrap interrompu.'}, {'message': json.dumps(message)}]}
+        session = Mock()
+        session.client.side_effect = lambda name, **kwargs: {'sts': sts, 'ecs': ecs, 'logs': logs}[name]
+        work = tempfile.mkdtemp(dir=self.directory.name)
+        with patch.dict(sys.modules, {'boto3': types.SimpleNamespace(Session=lambda **kwargs: session)}):
+            operator.execute({'app': 'weather-api', 'document': self.document, 'work': work, 'action': 'verify',
+                'task_definition': 'cnp-failover-platform-bootstrap', 'packages': {'bootstrap-config.json': {'profile': 'recipe'}}})
+
     def test_a_failed_task_is_retried_with_a_new_attempt_but_a_running_one_is_reused(self):
         work = Path(self.directory.name)
         (work / 'task-requests.json').write_text(json.dumps({'prepare-target': 'task/failed'}))
