@@ -626,13 +626,14 @@ class GcpAvailabilityTests(ObserveTests):
 class HealthNamesTests(unittest.TestCase):
     """La santé d'une app lit les objets de son régime : jamais la table ni les règles du worker du pilote pour une app plateforme."""
 
-    def health(self, profile):
+    def health(self, profile, control=None, events=()):
         app = profile['gcp']['app_name']
         clients = {name: Mock() for name in ('sts', 'ecs', 'route53', 'dynamodb', 'events')}
         clients['sts'].get_caller_identity.return_value = {'Account': '626278345026'}
         clients['ecs'].describe_services.return_value = {'services': []}
         clients['route53'].list_resource_record_sets.return_value = {'ResourceRecordSets': []}
-        clients['dynamodb'].get_item.return_value = {}
+        clients['dynamodb'].get_item.side_effect = lambda **kwargs: {'Item': control} if control and kwargs['Key']['record']['S'] == 'CONTROL' else {}
+        clients['dynamodb'].query.return_value = {'Items': list(events)}
         clients['events'].describe_rule.return_value = {'State': 'ENABLED'}
         arn = 'arn:aws:ecs:eu-west-3:626278345026:task-definition/cnp-failover-platform-worker:2'
         clients['ecs'].describe_task_definition.return_value = {'taskDefinition': {'taskDefinitionArn': arn}}
@@ -659,6 +660,20 @@ class HealthNamesTests(unittest.TestCase):
                 self.assertEqual(rules, [rule + 'alarm', rule + 'retry'])
                 # Les règles lancent la révision active, que le portail connaît seulement par le nom de la tâche.
                 self.assertTrue(result['triggers_ready'])
+
+
+    def test_health_reports_the_exact_failover_time_from_the_worker_journal(self):
+        sys.path.insert(0, str(SOURCE.parent / 'engine' / 'tests'))
+        import test_worker_phase1 as fixtures
+        event = lambda state, at, field='state': {'state': {'S': state}, 'at': {'N': str(at)}, 'field': {'S': field}}
+        with patch.object(operator, 'gcp_availability', return_value={'available': False}):
+            result, clients = self.health(fixtures.platform_profile(), control={'state': {'S': 'AWS_ACTIVE'}, 'paused': {'BOOL': False}},
+                events=[event('GCP_FENCE_PENDING', 1795250908, 'source_fence'), event('AWS_ACTIVE', 1795250903), event('OPENING_AWS', 1795250903)])
+        self.assertEqual(result['aws_active_since'], 1795250903)
+        self.assertFalse(clients['dynamodb'].query.call_args.kwargs['ScanIndexForward'])
+        result, clients = self.health(fixtures.platform_profile())                    # surveillance normale : journal non lu
+        self.assertNotIn('aws_active_since', result)
+        clients['dynamodb'].query.assert_not_called()
 
 
 @unittest.skipUnless(importlib.util.find_spec('kubernetes'), 'bibliothèque kubernetes absente')

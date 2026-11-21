@@ -430,6 +430,10 @@ const SWITCH_STAGES = {
 const clock = seconds => new Date(seconds * 1000).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
 // Début du service par AWS : le plus ancien contrôle de santé AWS_ACTIVE de la série en cours (contrôles toutes les ~90 s).
 function awsSince(healthChecks) {
+  // Heure exacte, lue par le contrôle dans le journal du worker ; à défaut (ancien contrôle), le premier contrôle AWS_ACTIVE.
+  if (healthChecks[0]?.result?.state === 'AWS_ACTIVE' && Number.isInteger(healthChecks[0].result.aws_active_since)) {
+    return healthChecks[0].result.aws_active_since;
+  }
   let since = null;
   for (const row of healthChecks) {
     if (row.result?.state !== 'AWS_ACTIVE') break;

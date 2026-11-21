@@ -36,6 +36,8 @@ describe('bandeau de bascule', () => {
       { result: { state: 'OPENING_AWS', observed_at: 100 } }, { result: { state: 'AWS_ACTIVE', observed_at: 50 } }];
     expect(awsSince(checks)).toBe(200);
     expect(awsSince([{ result: { state: 'WAIT_SIGNALS', observed_at: 1 } }])).toBeNull();
+    // Heure exacte du journal du worker, quand le contrôle la fournit.
+    expect(awsSince([{ result: { state: 'AWS_ACTIVE', observed_at: 300, aws_active_since: 123 } }, ...checks.slice(1)])).toBe(123);
   });
 });
 

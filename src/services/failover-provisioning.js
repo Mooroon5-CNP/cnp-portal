@@ -243,7 +243,12 @@ async function advance(app) {
           WHERE app=? AND lease_owner=?`).run(`Mise à jour vers ${revision.slice(0, 7)}.`, now, now, now, app, owner);
         return;
       }
-      if (!health || Date.now() - Date.parse(health.created_at) >= 60000) operations.start(app, 'health', actor);
+      // Contrôle toutes les ~30 s (chaque passage du réconciliateur) tant que quelque chose se passe : GCP ne répond plus ou
+      // bascule en cours. Sinon une minute. Avant le 21/11/2026, le bandeau gardait « GCP ne répond plus » jusqu'à 1 min 30
+      // après la bascule.
+      const result = health?.result;
+      const eventful = Boolean(result?.state) && (result.state === 'WAIT_SIGNALS' ? result.public_ready === false : result.state !== 'AWS_ACTIVE');
+      if (!health || Date.now() - Date.parse(health.created_at) >= (eventful ? 20000 : 60000)) operations.start(app, 'health', actor);
       return;
     }
     const steps = stepsOf(row, document);
