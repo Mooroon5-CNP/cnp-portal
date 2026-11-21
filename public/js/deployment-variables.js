@@ -34,6 +34,14 @@
     return rows;
   }
 
+  // UTF-8 puis base64, sans dépendance : le serveur décode (deployment-variable-input).
+  function encodeBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return (root?.btoa || globalThis.btoa)(binary);
+  }
+
   function init(options = {}) {
     const document = root.document;
     const ids = { form: 'newDeploymentForm', list: 'deploymentVariableRows', file: 'deploymentEnvFile',
@@ -57,8 +65,24 @@
       key.name = 'variableNames'; key.placeholder = 'NOM'; key.value = name; key.required = true;
       key.autocomplete = 'off'; key.setAttribute('aria-label', 'Nom de variable');
       const secret = document.createElement('input');
-      secret.name = 'variableValues'; secret.type = 'password'; secret.placeholder = 'Valeur'; secret.value = value;
-      secret.autocomplete = 'new-password'; secret.setAttribute('aria-label', 'Valeur de variable');
+      secret.type = 'password'; secret.autocomplete = 'new-password'; secret.setAttribute('aria-label', 'Valeur de variable');
+      // Un champ d'une ligne supprime les retours à la ligne, et l'envoi d'un formulaire les change en CRLF : une valeur
+      // multiligne importée d'un .env (clé PEM, certificat) arrivait corrompue, sans erreur (constaté le 21/11/2026). Elle part
+      // donc encodée en base64 dans un champ caché ; le champ visible, sans nom, dit seulement combien de lignes elle compte.
+      const encoding = document.createElement('input');
+      encoding.type = 'hidden'; encoding.name = 'variableEncodings';
+      if (/[\r\n]/.test(value)) {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden'; hidden.name = 'variableValues'; hidden.value = encodeBase64(value);
+        encoding.value = 'base64';
+        secret.disabled = true;
+        secret.placeholder = `Valeur sur ${value.split(/\r\n|\r|\n/).length} lignes (importée du .env)`;
+        row.append(hidden);
+      } else {
+        encoding.value = 'plain';
+        secret.name = 'variableValues'; secret.placeholder = 'Valeur'; secret.value = value;
+      }
+      row.append(encoding);
       const remove = document.createElement('button');
       remove.type = 'button'; remove.className = 'btn btn-ghost btn-sm'; remove.textContent = 'Retirer';
       remove.addEventListener('click', () => { row.remove(); updateSummary(); showError(''); });
@@ -98,6 +122,6 @@
     updateSummary();
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { parseDotEnv };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { parseDotEnv, encodeBase64 };
   if (root?.document) root.CNPDeploymentVariables = { init, parseDotEnv };
 })(globalThis.window || null);
