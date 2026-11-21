@@ -3,11 +3,13 @@
 jest.mock('../src/models/deployment_variables', () => ({ get: jest.fn() }));
 jest.mock('../src/services/openbao-delivery-gcp', () => ({ GcpVariableDelivery: jest.fn(), secretId: jest.fn(() => 'cnp-sample-app-dev-var-test') }));
 jest.mock('../src/services/openbao-client', () => ({ OpenBaoClient: { fromEnvironment: jest.fn() } }));
+jest.mock('../src/services/openbao-runtime-provisioner-client', () => ({ remove: jest.fn().mockResolvedValue(null) }));
 
 const records = require('../src/models/deployment_variables');
 const { GcpVariableDelivery } = require('../src/services/openbao-delivery-gcp');
 const { OpenBaoClient } = require('../src/services/openbao-client');
 const { cleanup } = require('../src/services/openbao-cleanup');
+const provisioner = require('../src/services/openbao-runtime-provisioner-client');
 const dep = { id: 'dep', appName: 'sample-app', environment: 'dev', targetCluster: 'gcp' };
 let request, destroy;
 const previous = { project: process.env.GCP_PROJECT, region: process.env.GCP_REGION };
@@ -50,4 +52,20 @@ test('cloud privé : aucune copie à supprimer, seulement les versions OpenBao d
   expect(GcpVariableDelivery).not.toHaveBeenCalled();
   expect(OpenBaoClient.fromEnvironment).toHaveBeenCalledWith('private');
   expect(destroy.mock.calls.map(call => call[2])).toEqual([4]);
+});
+
+test('GCP : les identités runtime sont retirées, même sans variable enregistrée ; jamais ailleurs', async () => {
+  records.get.mockReturnValue(null);
+  await cleanup(dep);
+  expect(provisioner.remove).toHaveBeenCalledWith(dep);
+  provisioner.remove.mockClear();
+  await cleanup({ ...dep, targetCluster: 'private-aws' });
+  await cleanup({ ...dep, targetCluster: 'azure' });
+  expect(provisioner.remove).not.toHaveBeenCalled();
+});
+
+test('une suppression d\'identité refusée arrête le nettoyage avant OpenBao', async () => {
+  provisioner.remove.mockRejectedValueOnce(new Error('Compte GCP runtime existant hors du périmètre attendu.'));
+  await expect(cleanup(dep)).rejects.toThrow('hors du périmètre');
+  expect(destroy).not.toHaveBeenCalled();
 });

@@ -1,7 +1,7 @@
 'use strict';
 
 const { createHash } = require('crypto');
-const { accountFor, ensureGcpIdentity } = require('../src/services/openbao-gcp-identity');
+const { accountFor, ensureGcpIdentity, removeGcpIdentity } = require('../src/services/openbao-gcp-identity');
 const { namesFor, ensureAzureIdentity } = require('../src/services/openbao-azure-identity');
 const { authorized } = require('../src/services/openbao-runtime-provisioner-server');
 const provisionerClient = require('../src/services/openbao-runtime-provisioner-client');
@@ -184,4 +184,60 @@ test('Azure provisioner creates isolated resources and verifies role assignments
   const count = transport.request.mock.calls.length;
   await ensureAzureIdentity(dep, options);
   expect(transport.request.mock.calls.slice(count).every(([request]) => request.method === 'GET')).toBe(true);
+});
+
+test('portal asks the provisioner to remove GCP runtime identities only', async () => {
+  const transport = { post: jest.fn().mockResolvedValue({ data: { removed: true, aws: true, gcp: true } }) };
+  const options = { address: 'http://provisioner.test:3001', tokenFile: '/fake/token', readFile: () => 'portal-token', transport };
+  const prod = { ...dep, environment: 'prod', failoverRequested: true };
+  await expect(provisionerClient.remove(prod, options)).resolves.toEqual({ removed: true, aws: true, gcp: true });
+  expect(transport.post).toHaveBeenCalledWith('http://provisioner.test:3001/remove',
+    { appName: 'test-app', environment: 'prod', targetCluster: 'gcp', failoverRequested: true },
+    expect.objectContaining({ headers: { Authorization: 'Bearer portal-token' } }));
+  await expect(provisionerClient.remove({ ...dep, targetCluster: 'azure' }, options)).resolves.toBeNull();
+  await expect(provisionerClient.remove(dep, { ...options, address: '' })).resolves.toBeNull();
+  expect(transport.post).toHaveBeenCalledTimes(1);
+  transport.post.mockResolvedValue({ data: {} });
+  await expect(provisionerClient.remove(dep, options)).rejects.toThrow('non confirmée');
+});
+
+test('GCP removal deletes only the dedicated account and its project bindings', async () => {
+  const account = accountFor(dep, 'test-project-12345');
+  const other = 'serviceAccount:other@test-project-12345.iam.gserviceaccount.com';
+  let policy = { etag: 'e', bindings: [
+    { role: 'roles/cloudsql.client', members: [`serviceAccount:${account.email}`, other] },
+    { role: 'roles/logging.logWriter', members: [`deleted:serviceAccount:${account.email}?uid=123`] },
+    { role: 'roles/viewer', members: [other], condition: { title: 'kept' } }] };
+  let present = true;
+  const calls = [];
+  const transport = { request: jest.fn(async ({ method, url, data }) => {
+    calls.push(`${method} ${url.split('/').pop()}`);
+    if (url.endsWith(account.email) && method === 'GET') {
+      if (!present) throw missing(404);
+      return { data: { email: account.email, displayName: account.displayName } };
+    }
+    if (url.endsWith(account.email) && method === 'DELETE') { present = false; return { data: {} }; }
+    if (url.includes(':getIamPolicy')) return { data: policy };
+    if (url.includes(':setIamPolicy')) { policy = data.policy; return { data: policy }; }
+    throw new Error(`Unexpected ${method} ${url}`);
+  }) };
+  const options = { project: 'test-project-12345', transport, accessToken: async () => 'fake-token' };
+  await expect(removeGcpIdentity(dep, options)).resolves.toBe(true);
+  expect(policy.bindings).toEqual([{ role: 'roles/cloudsql.client', members: [other] },
+    { role: 'roles/viewer', members: [other], condition: { title: 'kept' } }]);
+  expect(calls.indexOf('POST test-project-12345:setIamPolicy')).toBeLessThan(calls.indexOf(`DELETE ${account.email}`));
+  calls.length = 0;
+  await expect(removeGcpIdentity(dep, options)).resolves.toBe(false);           // déjà supprimé : aucune écriture
+  expect(calls.some(call => call.startsWith('DELETE') || call.includes(':setIamPolicy'))).toBe(false);
+});
+
+test('GCP removal refuses an account it did not create', async () => {
+  const account = accountFor(dep, 'test-project-12345');
+  const transport = { request: jest.fn(async ({ method, url }) => {
+    if (method === 'GET' && url.endsWith(account.email)) return { data: { email: account.email, displayName: 'someone else' } };
+    throw new Error(`Unexpected ${method} ${url}`);
+  }) };
+  await expect(removeGcpIdentity(dep, { project: 'test-project-12345', transport, accessToken: async () => 'fake-token' }))
+    .rejects.toThrow('hors du périmètre');
+  expect(transport.request).toHaveBeenCalledTimes(1);
 });

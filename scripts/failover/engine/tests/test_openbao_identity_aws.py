@@ -49,6 +49,14 @@ class Iam:
     def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
         self.policies[PolicyName] = json.loads(PolicyDocument)
 
+    def delete_role_policy(self, RoleName, PolicyName):
+        del self.policies[PolicyName]
+
+    def delete_role(self, RoleName):
+        if self.policies or self.attached:
+            raise AwsError("DeleteConflict")
+        del self.roles[RoleName]
+
     def list_attached_role_policies(self, RoleName):
         return {"AttachedPolicies": self.attached}
 
@@ -141,6 +149,30 @@ class TestAwsRuntimeRole(unittest.TestCase):
                 identity.ensure(REQUEST, iam, sleep=lambda _: None)
         finally:
             identity.policy = original
+
+    def test_remove_deletes_own_role_and_its_policy(self):
+        iam = Iam()
+        identity.ensure(REQUEST, iam, sleep=lambda _: None)
+        self.assertEqual(identity.remove({**REQUEST, "operation": "remove"}, iam), {"removed": True})
+        self.assertEqual((iam.roles, iam.policies), ({}, {}))
+
+    def test_remove_absent_role_is_not_an_error(self):
+        # Rôle absent : IAM répond AccessDenied (évaluation sans chemin), pas NoSuchEntity.
+        self.assertEqual(identity.remove(REQUEST, Iam()), {"removed": False})
+
+    def test_remove_refuses_foreign_or_widened_role(self):
+        name = identity.role_name("sample-app")
+        foreign = Iam(role={"RoleName": name, "Path": "/cnp-runtime/", "Arn": f"arn:aws:iam::{ACCOUNT}:role/cnp-runtime/{name}",
+                            "Tags": []})
+        with self.assertRaisesRegex(ValueError, "hors du périmètre"):
+            identity.remove(REQUEST, foreign)
+        self.assertIn(name, foreign.roles)
+        widened = Iam()
+        identity.ensure(REQUEST, widened, sleep=lambda _: None)
+        widened.attached = [{"PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]
+        with self.assertRaisesRegex(ValueError, "hors du périmètre"):
+            identity.remove(REQUEST, widened)
+        self.assertIn(name, widened.roles)
 
     def test_rejects_invalid_parameters(self):
         for change in ({"app": "Bad_App"}, {"account": "12"}, {"boundary_arn": "arn:aws:iam::123456789012:policy/other"}):

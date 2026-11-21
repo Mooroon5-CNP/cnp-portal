@@ -1,7 +1,7 @@
 'use strict';
 
 const { createHash } = require('crypto');
-const { ensureAwsRole, roleArnFor } = require('../src/services/openbao-aws-identity');
+const { ensureAwsRole, removeAwsRole, roleArnFor } = require('../src/services/openbao-aws-identity');
 
 const account = '123456789012';
 const boundary = `arn:aws:iam::${account}:policy/cnp-runtime/cnp-runtime-exec-boundary`;
@@ -38,4 +38,20 @@ test('forwards only the provisioner own messages, never raw AWS errors', async (
   await expect(ensureAwsRole(dep, options({ execute: fail('Isolation du rôle AWS non prouvée.') }))).rejects.toThrow('Isolation du rôle AWS non prouvée.');
   await expect(ensureAwsRole(dep, options({ execute: fail('AccessDenied arn:aws:iam::123456789012:user/x secret') })))
     .rejects.toThrow('Provisionnement AWS indisponible ou refusé.');
+});
+
+test('removal asks the Python provisioner and reports whether a role was deleted', async () => {
+  const execute = jest.fn().mockResolvedValue(JSON.stringify({ removed: true }));
+  await expect(removeAwsRole(dep, options({ execute }))).resolves.toBe(true);
+  expect(JSON.parse(execute.mock.calls[0][2])).toEqual({ operation: 'remove', app: 'sample-app', account, region: 'eu-west-3',
+    boundary_arn: boundary });
+  execute.mockResolvedValue(JSON.stringify({ removed: false }));
+  await expect(removeAwsRole(dep, options({ execute }))).resolves.toBe(false);
+  execute.mockResolvedValue('not json');
+  await expect(removeAwsRole(dep, options({ execute }))).rejects.toThrow('indisponible');
+  const fail = jest.fn().mockRejectedValue(Object.assign(new Error('failed'), { stderr: 'Rôle AWS existant hors du périmètre attendu.' }));
+  await expect(removeAwsRole(dep, options({ execute: fail }))).rejects.toThrow('hors du périmètre');
+  const never = jest.fn();
+  await expect(removeAwsRole({ ...dep, environment: 'dev' }, options({ execute: never }))).rejects.toThrow('invalides');
+  expect(never).not.toHaveBeenCalled();
 });

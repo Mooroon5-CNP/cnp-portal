@@ -88,4 +88,42 @@ async function ensureGcpIdentity(deployment, { project = process.env.GCP_PROJECT
   return account.email;
 }
 
-module.exports = { accountFor, ensureGcpIdentity };
+// Retire le compte de toutes les liaisons du projet (sans condition) qui le citent, vivant ou déjà supprimé
+// (« deleted:serviceAccount:<email>?uid=… »). Les autres membres et liaisons restent tels quels.
+async function removeMember(transport, token, readUrl, writeUrl, email) {
+  const cited = member => member === `serviceAccount:${email}` || member.startsWith(`deleted:serviceAccount:${email}?`);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const policy = await request(transport, token, 'POST', readUrl, { options: { requestedPolicyVersion: 3 } });
+    if (!(policy.bindings || []).some(item => !item.condition && (item.members || []).some(cited))) return;
+    const bindings = policy.bindings
+      .map(item => item.condition ? item : { ...item, members: (item.members || []).filter(member => !cited(member)) })
+      .filter(item => item.members.length);
+    try {
+      await request(transport, token, 'POST', writeUrl, { policy: { ...policy, bindings } });
+      return;
+    } catch (error) { if (error.status !== 409 || attempt === 2) throw error; }
+  }
+}
+
+// Suppression de l'environnement : le compte runtime dédié et sa liaison cloudsql.client partent avec lui (laissés jusqu'au
+// 21/11/2026, retirés à la main après recette-aws-2111). Seulement le compte au nom et au libellé attendus ; absent = déjà fait.
+async function removeGcpIdentity(deployment, { project = process.env.GCP_PROJECT, transport = axios,
+  accessToken = googleAccessToken } = {}) {
+  const account = accountFor(deployment, project);
+  const token = await accessToken(transport);
+  const lookup = `https://iam.googleapis.com/v1/projects/${project}/serviceAccounts/${account.email}`;
+  let existing;
+  try { existing = await request(transport, token, 'GET', lookup); }
+  catch (error) { if (error.status !== 404) throw error; }
+  if (existing && (existing.email !== account.email || existing.displayName !== account.displayName)) {
+    throw new Error('Compte GCP runtime existant hors du périmètre attendu.');
+  }
+  const projectBase = `https://cloudresourcemanager.googleapis.com/v1/projects/${project}`;
+  await removeMember(transport, token, `${projectBase}:getIamPolicy`, `${projectBase}:setIamPolicy`, account.email);
+  if (!existing) return false;
+  try { await request(transport, token, 'DELETE', lookup); }
+  catch (error) { if (error.status !== 404) throw error; }
+  return true;
+}
+
+module.exports = { accountFor, ensureGcpIdentity, removeGcpIdentity };
