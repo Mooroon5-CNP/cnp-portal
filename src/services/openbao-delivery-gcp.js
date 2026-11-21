@@ -90,7 +90,9 @@ class GcpVariableDelivery {
       const id = await this.ensureSecret(token, deployment, name);
       const result = await this.request(token, 'POST', `/secrets/${id}:addVersion`,
         { payload: { data: Buffer.from(value, 'utf8').toString('base64') } });
-      const version = result.name?.match(new RegExp(`^projects/${this.project}/secrets/${id}/versions/([1-9][0-9]*)$`))?.[1];
+      // Secret Manager nomme la version avec le NUMÉRO du projet (projects/648441306255/…), pas son identifiant
+      // (relevé le 21/11/2026 sur le compte réel) : les deux formes sont acceptées, le secret et la version restent exacts.
+      const version = result.name?.match(new RegExp(`^projects/(?:${this.project}|[0-9]+)/secrets/${id}/versions/([1-9][0-9]*)$`))?.[1];
       if (!version) throw new Error('Version du secret GCP invalide.');
       references.push({ name, valueSource: { secretKeyRef: { secret: id, version } } });
     }

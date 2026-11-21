@@ -33,6 +33,30 @@ test('creates a regional secret, grants only the runtime identity and returns a 
   expect(JSON.stringify(refs)).not.toContain('private-value');
 });
 
+test('accepts the version name returned with the project number, and only for the expected secret', async () => {
+  const id = secretId(dep, 'API_KEY');
+  const run = async name => {
+    const transport = { request: jest.fn(async ({ method, url }) => {
+      if (url.endsWith(`/secrets/${id}`)) {
+        return { data: { labels: { cnp_app: dep.appName, cnp_env: dep.environment, cnp_owner: 'portal_variables' } } };
+      }
+      if (url.endsWith(':getIamPolicy')) {
+        return { data: { bindings: [{ role: 'roles/secretmanager.secretAccessor', members: ['serviceAccount:run@test-project.iam.gserviceaccount.com'] }] } };
+      }
+      if (url.endsWith(':addVersion')) return { data: { name } };
+      throw new Error(`Unexpected ${method} ${url}`);
+    }) };
+    return new GcpVariableDelivery({ project: 'test-project', region: 'europe-west9',
+      runtimeServiceAccount: 'run@test-project.iam.gserviceaccount.com', transport,
+      accessToken: jest.fn().mockResolvedValue('access-token') }).deliver(dep, { API_KEY: 'private-value' });
+  };
+  // Forme réelle de Secret Manager (numéro de projet), relevée le 21/11/2026.
+  await expect(run(`projects/648441306255/secrets/${id}/versions/1`)).resolves
+    .toEqual([{ name: 'API_KEY', valueSource: { secretKeyRef: { secret: id, version: '1' } } }]);
+  await expect(run(`projects/648441306255/secrets/other-secret/versions/1`)).rejects.toThrow('Version du secret GCP invalide.');
+  await expect(run(`projects/other-project/secrets/${id}/versions/1`)).rejects.toThrow('Version du secret GCP invalide.');
+});
+
 test('refuses to replace a secret not owned by the portal', async () => {
   const transport = { request: jest.fn().mockResolvedValue({ data: { labels: { cnp_app: 'someone-else' } } }) };
   const adapter = new GcpVariableDelivery({ project: 'test-project', region: 'europe-west9',
