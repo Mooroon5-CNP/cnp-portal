@@ -133,6 +133,8 @@ async function forget(row) {
   const dep = deployments.get(row.deployment_id);
   if (dep) await require('./environment-deployment').remove(dep, { afterFailoverTeardown: true });
   if (dep) await require('./openbao-cleanup').cleanup(dep);
+  // Workflow de l'app dans son dépôt et images GCP, comme pour une app sans secours : ce chemin ne les retirait pas.
+  if (dep) await require('./environment-deletion').cleanupRepository(dep);
   db.transaction(() => {
     for (const [table, column] of [['failover_candidates', 'app_name'], ['failover_operations', 'app'], ['failover_profiles', 'app_name'],
       ['failover_provisioning', 'app']]) {

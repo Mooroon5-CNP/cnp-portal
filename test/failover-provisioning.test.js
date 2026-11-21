@@ -366,6 +366,19 @@ test('un échec de vérification non passager (droit SQL manquant) bloque aussit
   expect(row.state).toBe('blocked');
   expect(row.message).toContain('SQL_PERMISSION');
 });
+test('une mise à jour annonce d’abord le parcours court, et le long seulement si le schéma a changé', () => {
+  workflow.start('weather-api', manager);
+  const start = Date.now();
+  db.prepare("UPDATE failover_provisioning SET phase='update',step=0,started_at=?,step_started_at=? WHERE app='weather-api'")
+    .run(new Date(start).toISOString(), new Date(start).toISOString());
+  // Publication, déploiement, vérification, comparaison des schémas, santé : ~11 min, sans la reconstruction de la copie AWS.
+  expect(workflow.progress('weather-api', start).totalEstimate).toBe(60 + 240 + 240 + 60 + 60);
+  // Schéma changé : le parcours long a été pris (pause du worker), son reste est compté.
+  db.prepare("UPDATE failover_provisioning SET step=4,step_started_at=? WHERE app='weather-api'").run(new Date(start).toISOString());
+  const long = workflow.progress('weather-api', start);
+  expect(long.label).toBe('Pause de la surveillance');
+  expect(long.totalEstimate).toBe(60 + 240 + 90 + 90 + 60);
+});
 test('le suivi donne l’étape en clair, le temps écoulé et estimé, et signale une étape anormalement longue', () => {
   workflow.start('weather-api', manager);
   const start = Date.now();
