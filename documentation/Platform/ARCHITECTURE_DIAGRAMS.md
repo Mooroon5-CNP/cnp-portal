@@ -1,9 +1,9 @@
 # CNP architecture and service catalogue
 
-The [cloud landscape](diagrams/cloud-landscape.dark.png) shows the portal,
-delivery chain and four runtime paths. The [OpenBao view](diagrams/openbao-four-clouds.dark.png)
+The [cloud landscape](../architecture/diagrams/cloud-landscape.dark.png) shows the portal,
+delivery chain and four runtime paths. The [OpenBao view](../architecture/diagrams/openbao-four-clouds.dark.png)
 uses the same four columns for every target: version store, runtime identity,
-delivery and application. The [service catalogue](diagrams/service-catalog.dark.png)
+delivery and application. The [service catalogue](../architecture/diagrams/service-catalog.dark.png)
 lists what an application team can request today. Each PNG also has a light
 variant and an editable `.drawio` file in `diagrams/`.
 
@@ -45,7 +45,7 @@ themes after editing the model or a view; do not hand-edit generated `.drawio`.
 Facts come from `cnp-portal` deployment manifests, variable delivery code and
 the `cnp/cluster` Terraform/Kubernetes configuration as inspected on 21
 November 2026. Live readiness is governed by the
-[production runbook](../Cloud/RUNBOOK-CNP-PORTAL-GCP.md), not by a diagram.
+[production runbook](DEPLOYMENT.md), not by a diagram.
 The legacy GCP `11-vault.tf` installs HashiCorp Vault with TLS disabled; it is
 not the GCP OpenBao endpoint configured in the portal. The OpenBao GCP bootstrap
 source needs a separate trace before treating its installation as reproducible.

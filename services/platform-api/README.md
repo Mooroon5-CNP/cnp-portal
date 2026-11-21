@@ -21,4 +21,4 @@ The authenticated MCP contract routes are:
 
 Application and workload data are synthetic fixtures. Serve this API over HTTPS
 when using MCP-CNP's HTTP source adapters. See
-[the combined integration guide](../../documentation/MCP_INTEGRATION.md).
+[the combined integration guide](../../documentation/Platform/MCP.md).

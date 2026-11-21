@@ -1,12 +1,8 @@
 # Intégration MCP-CNP / CNP Portal
 
-Reprise du **2 novembre 2026** : la branche locale
-`integrate/mcp-main-20261102` combine main (`f1c78d1`, Azure inclus) et
-`feat/MCPapi` (`6249299`). Les correctifs historiquement nommés
-`feat/mcp-environment-integration` sont déjà publiés dans `feat/MCPapi`.
-Les résultats fonctionnels ci-dessous proviennent de la recette du 26 octobre ;
-ils restent à revalider sur la combinaison actuelle. Voir
-[le suivi de validation](MCP_BASELINE_2026-11-02.md).
+Ce guide décrit le client MCP intégré au portail et son mode de développement local.
+Le service MCP-CNP distant est une promotion séparée. Vérifier les intégrations
+réelles dans `/api/health` et dans les vues du portail après chaque changement.
 
 ## Fonctionnalités disponibles
 
@@ -101,9 +97,7 @@ Le chat réutilise le Gateway Scaleway et la clé d’analyse du portail. Seuls 
 modèles dont l’identifiant commence par `mistral-` sont acceptés. `MCP_MISTRAL_ENABLED=false`
 désactive la synthèse et la résolution sémantique ; `MCP_ROUTING_MODE=local` évite
 aussi les appels IA pour le routage. `CLOUD_ENV_FILE` sélectionne les paramètres cloud importés. Voir le
-[guide cloud](Cloud/README.md) et les
-[changements reproductibles](Cloud/UpdatedCloudThings.md) lors d’un changement
-de compte, projet ou région.
+[guide de déploiement du portail](DEPLOYMENT.md) pour les opérations de production.
 
 Le launcher réel réutilise les adaptateurs natifs du portail : GitHub, Argo,
 Kubernetes/Crossplane et Datadog. Il n’a pas besoin de la Platform API Python
@@ -249,7 +243,7 @@ URLs personnalisées/failover, Datadog, les coûts réels ni une génération IA
 
 Les six spécifications et leurs critères sont dans `MCP-CNP/specs/README.md` du
 dépôt voisin ; elles suivent le skill to-spec. La spécification FinOps détaillée
-côté portail reste dans [SPEC_FINOPS_CONVERSATIONNEL.md](SPEC_FINOPS_CONVERSATIONNEL.md).
+côté portail reste dans la demande FinOps correspondante.
 
 1. Autorisation autonome par application/environnement côté serveur MCP pour les
    appels directs ; le scope JWT global et le filtre portail ne suffisent pas.

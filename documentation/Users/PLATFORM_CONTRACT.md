@@ -4,7 +4,6 @@ Ce document décrit ce que la plateforme CNP fait réellement. Il ne contient qu
 
 ## Évolution du contrat au 11 novembre 2026
 
-**Avant tout déploiement :** un contrôle en lecture seule du dépôt bloque un moteur SQLite détecté avec un hébergement PostgreSQL, et l’inverse, avant de créer l’enregistrement ou de lancer l’onboarding. Le formulaire conserve ses valeurs pour corriger le choix sans suppression. Une détection inconnue ou mixte ne constitue pas une incompatibilité certaine. Voir [les règles et limites](../../documentation/architecture/acces-applicatif.md#vérification-sqlitepostgresql-avant-création).
 
 Pour les environnements GCP simples dev/prod (sans base gérée par le portail, sans demande ni profil failover), le lien applicatif est désormais l’URI native HTTPS Cloud Run observée. Le portail exige Cloud Run prêt, l’image attendue et une réponse HTTP 2xx/3xx sur cette origine (10 s maximum, sans suivre les redirections). Un échec d’accès produit un diagnostic ; le domaine personnalisé n’est plus attendu pour cette offre.
 
@@ -12,9 +11,7 @@ Les nouvelles instances simples ne génèrent plus de NEG/backend de routage par
 
 La règle ArgoCD vérifiée reste : aucune auto-approbation ; pour un demandeur manager, seul un autre utilisateur correspondant au compte local `admin` actif peut approuver ou refuser. Un compte OAuth nommé admin ne suffit pas.
 
-**Suppression explicite :** les deux pages exigent `delete` et, en cas de stockage persistant, un consentement à l’effacement des données. Une tâche durable attend les synchronisations puis vérifie la disparition des ressources avant de retirer le déploiement. Voir [le cycle de suppression](../../documentation/architecture/suppression-applicative.md).
 
-**Référence actuelle :** [Accès applicatif et approbations ArgoCD](../../documentation/architecture/acces-applicatif.md), avec les sources et limites de validation. Les sections suivantes décrivent le parcours historique ; leurs chemins racine, délais et contrôles ne doivent pas être extrapolés aux nouveaux environnements dev/prod.
 
 ---
 
