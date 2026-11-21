@@ -5,3 +5,7 @@ a955ed2dbdba4f87a837b45806fc3acfd4be8134:src/services/openbao-azure-identity.js:
 a955ed2dbdba4f87a837b45806fc3acfd4be8134:src/services/openbao-azure-identity.js:generic-api-key:15
 a3593b4307650eb32bdeddb5d79a8f7d650a8a01:src/services/openbao-azure-identity.js:generic-api-key:14
 a3593b4307650eb32bdeddb5d79a8f7d650a8a01:src/services/openbao-azure-identity.js:generic-api-key:15
+
+# Valeur factice du test de préservation des clés du Secret applicatif (PR #72, 21/11/2026) : ce n'est pas le
+# mot de passe réel (empreintes différentes, vérifié). Seule cette empreinte est ignorée.
+1daa81e5fa0e0afc3c3c4d97ba61b6673b855f4a:test/app-secret-preservation.test.js:generic-api-key:15
