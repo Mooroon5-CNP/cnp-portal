@@ -604,16 +604,20 @@ def execute(request):
                 pending_file.write_text(json.dumps(pending))
             ecs.get_waiter('tasks_stopped').wait(cluster=variables['ecs_cluster_arn'], tasks=[arn], WaiterConfig={'Delay': 5, 'MaxAttempts': 100})
             stopped = ecs.describe_tasks(cluster=variables['ecs_cluster_arn'], tasks=[arn])['tasks'][0]
-            if any(container.get('exitCode') != 0 for container in stopped['containers']): raise ValueError('Tâche opérateur en échec ; aucune reprise destructive automatique')
             logs = session.client('logs', config=settings)
             container = actual['containerDefinitions'][0]
             options = container['logConfiguration']['options']
             stream = options['awslogs-stream-prefix'] + '/' + container['name'] + '/' + arn.rsplit('/', 1)[1]
-            events = logs.get_log_events(logGroupName=options['awslogs-group'], logStreamName=stream, startFromHead=True)['events']
             messages = []
+            try:
+                events = logs.get_log_events(logGroupName=options['awslogs-group'], logStreamName=stream, startFromHead=True)['events']
+            except Exception:
+                events = []
             for event in events:
                 try: messages.append(json.loads(event['message']))
                 except ValueError: pass
+            if any(container.get('exitCode') != 0 for container in stopped['containers']):
+                raise TaskFailure(operation, task_cause(messages))
             return {'arn': arn, 'results': messages}
 
         ledger = work / 'completed.json'
@@ -675,8 +679,28 @@ def execute(request):
     raise ValueError('Opération inconnue')
 
 
+class TaskFailure(Exception):
+    """Tâche ECS du secours en échec : seule la cause classée (code fermé de automation.FAILURE_CAUSES) est exposée."""
+    def __init__(self, operation, cause):
+        super().__init__(operation)
+        self.operation, self.cause = operation, cause
+
+
+def task_cause(messages):
+    """Dernière cause classée écrite par la tâche (bootstrap ou worker) ; tout autre contenu est ignoré."""
+    import automation
+    causes = [value.get('cause') for value in messages if isinstance(value, dict) and value.get('cause') in automation.FAILURE_CAUSES]
+    return causes[-1] if causes else 'UNKNOWN'
+
+
 def public_failure(error):
     """Expose known setup failures without printing exception text or credentials."""
+    if isinstance(error, TaskFailure):
+        import automation
+        # Une cause passagère (tunnel, base qui redémarre, limitation AWS) se réessaie ; le portail le sait par « transient ».
+        return {'error': f'Tâche {error.operation} en échec : {automation.FAILURE_CAUSES[error.cause]} ({error.cause}). '
+                'Aucune reprise destructive automatique ; aucun secret affiché.',
+                'cause': error.cause, 'transient': error.cause in automation.TRANSIENT_CAUSES}
     kind = type(error)
     if kind.__module__ == 'google.auth.exceptions' and kind.__name__ in {'DefaultCredentialsError', 'RefreshError'}:
         return {'error': 'Authentification Google du Python opérateur absente ou invalide (Application Default Credentials). '
