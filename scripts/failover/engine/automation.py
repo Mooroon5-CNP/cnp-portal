@@ -462,6 +462,26 @@ def public_health(app):
 
 
 PROBE_ATTEMPTS, PROBE_PAUSE = 3, 1
+CONNECT_ATTEMPTS, CONNECT_PAUSE = 3, 2
+
+
+def connect_with_retry(connect, side, sleep=time.sleep, attempts=CONNECT_ATTEMPTS):
+    """Ouvre une connexion SQL, avec nouvel essai seulement si elle n'a pas pu s'établir (délai dépassé, refus).
+
+    Une tâche Fargate qui démarre perd parfois sa première connexion à travers le tunnel (cause CONNECT_TIMEOUT relevée le
+    21-22/11/2026 : sonde, reclôture du retour, puis copie initiale bloquée à prepare-source). Aucun ordre SQL n'est envoyé
+    avant la connexion établie : réessayer est sans effet de bord. Toute autre cause (authentification, TLS, droit) est remontée
+    aussitôt. Une ligne non JSON par essai raté (operate.py ne lit que les lignes JSON comme résultats), sans adresse ni message.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return connect()
+        except Exception as exc:
+            cause = failure_cause(exc)
+            if cause not in {"CONNECT_TIMEOUT", "CONNECT_REFUSED"} or attempt == attempts:
+                raise
+            print(f"Connexion {side} : essai {attempt} raté ({cause}), nouvel essai.")
+            sleep(CONNECT_PAUSE)
 
 
 def private_reachable(app, attempts=PROBE_ATTEMPTS, sleep=time.sleep, connect=socket.create_connection):
@@ -557,12 +577,13 @@ class SQL:
         with tempfile.TemporaryDirectory(prefix="cnp-ca-") as directory:
             ca = Path(directory) / "ca.pem"
             ca.write_text(spec["ca_pem"])
-            with psycopg.connect(host=spec["host"], port=5432,
+            connect = lambda: psycopg.connect(host=spec["host"], port=5432,
                     dbname=postgres_contract.database_name(app["profile"]),
                     user=credentials["username"], password=credentials["password"],
                     sslmode="verify-ca" if side == "source" else "verify-full", sslrootcert=str(ca),
                     autocommit=True, connect_timeout=CONNECT_TIMEOUT,
-                    options="-c statement_timeout=15000 -c lock_timeout=5000 -c application_name=cnp-failover-worker") as conn:
+                    options="-c statement_timeout=15000 -c lock_timeout=5000 -c application_name=cnp-failover-worker")
+            with connect_with_retry(connect, side) as conn:
                 yield conn
 
     def saved_state(self, target, profile):
