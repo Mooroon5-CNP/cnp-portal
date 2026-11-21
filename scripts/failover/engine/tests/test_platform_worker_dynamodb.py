@@ -163,7 +163,7 @@ class PlatformWorkerOnRealDynamoDB(unittest.TestCase):
         sql, routing = Mock(), Mock()
         sql.connection.return_value.__enter__ = Mock(return_value='source')
         sql.connection.return_value.__exit__ = Mock(return_value=False)
-        failback = a.Failback(self.store, sql, routing)
+        failback = a.Failback(self.store, sql, routing, sleep=lambda _: None)
         refused = [dict(paused=False), dict(lease_until=2 ** 40)]
         for state in refused:
             self.promoted(value, **state)
