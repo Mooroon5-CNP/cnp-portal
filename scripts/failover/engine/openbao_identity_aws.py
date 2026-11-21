@@ -159,15 +159,45 @@ def ensure(request, iam, sleep=time.sleep, attempts=8):
             sleep(5)
 
 
+def remove(request, iam):
+    """Suppression de l'app : retire son rôle d'exécution, et seulement lui (chemin, étiquettes, aucune politique gérée).
+
+    Un rôle absent n'est pas une erreur. Comme pour la création, IAM évalue GetRole sur un rôle absent sans son chemin,
+    hors des droits du provisionneur : AccessDenied vaut donc « absent » ici (un homonyme hors de /cnp-runtime/ est de même
+    illisible, et ne serait de toute façon jamais supprimé : DeleteRole est limité au chemin et à l'étiquette ManagedBy).
+    """
+    app, _account, _region, _boundary = _validate(request)
+    name = role_name(app)
+    try:
+        role = iam.get_role(RoleName=name)["Role"]
+    except Exception as error:
+        if _code(error) in {"NoSuchEntity", "AccessDenied"}:
+            return {"removed": False}
+        raise
+    tags = {item["Key"]: item["Value"] for item in role.get("Tags", [])}
+    if (role.get("Path") != PATH or tags.get("ManagedBy") != MANAGED_BY or tags.get("Application") != app
+            or tags.get("Environment") != "prod" or iam.list_attached_role_policies(RoleName=name).get("AttachedPolicies")):
+        raise ValueError("Rôle AWS existant hors du périmètre attendu.")
+    for name_ in iam.list_role_policies(RoleName=name).get("PolicyNames", []):
+        iam.delete_role_policy(RoleName=name, PolicyName=name_)
+    try:
+        iam.delete_role(RoleName=name)
+    except Exception as error:
+        if _code(error) != "NoSuchEntity":
+            raise
+    return {"removed": True}
+
+
 def main():
     try:
         import boto3
         request = json.load(sys.stdin)
-        if request.get("operation") != "ensure":
+        operation = {"ensure": ensure, "remove": remove}.get(request.get("operation"))
+        if operation is None:
             raise ValueError("Opération inconnue.")
         if boto3.client("sts", region_name=request.get("region")).get_caller_identity()["Account"] != request.get("account"):
             raise ValueError("Compte AWS inattendu.")
-        json.dump(ensure(request, boto3.client("iam")), sys.stdout)
+        json.dump(operation(request, boto3.client("iam")), sys.stdout)
     except ValueError as error:
         # Messages écrits ici, sans paramètre de requête ni valeur : sûrs à remonter au portail.
         print(str(error), file=sys.stderr)

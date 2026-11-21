@@ -27,8 +27,11 @@ def execute(request, client):
         if (actual.get('Application') != app or actual.get('Environment') != 'prod'
                 or actual.get('ManagedBy') != 'cnp-portal-variables'):
             raise ValueError('Secret AWS existant hors du périmètre du portail.')
-        if not existing.get('DeletedDate'):
-            client.delete_secret(SecretId=existing['ARN'], RecoveryWindowInDays=7)
+        # Suppression immédiate, comme les secrets de la plateforme (platform_secrets.remove) : avec une fenêtre de
+        # récupération, le nom restait réservé 7 jours et un redéploiement de la même app échouait à recréer le secret
+        # (constaté le 21/11/2026 sur recette-aws-2111). Un secret déjà planifié est purgé de même. Les versions OpenBao,
+        # source des valeurs, sont détruites ensuite par le portail.
+        client.delete_secret(SecretId=existing['ARN'], ForceDeleteWithoutRecovery=True)
 
 
 def main():

@@ -55,6 +55,9 @@ function aws(deployment, names) {
 
 async function cleanup(deployment) {
   const record = records.get(deployment.id);
+  // Identités runtime créées par le provisionneur (compte GCP de l'environnement, rôle AWS du secours) : retirées même sans
+  // variables enregistrées, car elles naissent au déploiement. Après les ressources (elles ne servent plus), avant OpenBao.
+  if (deployment.targetCluster === 'gcp') await require('./openbao-runtime-provisioner-client').remove(deployment);
   if (!record) return;
   if (deployment.targetCluster === 'azure') await azure(deployment, record.ownedNames);
   // Cloud privé : aucune copie hors d'OpenBao. Le Secret « variables » produit par External Secrets disparaît avec le

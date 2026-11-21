@@ -4,9 +4,9 @@ const axios = require('axios');
 const express = require('express');
 const fs = require('fs');
 const https = require('https');
-const { ensureGcpIdentity } = require('./openbao-gcp-identity');
+const { ensureGcpIdentity, removeGcpIdentity } = require('./openbao-gcp-identity');
 const { ensureAzureIdentity } = require('./openbao-azure-identity');
-const { ensureAwsRole } = require('./openbao-aws-identity');
+const { ensureAwsRole, removeAwsRole } = require('./openbao-aws-identity');
 
 const API = `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT || 443}`;
 const SERVICE_ACCOUNT = 'system:serviceaccount:cnp-portal:cnp-portal';
@@ -27,26 +27,41 @@ async function authorized(token, { transport = axios, readFile = fs.readFileSync
 const app = express();
 app.use(express.json({ limit: '1kb' }));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
-app.post('/ensure', async (req, res) => {
-  const token = req.header('authorization')?.match(/^Bearer ([A-Za-z0-9_+./=-]+)$/)?.[1];
-  if (!token) return res.status(401).json({ error: 'Identité du portail absente.' });
-  try {
-    if (!await authorized(token)) return res.status(403).json({ error: 'Identité du portail refusée.' });
-    const deployment = req.body || {};
-    if (!['gcp', 'azure'].includes(deployment.targetCluster)) return res.status(400).json({ error: 'Cloud non pris en charge.' });
-    if (deployment.targetCluster === 'gcp') {
-      await ensureGcpIdentity(deployment);
-      // Secours AWS (GCP PostgreSQL prod) : rôle d'exécution ECS propre à l'app, créé puis relu et simulé.
-      if (deployment.failoverRequested === true && deployment.environment === 'prod') await ensureAwsRole(deployment);
-    } else await ensureAzureIdentity(deployment);
-    return res.json({ ready: true });
-  } catch (error) {
-    const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration|Rôle|Isolation) [^.]{1,170}\.)$/.test(error.message)
-      ? error.message : 'Provisionnement runtime indisponible. Réessayez après correction.';
-    console.error('OpenBao runtime provisioner:', message);
-    return res.status(503).json({ error: message });
-  }
-});
+// Les deux routes partagent l'authentification (toujours en premier), le filtrage des messages et le refus des clouds
+// non pris en charge ; seule l'action diffère.
+function route(clouds, action) {
+  return async (req, res) => {
+    const token = req.header('authorization')?.match(/^Bearer ([A-Za-z0-9_+./=-]+)$/)?.[1];
+    if (!token) return res.status(401).json({ error: 'Identité du portail absente.' });
+    try {
+      if (!await authorized(token)) return res.status(403).json({ error: 'Identité du portail refusée.' });
+      const deployment = req.body || {};
+      if (!clouds.includes(deployment.targetCluster)) return res.status(400).json({ error: 'Cloud non pris en charge.' });
+      return res.json(await action(deployment));
+    } catch (error) {
+      const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration|Rôle|Isolation) [^.]{1,170}\.)$/.test(error.message)
+        ? error.message : 'Provisionnement runtime indisponible. Réessayez après correction.';
+      console.error('OpenBao runtime provisioner:', message);
+      return res.status(503).json({ error: message });
+    }
+  };
+}
+
+app.post('/ensure', route(['gcp', 'azure'], async deployment => {
+  if (deployment.targetCluster === 'gcp') {
+    await ensureGcpIdentity(deployment);
+    // Secours AWS (GCP PostgreSQL prod) : rôle d'exécution ECS propre à l'app, créé puis relu et simulé.
+    if (deployment.failoverRequested === true && deployment.environment === 'prod') await ensureAwsRole(deployment);
+  } else await ensureAzureIdentity(deployment);
+  return { ready: true };
+}));
+
+// Suppression d'un environnement GCP : rôle AWS du secours d'abord (prod avec secours, comme à la création), puis compte GCP.
+app.post('/remove', route(['gcp'], async deployment => {
+  const aws = deployment.failoverRequested === true && deployment.environment === 'prod' ? await removeAwsRole(deployment) : false;
+  const gcp = await removeGcpIdentity(deployment);
+  return { removed: true, aws, gcp };
+}));
 
 if (require.main === module) app.listen(3001, '0.0.0.0');
 module.exports = { app, authorized };

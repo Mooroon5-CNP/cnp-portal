@@ -49,4 +49,28 @@ async function ensureAwsRole(deployment, { account = process.env.CNP_AWS_ACCOUNT
   return role;
 }
 
-module.exports = { ensureAwsRole, roleArnFor };
+// Suppression de l'app : le rôle d'exécution propre à l'app part avec son secours (opération « remove » du script, qui
+// refuse tout rôle hors périmètre). Absent = déjà fait.
+async function removeAwsRole(deployment, { account = process.env.CNP_AWS_ACCOUNT_ID, region = process.env.CNP_AWS_REGION,
+  boundary = process.env.CNP_AWS_RUNTIME_BOUNDARY_ARN, python = process.env.CNP_FAILOVER_PYTHON || 'python3',
+  execute = run } = {}) {
+  if (!roleArnFor(deployment?.appName, account) || deployment.targetCluster !== 'gcp' || deployment.environment !== 'prod'
+    || !/^[a-z]{2}-[a-z]+-[0-9]$/.test(region || '')
+    || boundary !== `arn:aws:iam::${account}:policy/cnp-runtime/cnp-runtime-exec-boundary`) {
+    throw new Error('Paramètres du rôle AWS invalides.');
+  }
+  const script = path.resolve(__dirname, '../../scripts/failover/engine/openbao_identity_aws.py');
+  let output;
+  try {
+    output = await execute(python, [script], JSON.stringify({ operation: 'remove', app: deployment.appName, account, region,
+      boundary_arn: boundary }), 60000);
+  } catch (error) {
+    throw new Error(SAFE.test(error.stderr || '') ? error.stderr.replace(/\.?$/, '.') : 'Provisionnement AWS indisponible ou refusé.');
+  }
+  let removed;
+  try { removed = JSON.parse(output).removed; } catch (_) { /* invalid output */ }
+  if (typeof removed !== 'boolean') throw new Error('Provisionnement AWS indisponible ou refusé.');
+  return removed;
+}
+
+module.exports = { ensureAwsRole, removeAwsRole, roleArnFor };

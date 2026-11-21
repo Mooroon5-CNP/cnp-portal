@@ -29,10 +29,18 @@ class Client:
 
 
 class TestCleanup(unittest.TestCase):
-    def test_schedules_only_owned_secret_for_recoverable_deletion(self):
+    def test_deletes_only_owned_secret_without_recovery_window(self):
         client = Client()
         cleanup.execute({'app': 'sample-app', 'names': ['API_KEY'], 'region': 'eu-west-3'}, client)
-        self.assertEqual(client.deleted[0]['RecoveryWindowInDays'], 7)
+        self.assertEqual(client.deleted, [{'SecretId': 'arn:aws:secretsmanager:eu-west-3:123456789012:secret:owned-AbCd12',
+                                           'ForceDeleteWithoutRecovery': True}])
+
+    def test_purges_secret_already_scheduled_for_deletion(self):
+        client = Client()
+        original = client.describe_secret
+        client.describe_secret = lambda **kwargs: {**original(**kwargs), 'DeletedDate': '2026-11-21'}
+        cleanup.execute({'app': 'sample-app', 'names': ['API_KEY'], 'region': 'eu-west-3'}, client)
+        self.assertTrue(client.deleted[0]['ForceDeleteWithoutRecovery'])
 
     def test_refuses_secret_owned_by_another_application(self):
         client = Client(owned=False)
