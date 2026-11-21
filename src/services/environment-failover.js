@@ -379,6 +379,10 @@ async function deploymentStatus(dep) {
     const label = { update: 'Mise à jour sur GCP et AWS', failback: 'Retour vers GCP' }[progress.phase] || 'Mise en service du secours';
     // Un blocage seul demande un manager : il reprend depuis la page du déploiement, après correction de la cause affichée.
     if (progress.state === 'blocked') return { phase: 'failed', message: `${label} bloqué(e) : ${progress.message}`, runUrl: run.html_url, failoverResumable: true };
+    if (progress.state !== 'completed' && progress.phase === 'failback') {
+      const back = failbackStatus(dep, progress);
+      if (back) return { ...back, runUrl: run.html_url };
+    }
     if (progress.state !== 'completed') {
       const step = progress.total ? ` (étape ${Math.min(progress.step + 1, progress.total)}/${progress.total})` : '';
       if (!progress.label) return { phase: 'deploying', message: `${label}${step} : ${progress.message || 'en cours.'}`, runUrl: run.html_url };
@@ -392,18 +396,85 @@ async function deploymentStatus(dep) {
     return { phase: 'waiting', message: 'En attente de la première exécution réussie du pipeline (images GCP et AWS).' };
   }
 }
+// Retour vers GCP (FAILBACK_STEPS) : le service reprend sur GCP dès la copie AWS → GCP vérifiée (failback-sync, 4e étape), bien
+// avant la fin du parcours (reconstruction de la copie AWS, réarmement de la surveillance : ~15 min). La page le dit :
+// d'abord « retour en cours » (écritures coupées environ une minute pendant la copie), puis « servie par GCP, secours AWS en
+// reconstruction », avec le lien de l'application. Demande de Gabriel, 21/11/2026.
+const GCP_REOPENED_STEP = 4;
+function failbackStatus(dep, progress) {
+  if (!progress.label || !progress.total) return null;
+  const timing = `étape ${duration(progress.elapsed)} / ~${duration(progress.estimate)}, parcours ${duration(progress.totalElapsed)} / ~${duration(progress.totalEstimate)}`;
+  const step = `étape ${Math.min(progress.step + 1, progress.total)}/${progress.total}`;
+  const slow = progress.slow ? ' Plus long que d’habitude : rien n’est bloqué tant qu’aucune erreur n’est affichée.' : '';
+  if (progress.step < GCP_REOPENED_STEP) {
+    return { phase: 'deploying', failoverAlert: 'returning',
+      message: `Retour vers GCP en cours (${step}) : ${progress.label} (${timing}). L’application reste servie par AWS ; `
+        + `les écritures sont refusées environ une minute pendant la copie vers GCP.${slow}` };
+  }
+  // Heure de reprise : création de l'opération qui suit la copie vérifiée (à 30 s près, plus ~30 s de sonde DNS).
+  const reset = require('./failover-operations').list(dep.appName).find(row => row.action === 'failback-reset');
+  const since = reset ? ` depuis ${clock(Date.parse(reset.created_at) / 1000)}` : '';
+  return { phase: 'success', failoverAlert: 'restoring',
+    message: `L’application est de nouveau servie par GCP${since}. Remise en place du secours AWS en cours (${step}) : `
+      + `${progress.label} (${timing}). Jusqu’à la fin, une nouvelle panne GCP ne serait pas couverte par AWS.${slow}`,
+    applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, cloudRunUrl: `https://${dep.appName}.apps.mooroon5.fr`,
+    revision: runtimeRevision(dep.appName) };
+}
+// Étapes de la bascule telles que le worker les écrit (automation.py, database.promote_after_fence), en mots lisibles.
+const SWITCH_STAGES = {
+  WAIT_PRIVATE_SOURCE: 'confirmation que la base GCP ne répond plus', CLOSING_GCP_ROUTE: 'fermeture du DNS vers GCP',
+  FENCING_GCP: 'fermeture de la base GCP', RECHECKING_GCP_FENCE: 'vérification de la fermeture de GCP',
+  WAITING_REPLICATION_BARRIER: 'rattrapage des dernières écritures', DISABLING_SUBSCRIPTION: 'arrêt de la réplication',
+  OPENING_AWS: 'ouverture de la base AWS',
+};
+const clock = seconds => new Date(seconds * 1000).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+// Début du service par AWS : le plus ancien contrôle de santé AWS_ACTIVE de la série en cours (contrôles toutes les ~90 s).
+function awsSince(healthChecks) {
+  let since = null;
+  for (const row of healthChecks) {
+    if (row.result?.state !== 'AWS_ACTIVE') break;
+    since = row.result.observed_at || since;
+  }
+  return since;
+}
+// Ce que la page doit dire pendant une panne, d'après le dernier contrôle de santé (lecture seule, < 3 min) : GCP ne répond
+// plus (avant l'alarme), bascule en cours (étape du worker), ou bascule bloquée. Null en marche normale. Avant le 21/11/2026,
+// la page affichait pendant la bascule « vérification de la réplication et du worker en cours », message de mise en service.
+function failoverAlert(health, now = Date.now()) {
+  const result = health?.result;
+  const age = now / 1000 - (result?.observed_at || 0);
+  if (!result || age < 0 || age >= 180) return null;
+  if (SWITCH_STAGES[result.state]) {
+    return { alert: 'switching', message: `GCP est tombé : bascule automatique vers AWS en cours (${SWITCH_STAGES[result.state]}). `
+      + 'L’application revient en service sur AWS dans quelques minutes ; les données écrites sur GCP sont conservées.' };
+  }
+  if (/^BLOCKED_/.test(result.state || '')) {
+    return { alert: 'blocked', message: `Bascule vers AWS arrêtée par une sécurité (${result.state}) : aucune donnée n’est perdue, `
+      + 'un manager doit consulter la surveillance.' };
+  }
+  if (result.state === 'WAIT_SIGNALS' && result.public_ready === false) {
+    return { alert: 'outage', message: 'GCP ne répond plus. Si la panne dure (alarme après 3 à 4 min), l’application basculera '
+      + 'automatiquement sur AWS ; rien à faire.' };
+  }
+  return null;
+}
 function readiness(dep) {
   if (!enabled(dep)) return null;
   const stages = new Set(rows(dep.appName).filter(row => row.state === 'published').map(row => row.stage));
   const required = stagesFor(profileFor(dep.appName));
   const next = required.find(stage => !stages.has(stage));
   const operations = require('./failover-operations');
-  const health = operations.list(dep.appName).find(row => row.action === 'health' && row.state === 'completed');
+  const healthChecks = operations.list(dep.appName).filter(row => row.action === 'health' && row.state === 'completed');
+  const health = healthChecks[0];
   const age = health ? Date.now() / 1000 - health.result?.observed_at : Infinity;
   if (!next && health?.result?.verified && health.input_hash === hash(profileFor(dep.appName)) && age >= 0 && age < 120) {
     // Servie par AWS : le voyant dit si GCP est revenu, et donc si le retour manuel peut être lancé.
     const gcp = health.result.state === 'AWS_ACTIVE' ? require('./failover-provisioning').gcpStatus(dep.appName) : null;
-    return { phase: 'success', message: health.result.state === 'AWS_ACTIVE' ? 'Secours AWS actif : l’application est servie par AWS.' : 'Application déployée ; secours vérifié et disponible.',
+    const since = health.result.state === 'AWS_ACTIVE' ? awsSince(healthChecks) : null;
+    return { phase: 'success', message: health.result.state === 'AWS_ACTIVE'
+      ? `Bascule automatique réussie : l’application est servie par AWS${since ? ` depuis ${clock(since)}` : ''}.`
+      : 'Application déployée ; secours vérifié et disponible.',
+      failoverAlert: health.result.state === 'AWS_ACTIVE' ? 'aws' : null,
       // cloudRunUrl : la page du déploiement compare ce champ à l'adresse affichée et se recharge s'ils diffèrent ; absent ici,
       // elle se rechargeait toutes les ~8 s une fois la prod en service (constaté le 15/11/2026). Même valeur, comme pour Azure.
       applicationUrl: `https://${dep.appName}.apps.mooroon5.fr`, cloudRunUrl: `https://${dep.appName}.apps.mooroon5.fr`, failoverState: health.result.state,
@@ -411,8 +482,10 @@ function readiness(dep) {
       revision: runtimeRevision(dep.appName),
       ...(gcp ? { gcpAvailable: gcp.available && gcp.fresh, gcpMessage: gcp.message } : {}) };
   }
+  const alert = !next ? failoverAlert(health) : null;
+  if (alert) return { phase: 'failover', failoverAlert: alert.alert, message: alert.message, cloudRunUrl: null };
   return { phase: 'deploying', message: next ? `Mise en service du secours en cours (${next} à publier).`
     : 'Runtimes et DNS publiés ; vérification de la réplication et du worker en cours.', cloudRunUrl: null };
 }
 module.exports = { profiles, configure, profileFor, enabled, platform, render, rows, runtimeRevision, runtimeVariableGeneration, prepare, approve, autoApprove, contentProblems, reject, manifests, readiness,
-  operationalPackage, deploymentStatus, stagesFor, duration };
+  operationalPackage, deploymentStatus, stagesFor, duration, failoverAlert, awsSince, failbackStatus };

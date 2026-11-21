@@ -123,7 +123,7 @@
                 <div class="card" style="margin-bottom:16px;">
                   <div class="card-header"><span class="card-title">Suppression en cours</span></div>
                   <div class="card-body">
-                    <p id="environment-status-message">Le nettoyage se poursuit automatiquement après chaque synchronisation ArgoCD/Crossplane.</p>
+                    <p id="environment-status-message" role="status"><%= locals.deletionMessage || 'Le nettoyage se poursuit automatiquement après chaque synchronisation ArgoCD/Crossplane.' %></p>
                     <p>Cette page reviendra à la liste après vérification de la disparition des ressources.</p>
                   </div>
                 </div>
@@ -193,6 +193,9 @@
                          else if (phase === 'failed') applicationMessage = 'La dernière version n’a pas été déployée. Consultez le détail de l’erreur ci-dessous.';
                          else if (phase === 'rejected') applicationMessage = 'La production a été refusée.';
                          else if (phase === 'approval') applicationMessage = 'L’application sera disponible après validation du manager.';
+                         else if (phase === 'failover') applicationMessage = environmentStatus.failoverAlert === 'outage'
+                           ? 'GCP ne répond plus : application indisponible, bascule automatique vers AWS si la panne dure.'
+                           : 'GCP est tombé : bascule vers AWS en cours, l’application revient dans quelques minutes.';
                          else if (running) applicationMessage = 'Pipeline en cours : le déploiement attend sa réussite.';
                          else if (pipelineSucceeded && deployment.failoverRequested && phase !== 'waiting') applicationMessage = 'L’application sera disponible à la fin de la mise en service du secours.';
                          else if (provisioning) applicationMessage = 'Pipeline réussie. Provisionnement Cloud Run en cours…';
@@ -205,8 +208,12 @@
                   </div>
                 <% } %>
                 <% if (environmentStatus) { %>
-                  <div class="card" style="margin-bottom:16px;" id="environment-status-card" data-phase="<%= environmentStatus.phase %>">
-                    <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span></div>
+                  <% const alertStyle = { outage: ['#b45309', 'GCP ne répond plus'], switching: ['#c2410c', 'Bascule vers AWS en cours'],
+                       blocked: ['#b91c1c', 'Bascule arrêtée'], aws: ['#1d4ed8', 'Servi par AWS'],
+                       returning: ['#1d4ed8', 'Retour vers GCP en cours'], restoring: ['#15803d', 'Servi par GCP · secours AWS en reconstruction'] }[environmentStatus.failoverAlert]; %>
+                  <div class="card" style="margin-bottom:16px;<%= alertStyle ? `border-left:4px solid ${alertStyle[0]};` : '' %>" id="environment-status-card" data-phase="<%= environmentStatus.phase %>" data-failover-alert="<%= environmentStatus.failoverAlert || '' %>">
+                    <div class="card-header"><span class="card-title">Déploiement <%= deployment.environment %></span>
+                      <% if (alertStyle) { %><span class="badge" style="background:<%= alertStyle[0] %>;color:#fff;"><%= alertStyle[1] %></span><% } %></div>
                     <div class="card-body">
                       <p id="environment-status-message" role="status"><%= environmentStatus.message %></p>
                       <% if (environmentStatus.failoverResumable && can('k8s:manifest:approve')) { %>
@@ -557,6 +564,7 @@
           const initialPhase = '<%= environmentStatus ? environmentStatus.phase : deployment.onboardingStatus %>';
           const initialRevision = '<%= environmentStatus ? (environmentStatus.revision || "") : "" %>';
           const initialHasUrl = <%= cloudRunUrl ? 'true' : 'false' %>;
+          const initialAlert = '<%= environmentStatus ? (environmentStatus.failoverAlert || "") : "" %>';
           const pollEnvironment = async () => {
             try {
               const response = await fetch('/deployments/<%= deployment.id %>/status');
@@ -566,7 +574,8 @@
               }
               if (response.ok) {
                 const data = await response.json();
-                if (data.phase !== initialPhase || (data.revision || '') !== initialRevision || Boolean(data.cloudRunUrl) !== initialHasUrl) {
+                if (data.phase !== initialPhase || (data.revision || '') !== initialRevision || Boolean(data.cloudRunUrl) !== initialHasUrl
+                  || (data.failoverAlert || '') !== initialAlert) {
                   window.location.reload();
                   return;
                 }
