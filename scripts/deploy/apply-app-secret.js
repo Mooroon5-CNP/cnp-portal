@@ -29,6 +29,10 @@ const required = [
 const optional = [
   'GITHUB_CONFIG_REPO_TOKEN', 'DD_SITE',
 ];
+const voiceKeys = [
+  'SCW_SECRET_KEY', 'REPORT_MODEL_API_KEY', 'VOICE_DEPLOYMENT_ANALYSIS_MODEL',
+  'SCW_DEFAULT_PROJECT_ID', 'VOICE_DEPLOYMENT_GATEWAY_BASE_URL',
+];
 const missing = required.filter(key => !source[key]);
 if (missing.length) {
   console.error(`Missing required application keys: ${missing.join(', ')}`);
@@ -51,6 +55,14 @@ if (existing.status !== 0 && !existing.stderr.includes('NotFound')) {
   process.exit(existing.status || 1);
 }
 const existingSecret = existing.status === 0 ? JSON.parse(existing.stdout) : null;
+// A later general credential refresh must not silently disable the voice
+// feature when its keys were published with update-voice-secret.js.
+for (const key of voiceKeys) {
+  if (source[key]?.trim()) stringData[key] = source[key].trim();
+  else if (existingSecret?.data?.[key]) {
+    stringData[key] = Buffer.from(existingSecret.data[key], 'base64').toString('utf8');
+  }
+}
 const prior = existingSecret?.data?.SESSION_SECRET;
 stringData.SESSION_SECRET = prior
   ? Buffer.from(prior, 'base64').toString('utf8')

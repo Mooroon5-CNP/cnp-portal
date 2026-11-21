@@ -1,5 +1,11 @@
 # Déploiements avec variables OpenBao — état vérifié le 20 novembre 2026
 
+> **Archive datée.** Ce constat précède la mise en production du provisionneur
+> dédié et les travaux de secours AWS du 21 novembre. Pour redéployer ou vérifier
+> l'état actuel, utiliser le [runbook de production](../Cloud/RUNBOOK-CNP-PORTAL-GCP.md)
+> et contrôler les ressources en direct. Les blocages décrits ci-dessous ne
+> constituent plus un état actuel de la plateforme.
+
 Ce document décrit la **production** `portal.apps.mooroon5.fr`, révision
 `77d3985f8ba43bcda51b68aaa39547288c22c046`. Il complète le
 [runbook du portail](../Cloud/RUNBOOK-CNP-PORTAL-GCP.md). Un test de connexion
