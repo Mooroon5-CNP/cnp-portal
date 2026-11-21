@@ -333,7 +333,8 @@ function tplApp(appName, appPort, priv, env, revision) {
                 spec: {
                     serviceAccountName: 'app',
                     automountServiceAccountToken: false,
-                    securityContext: { runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } },
+                    securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
+                        seccompProfile: { type: 'RuntimeDefault' } },
                     containers: [{
                         name: 'app',
                         image: `${priv.ecrRegistry}/${appName}:${revision}`,
@@ -468,7 +469,7 @@ function privateAppStatusFrom(objects, { expectedImage } = {}) {
     const observedImage = observed?.spec?.template?.spec?.containers?.[0]?.image || null;
     const progressing = (observed?.status?.conditions || []).find(c => c.type === 'Progressing');
     if (progressing?.status === 'False' && progressing.reason === 'ProgressDeadlineExceeded') {
-        return { ...base, observedImage, phase: 'failed', failure: 'la nouvelle version ne démarre pas (délai de déploiement dépassé). Vérifiez /health et les journaux.' };
+        return { ...base, observedImage, phase: 'failed', failure: 'aucun pod prêt (délai de déploiement dépassé). Vérifiez la réponse HTTP de /health, les journaux et que le conteneur s’exécute sans root.' };
     }
     if (notSynced.length > 0) {
         const message = condition(notSynced[0], 'Synced').message;

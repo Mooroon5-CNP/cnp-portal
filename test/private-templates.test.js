@@ -164,6 +164,9 @@ describe('application', () => {
     expect(inner(objects, 'Middleware').spec.redirectScheme.scheme).toBe('https');
     const container = inner(objects, 'Deployment').spec.template.spec.containers[0];
     expect(container.readinessProbe.httpGet.path).toBe('/health');
+    expect(inner(objects, 'Deployment').spec.template.spec.securityContext).toMatchObject({
+      runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
+    });
   });
 
   test('révision invalide, nom réservé ou registre absent : refus avant toute génération', () => {

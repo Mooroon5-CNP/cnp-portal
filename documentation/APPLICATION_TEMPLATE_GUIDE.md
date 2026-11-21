@@ -87,7 +87,7 @@ Lancez ensuite `python app.py`. La route `/` crée une table de démonstration
 remplacez cet exemple et gérez l’évolution du schéma par des migrations revues.
 N’utilisez pas les identifiants ou les données de production pour vos essais.
 
-Au déploiement, choisissez **GCP Cloud SQL** ou **Azure PostgreSQL**. La plateforme
+Au déploiement, choisissez **GCP Cloud SQL**, **Azure PostgreSQL** ou **Cloud privé — Kubernetes (k3s), PostgreSQL**. La plateforme
 fournit les variables `DB_*` : conservez ces noms et ne remplacez pas leurs valeurs
 par des identifiants codés en dur. Le secours PostgreSQL GCP en production se
 configure dans le parcours de déploiement, pas dans le template.
@@ -99,9 +99,9 @@ configure dans le parcours de déploiement, pas dans le template.
 | Code applicatif, routes métier, pages et nouveaux modules | Vous pouvez les modifier, les ajouter et les réorganiser. |
 | Tests et README | Complétez-les pour documenter et vérifier votre application. |
 | `requirements.txt` | Ajoutez vos dépendances et vérifiez la compatibilité avec Python et l’image Docker. |
-| `Dockerfile` | Vous en êtes responsable. Vous pouvez l’adapter en conservant le démarrage HTTP, les dépendances nécessaires et le contrat de port. |
+| `Dockerfile` | Vous en êtes responsable. Vous pouvez l’adapter en conservant le démarrage HTTP, les dépendances nécessaires, le contrat de port et un `USER` non root numérique (le template utilise `USER 10001:10001`). |
 | Port HTTP | L’application doit écouter sur `0.0.0.0`, respecter `PORT` et correspondre au port déclaré dans le portail et à `EXPOSE`. Coordonnez tout changement avec la configuration de déploiement. |
-| Health checks | Préservez `/healthz`. Le template actuel fournit cette route ; si votre configuration utilise aussi `/ready`, ajoutez et maintenez cette route conformément aux probes configurées. |
+| Health checks | Préservez `/healthz` pour vérifier le processus web. Pour PostgreSQL, préservez aussi `/health` : il doit répondre 200 quand la base est joignable et inscriptible, 503 sinon. Le cloud privé utilise `/health` pour décider si le pod peut recevoir du trafic. |
 | SQLite | Gardez la base sur le stockage persistant configuré, sans la commiter dans Git. |
 | PostgreSQL | Gardez le contrat `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, sans secrets dans le code. |
 | `.gitignore` et `.dockerignore` | Vous pouvez les compléter ; conservez l’exclusion des secrets et données locales. |
@@ -123,6 +123,31 @@ Adaptez les fichiers de `git add` à votre travail. Ouvrez une **pull request** 
 `main` sur GitHub. Faites relire le code et attendez les vérifications CI configurées.
 Le test PostgreSQL fourni simule la connexion ; il ne remplace pas un test contre
 votre base de développement lorsque vous changez les requêtes ou le schéma.
+
+Avant un déploiement sur le cloud privé, vérifiez aussi le contrat du conteneur :
+
+```bash
+docker build -t mon-app:local .
+docker run --rm --entrypoint id mon-app:local -u
+docker run --rm -p 8080:8080 --env-file .env mon-app:local
+```
+
+Dans un second terminal :
+
+```bash
+curl -f http://localhost:8080/healthz
+curl -f http://localhost:8080/health
+```
+
+La commande `id -u` doit afficher un nombre différent de `0` (le template utilise
+`10001`). Préparez un fichier `.env` local avec les variables `DB_*` pointant vers
+une base de test accessible depuis le conteneur avant de lancer celui-ci. `/healthz`
+doit répondre 200 si le serveur web tourne ; `/health` doit répondre 200 seulement
+si PostgreSQL est joignable et inscriptible, sinon 503. Un `503 no available server`
+sur l'URL publique signifie qu'aucun pod n'est prêt à recevoir du trafic : vérifiez
+en premier la sonde `/health`, les variables `DB_*`, les journaux du pod et l'UID
+effectif de l'image. Ce message ne se résout pas par une simple attente si le
+Deployment garde zéro réplica disponible.
 
 **Avant le premier déploiement**, un push ne déclenche pas le déploiement CNP.
 Utilisez **Déployer ce repo**, choisissez les options compatibles avec votre
