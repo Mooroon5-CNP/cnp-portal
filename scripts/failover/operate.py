@@ -437,11 +437,24 @@ def execute(request):
                 triggers_ready &= enabled and any(value.get('EcsParameters', {}).get('TaskDefinitionArn') == expected_task for value in targets)
             except Exception: triggers_ready = False
         gcp = gcp_availability(app, document, request, control) if control.get('state') == 'AWS_ACTIVE' else None
+        # Heure exacte de la bascule, lue dans le journal du worker (événement AWS_ACTIVE le plus récent) : le portail affichait
+        # l'heure de son propre contrôle, jusqu'à 1 min 30 plus tard (« depuis 16:50 » pour une bascule à 16:48:23, le 21/11/2026).
+        since = None
+        if control.get('state') == 'AWS_ACTIVE':
+            try:
+                events = client('dynamodb').query(TableName=names['state_table'], ScanIndexForward=False, Limit=50,
+                    KeyConditionExpression='app = :a AND begins_with(#r, :e)', ExpressionAttributeNames={'#r': 'record'},
+                    ExpressionAttributeValues={':a': {'S': app}, ':e': {'S': 'EVENT#'}}).get('Items', [])
+                since = next((int(item['at']['N']) for item in events
+                              if item.get('state', {}).get('S') == 'AWS_ACTIVE' and item.get('field', {}).get('S', 'state') == 'state'), None)
+            except Exception:
+                since = None                                    # repli du portail : le premier contrôle AWS_ACTIVE
         healthy = control.get('paused') is False and (control.get('state') == 'AWS_ACTIVE' or (control.get('state') == 'WAIT_SIGNALS' and fresh and configured))
         return {'verified': healthy and configured and triggers_ready and public_ready and aws_ready and dns_ready, 'public_ready': public_ready, 'aws_ready': aws_ready,
             'configured': configured, 'triggers_ready': triggers_ready,
             'dns_ready': dns_ready, 'state': control.get('state', 'UNCONFIGURED'), 'paused': control.get('paused'), 'replication_fresh': fresh,
-            'observed_at': int(time.time()), 'zero_loss_proven': False, **({'gcp': gcp} if gcp else {})}
+            'observed_at': int(time.time()), 'zero_loss_proven': False, **({'gcp': gcp} if gcp else {}),
+            **({'aws_active_since': since} if since else {})}
     if action == 'failback-check':
         # Lecture seule, avant de lancer le retour : AWS actif (le worker a basculé), GCP revenu et clôturé.
         from prepare_failover_phase1 import regime

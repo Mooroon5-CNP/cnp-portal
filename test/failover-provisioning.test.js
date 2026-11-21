@@ -172,6 +172,17 @@ test('la santé continue à être observée après la mise en service, sans rejo
   expect(tasks.map(value => value.action)).toEqual(['health', 'health']);
   expect(workflow.get('weather-api').state).toBe('completed');
 });
+test('pendant une panne ou une bascule, la santé est relue à chaque passage (~30 s) au lieu de chaque minute', async () => {
+  workflow.start('weather-api', manager);
+  db.prepare("UPDATE failover_provisioning SET state='completed' WHERE app=?").run('weather-api');
+  await tick();
+  Object.assign(tasks.at(-1), { state: 'completed', result: { verified: false, state: 'WAIT_SIGNALS', public_ready: false } });
+  await tick(); expect(tasks).toHaveLength(2);                                   // GCP ne répond plus : relu au passage suivant
+  Object.assign(tasks.at(-1), { state: 'completed', result: { verified: false, state: 'CLOSING_GCP_ROUTE' } });
+  await tick(); expect(tasks).toHaveLength(3);                                   // bascule en cours
+  Object.assign(tasks.at(-1), { state: 'completed', result: { verified: true, state: 'AWS_ACTIVE' } });
+  await tick(); expect(tasks).toHaveLength(3);                                   // servie par AWS : rythme normal
+});
 test('tant que l’application n’a pas créé son schéma, on attend en disant quoi faire, sans bloquer', async () => {
   workflow.start('weather-api', manager);
   db.prepare('UPDATE failover_provisioning SET step=? WHERE app=?').run(at('schema-check'), 'weather-api');
