@@ -658,9 +658,17 @@ class Failback:
         self.store, self.sql, self.routing = store, sql, routing
 
     def route(self, app):
-        control = self.store.stopped_after_promotion(app)
-        # Le worker a joint GCP et l'a clôturé : la source est revenue, et fermée.
-        require(control.get("source_fence") == "GCP_FENCED", "BLOCKED_GCP_NOT_FENCED")
+        self.store.stopped_after_promotion(app)
+        # La clôture est refaite ici, pas lue dans l'état : le portail a vu GCP_FENCED au contrôle avant le retour, mais un
+        # passage du worker déjà lancé au moment de la pause peut, sur une sonde du tunnel ratée, réécrire GCP_FENCE_PENDING
+        # juste après (constaté le 21/11/2026 sur recette-aws-2111). Worker en pause, plus rien ne reclôturait : le retour
+        # tournait en boucle sur BLOCKED_GCP_NOT_FENCED. Rejoindre GCP et le refermer (NOLOGIN, idempotent, relu) prouve
+        # au moment même que la source est revenue ET fermée ; l'état n'est pas réécrit (bail et pause l'interdisent).
+        try:
+            with self.sql.connection(app, "source") as source:
+                self.sql.fence_returned_source(source)
+        except Exception:
+            raise Blocked("BLOCKED_GCP_NOT_FENCED") from None
         self.routing.set_closed(app, False)
         self.store.event(app["app"], "GCP_ROUTE_REOPENED")
         return "GCP_ROUTE_REOPENED"
