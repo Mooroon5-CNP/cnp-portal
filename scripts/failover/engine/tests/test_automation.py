@@ -1,4 +1,5 @@
 """Contrats du worker : aucun appel cloud, aucune donnée applicative modifiée."""
+import contextlib
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -142,6 +143,16 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("source", self.sql.connected)
         self.assertEqual(self.store.fence, "GCP_FENCE_PENDING")
         self.assertTrue(self.store.released)
+
+    def test_a_proven_fence_is_kept_when_a_later_probe_fails(self):
+        self.assertEqual(self.worker.run(self.app), "AWS_ACTIVE")
+        self.assertEqual(self.store.fence, "GCP_FENCE_PENDING")
+        self.assertEqual(self.worker.run(self.app), "AWS_ACTIVE")          # GCP revenu : rejointe et clôturée
+        self.store.fence = "GCP_FENCED"
+        self.sql.source_available = False                                  # sonde ratée au passage suivant
+        with patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(self.worker.run(self.app), "AWS_ACTIVE")
+        self.assertEqual(self.store.fence, "GCP_FENCED")
 
     def test_success_and_duplicate_event_promote_only_once(self):
         self.assertEqual(self.worker.run(self.app), "AWS_ACTIVE")
@@ -463,3 +474,26 @@ class RoutingGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrivateProbeTests(unittest.TestCase):
+    APP = {"app": "weather-api", "source": {"host": "10.20.30.40"}}
+
+    def test_retries_before_concluding_and_logs_only_the_cause(self):
+        calls, waits = [], []
+        def connect(address, timeout):
+            calls.append(address)
+            if len(calls) < 3:
+                raise TimeoutError("timed out connecting to 10.20.30.40")
+            return contextlib.nullcontext()
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertTrue(a.private_reachable(self.APP, sleep=waits.append, connect=connect))
+        self.assertEqual((len(calls), waits), (3, [1, 1]))
+        self.assertIn('"cause": "CONNECT_TIMEOUT"', output.getvalue())
+        self.assertNotIn("10.20.30.40", output.getvalue())
+
+    def test_unreachable_after_all_attempts(self):
+        def connect(address, timeout):
+            raise ConnectionRefusedError()
+        with patch("sys.stdout", new_callable=io.StringIO):
+            self.assertFalse(a.private_reachable(self.APP, sleep=lambda _: None, connect=connect))

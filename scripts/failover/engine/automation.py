@@ -461,13 +461,28 @@ def public_health(app):
         return False
 
 
-def private_reachable(app):
-    """Sonde TCP distincte : une erreur de mot de passe/CA n'est pas une panne."""
-    try:
-        with socket.create_connection((app["source"]["host"], 5432), timeout=5):
-            return True
-    except OSError:
-        return False
+PROBE_ATTEMPTS, PROBE_PAUSE = 3, 1
+
+
+def private_reachable(app, attempts=PROBE_ATTEMPTS, sleep=time.sleep, connect=socket.create_connection):
+    """Sonde TCP distincte : une erreur de mot de passe/CA n'est pas une panne.
+
+    Trois essais espacés d'une seconde avant de conclure « injoignable » : une seule connexion ratée depuis une tâche Fargate
+    qui vient de démarrer suffisait à déclasser la clôture (4 fois en 10 min le 21/11/2026, tunnel sain à la mesure). Chaque
+    essai raté écrit sa cause classée (jamais d'adresse ni de message) : de quoi trancher entre perte du premier paquet,
+    retour côté GCP ou délai.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            with connect((app["source"]["host"], 5432), timeout=5):
+                if attempt > 1:
+                    print(json.dumps({"app": app["app"], "probe": "gcp-private", "attempt": attempt, "reachable": True}))
+                return True
+        except OSError as exc:
+            print(json.dumps({"app": app["app"], "probe": "gcp-private", "attempt": attempt, "cause": failure_cause(exc)}))
+            if attempt < attempts:
+                sleep(PROBE_PAUSE)
+    return False
 
 
 class CloudSignals:
@@ -621,6 +636,11 @@ class Worker:
         self.store, self.signals, self.sql, self.routing = store, signals, sql, routing
 
     def fence_on_return(self, app, checkpoint, owner):
+        # Une clôture prouvée ne se perd pas sur une sonde ou une connexion ratée : la base GCP reste fermée (NOLOGIN persiste
+        # au redémarrage) tant que le retour ne l'a pas rouverte, et le retour la reclôture lui-même avant de rouvrir le DNS
+        # (Failback.route). Avant le 21/11/2026, chaque raté repassait GCP_FENCED à GCP_FENCE_PENDING pour une minute : bouton
+        # « Revenir sur GCP » refusé au clic. Une nouvelle panne de GCP se voit ailleurs (Cloud SQL arrêtée, Cloud Run).
+        proven = self.store.control(app["app"]).get("source_fence") == "GCP_FENCED"
         status = "GCP_FENCE_PENDING"
         if self.signals.source_available(app):
             try:
@@ -634,6 +654,9 @@ class Worker:
                 status = "GCP_FENCE_RETRY"
             except Exception:
                 status = "GCP_FENCE_RETRY"
+        if proven and status != "GCP_FENCED":
+            print(json.dumps({"app": app["app"], "source_fence": "GCP_FENCED", "kept": True, "probe": status}))
+            return
         self.store.transition(app, owner, status, field="source_fence")
 
     def run(self, app):
@@ -718,8 +741,8 @@ class Failback:
     de GCP (environ 30 s de sonde), au lieu d'attendre une tâche de plus pendant que les écritures sont refusées.
     rearm : la copie AWS a été reconstruite depuis GCP (aucune reprise inscrite, abonnement prêt) : le contrôle est réinitialisé.
     """
-    def __init__(self, store, sql, routing):
-        self.store, self.sql, self.routing = store, sql, routing
+    def __init__(self, store, sql, routing, sleep=time.sleep):
+        self.store, self.sql, self.routing, self.sleep = store, sql, routing, sleep
 
     def route(self, app):
         self.store.stopped_after_promotion(app)
@@ -728,11 +751,17 @@ class Failback:
         # juste après (constaté le 21/11/2026 sur recette-aws-2111). Worker en pause, plus rien ne reclôturait : le retour
         # tournait en boucle sur BLOCKED_GCP_NOT_FENCED. Rejoindre GCP et le refermer (NOLOGIN, idempotent, relu) prouve
         # au moment même que la source est revenue ET fermée ; l'état n'est pas réécrit (bail et pause l'interdisent).
-        try:
-            with self.sql.connection(app, "source") as source:
-                self.sql.fence_returned_source(source)
-        except Exception:
-            raise Blocked("BLOCKED_GCP_NOT_FENCED") from None
+        # Trois essais : le 21/11/2026, deux tâches de suite ont raté la connexion avant que la troisième passe (~3 min perdues).
+        for attempt in range(1, PROBE_ATTEMPTS + 1):
+            try:
+                with self.sql.connection(app, "source") as source:
+                    self.sql.fence_returned_source(source)
+                break
+            except Exception as exc:
+                print(json.dumps({"app": app["app"], "operation": "failback-route", "attempt": attempt, "cause": failure_cause(exc)}))
+                if attempt == PROBE_ATTEMPTS:
+                    raise Blocked("BLOCKED_GCP_NOT_FENCED") from None
+                self.sleep(5)
         self.routing.set_closed(app, False)
         self.store.event(app["app"], "GCP_ROUTE_REOPENED")
         return "GCP_ROUTE_REOPENED"
