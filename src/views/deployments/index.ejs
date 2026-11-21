@@ -225,7 +225,7 @@
 
                     <div class="form-group">
                       <label>Variables d'environnement de l'application (facultatif)</label>
-                      <div class="form-hint">Ajoutez des variables une par une ou importez un fichier .env. Leur destination OpenBao suit automatiquement l'hébergement choisi ; GCP Cloud SQL en production prépare aussi le secours AWS.</div>
+                      <div class="form-hint">Ajoutez des variables une par une ou importez un fichier .env. PORT, APP_PORT, DB_*, DD_* et CNP_* sont réservées à la plateforme : retirez-les du fichier avant import. Leur destination OpenBao suit automatiquement l'hébergement choisi ; GCP Cloud SQL en production prépare aussi le secours AWS.</div>
                       <div id="deploymentVariableRows"></div>
                       <button type="button" id="addDeploymentVariable" class="btn btn-secondary btn-sm">Ajouter une variable</button>
                       <label for="deploymentEnvFile" style="display:block;margin-top:12px;">Importer un fichier .env</label>

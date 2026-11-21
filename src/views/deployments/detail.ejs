@@ -49,7 +49,7 @@
                   <div class="card-header"><span class="card-title">Variables d’environnement</span></div>
                   <div class="card-body">
                     <p>Variables actuelles : <%= variableNames.length ? variableNames.join(', ') : 'aucune' %>. Les valeurs ne sont jamais affichées.</p>
-                    <p>Pour modifier la liste, ressaisissez toutes les variables à conserver et leurs valeurs. Une liste vide les supprime toutes.</p>
+                    <p>Pour modifier la liste, ressaisissez toutes les variables à conserver et leurs valeurs. Une liste vide les supprime toutes. PORT, APP_PORT, DB_*, DD_* et CNP_* sont réservées à la plateforme et ne peuvent pas être importées.</p>
                     <form id="updateVariablesForm" action="/deployments/<%= deployment.id %>/variables" method="POST">
                       <div id="updateVariableRows"></div>
                       <button type="button" id="addUpdateVariable" class="btn btn-secondary btn-sm">Ajouter une variable</button>

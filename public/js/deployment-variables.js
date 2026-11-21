@@ -2,7 +2,8 @@
   'use strict';
 
   const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  const RESERVED = /^(?:PORT|APP_PORT|DB_|DD_|CNP_)/i;
+  const RESERVED = /^(?:PORT$|APP_PORT$|DB_|DD_|CNP_)/i;
+  const reservedMessage = name => `Variable ${name} réservée par la plateforme. Retirez-la du fichier .env : PORT, APP_PORT, DB_*, DD_* et CNP_* sont réservées à CNP Portal.`;
 
   function parseDotEnv(input) {
     if (typeof input !== 'string' || input.length > 65536) throw new Error('Fichier .env trop volumineux (64 Ko maximum).');
@@ -15,7 +16,8 @@
       const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
       if (!match) throw new Error(`Ligne .env ${index + 1} invalide.`);
       const name = match[1];
-      if (RESERVED.test(name) || seen.has(name)) throw new Error(`Variable .env ${name} réservée ou en doublon.`);
+      if (RESERVED.test(name)) throw new Error(reservedMessage(name));
+      if (seen.has(name)) throw new Error(`Variable .env ${name} en doublon (ligne ${index + 1}).`);
       seen.add(name);
       let value = match[2];
       if (value.startsWith('"') || value.startsWith("'")) {
@@ -89,8 +91,14 @@
       const seen = new Set();
       for (const row of rows()) {
         const name = row.querySelector('[name="variableNames"]').value;
-        if (!NAME.test(name) || RESERVED.test(name) || seen.has(name)) {
-          event.preventDefault(); showError(`Nom de variable invalide, réservé ou en doublon : ${name}.`); return;
+        if (!NAME.test(name)) {
+          event.preventDefault(); showError(`Nom de variable invalide : ${name}.`); return;
+        }
+        if (RESERVED.test(name)) {
+          event.preventDefault(); showError(reservedMessage(name)); return;
+        }
+        if (seen.has(name)) {
+          event.preventDefault(); showError(`Variable ${name} en doublon.`); return;
         }
         seen.add(name);
       }
