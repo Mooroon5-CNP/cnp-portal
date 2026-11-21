@@ -16,6 +16,10 @@ function schema() {
     deployment_id TEXT PRIMARY KEY, requested_by TEXT NOT NULL, destroy_data INTEGER NOT NULL,
     step TEXT NOT NULL DEFAULT 'inventory', plan TEXT, state TEXT NOT NULL DEFAULT 'running', message TEXT,
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, lease_until INTEGER NOT NULL DEFAULT 0)`);
+  // Début de l'étape en cours, pour le suivi affiché (deletion-progress) ; absent des suppressions antérieures au 21/11/2026.
+  if (!db.prepare('PRAGMA table_info(environment_deletions)').all().some(column => column.name === 'step_started_at')) {
+    db.exec('ALTER TABLE environment_deletions ADD COLUMN step_started_at TEXT');
+  }
 }
 function get(id) {
   schema();
@@ -29,15 +33,17 @@ function start(dep, user, { destroyData = false } = {}) {
   schema();
   const now = new Date().toISOString();
   db.transaction(() => {
-    db.prepare(`INSERT INTO environment_deletions (deployment_id,requested_by,destroy_data,started_at,updated_at)
-      VALUES (?,?,?,?,?) ON CONFLICT(deployment_id) DO UPDATE SET state='running',message=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at`)
-      .run(dep.id, user.id, destroyData ? 1 : 0, now, now);
+    db.prepare(`INSERT INTO environment_deletions (deployment_id,requested_by,destroy_data,started_at,step_started_at,updated_at)
+      VALUES (?,?,?,?,?,?) ON CONFLICT(deployment_id) DO UPDATE SET state='running',message=NULL,started_at=excluded.started_at,
+      step_started_at=excluded.step_started_at,updated_at=excluded.updated_at`)
+      .run(dep.id, user.id, destroyData ? 1 : 0, now, now, now);
     deployments.updateOnboardingStatus(dep.id, 'deleting');
   })();
   return get(dep.id);
 }
 function save(id, values) {
-  const entries = Object.entries({ ...values, updated_at: new Date().toISOString() });
+  const now = new Date().toISOString();
+  const entries = Object.entries({ ...values, ...(values.step ? { step_started_at: now } : {}), updated_at: now });
   db.prepare(`UPDATE environment_deletions SET ${entries.map(([key]) => `${key}=?`).join(',')} WHERE deployment_id=?`)
     .run(...entries.map(([key, value]) => key === 'plan' ? JSON.stringify(value) : value), id);
 }
@@ -209,4 +215,6 @@ async function tick() {
     await advance(row.deployment_id);
   }
 }
-module.exports = { get, start, advance, tick };
+// Ordre des étapes, pour le suivi affiché (deletion-progress).
+const STEPS = ['inventory', 'release', 'release_wait', 'remove', 'verify', 'variables', 'repository'];
+module.exports = { STEPS, get, start, advance, tick };

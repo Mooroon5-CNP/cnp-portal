@@ -9,6 +9,8 @@ const githubClient = require('../clients/github');
 const onboardingService = require('../services/onboarding');
 const environmentService = require('../services/environment-deployment');
 const environmentDeletion = require('../services/environment-deletion');
+// Suivi de suppression lisible (étape, durées) ; jamais bloquant pour la page : null si la lecture échoue.
+const deletionMessage = dep => { try { return require('../services/deletion-progress').message(dep); } catch (_) { return null; } };
 const repositoryDatabase = require('../services/repository-database');
 const applicationAddress = require('../services/application-address');
 const deploymentModel = require('../models/deployment');
@@ -549,7 +551,7 @@ router.get('/:id/status', requireAuth, requirePermission('deployments:deploy'), 
     }
 
     if (dep.onboardingStatus === 'deleting') {
-        return res.json({ phase: 'deleting', message: environmentDeletion.get(dep.id)?.message || 'Suppression de cet environnement en cours ; reprise automatique.',
+        return res.json({ phase: 'deleting', message: deletionMessage(dep) || environmentDeletion.get(dep.id)?.message || 'Suppression de cet environnement en cours ; reprise automatique.',
             observedAt: new Date().toISOString(), freshness: 'stored' });
     }
 
@@ -789,6 +791,7 @@ router.get('/:id', requireAuth, requirePermission('deployments:deploy'), async (
     if (deletionDraft) delete req.session.deletionDraft;
 
     res.render('deployments/detail', {
+        deletionMessage: dep.onboardingStatus === 'deleting' ? deletionMessage(dep) : null,
         title: `Déploiement — ${dep.appName}`,
         currentPage: 'deployments',
         deployment: safeDeployment,
