@@ -1,6 +1,6 @@
 # CNP Portal on GKE — deployment runbook
 
-## Current release (verified 21 November 2026)
+## Current release (snapshot from 21 November 2026; recheck before use)
 
 - Project: `cnp-terraform-512313`; cluster: `cnp-cluster-terraform` in `europe-west9-b`.
 - Portal source: `Mooroon5-CNP/cnp-portal`, branch `main`, overlay `k8s/overlays/prod`.
@@ -9,7 +9,7 @@
 - One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
 - Both the portal and the dedicated OpenBao runtime provisioner currently use image `sha256:6769759244337d47ed4ba2fdde1adc69a94fdf70bd2d371e7f633e190c32edd9`. On 21 November both Deployments were `1/1`, Argo CD reported `Synced/Healthy` for the portal and Dancing Duck prod, and `/api/health` returned `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Recheck these facts before each release; they are a dated observation, not a permanent guarantee.
-- [OpenBao deployment status from 20 November](OPENBAO.md) is an archived incident snapshot. It predates the provisioner and later AWS failover work; do not use its blocked-mode table as current readiness.
+- [OpenBao](OPENBAO.md) documents the variable paths; endpoint health does not prove application-level delivery.
 - GCP OpenBao is configured and the portal JWT login has been verified. Azure OpenBao and the current `cnp/cluster` AWS and private OpenBao endpoints also accepted the portal pod's JWT during read-only checks. The private JWT audience is `https://openbao.prive.apps.mooroon5.fr:8200` **without a trailing slash**; the slash form returns HTTP 400. Application runtime identities and real variable delivery still require verification before these modes can be declared ready.
 
 ## Recreate the platform bootstrap
@@ -56,6 +56,32 @@ Retain the first list with the release record and confirm that no unrelated key 
 
 **OAuth registration gate:** the local `.env` used on 19 November has a localhost callback and an OAuth client from a different app. Before passing `--oauth-callback-registered`, open the production OAuth app under GitHub **Settings → Developer settings → OAuth apps**, add the exact production callback `https://portal.apps.mooroon5.fr/auth/github/callback`, and save. Keep its localhost callback if local development needs it. Put that same app's Client ID and a matching client secret in `oauth-prod.env`. Then complete a real browser sign-in; a redirect from `/auth/github` alone does not prove registration. If the app is owned by another account or organization, its owner must make this change.
 
+### Secret inventory and recovery rule
+
+`apply-app-secret.js` preserves keys only while `cnp-portal-app-env` still
+exists. It cannot recover a deleted Secret. Before a cluster rebuild, back up
+the Secret through the organization's approved encrypted secret store. Never
+put a plaintext export in Git, a ticket, a release artifact or this runbook.
+Restrict and test access to that encrypted backup separately.
+
+| Secret or credential source | Key names / recovery owner |
+|---|---|
+| `cnp-portal-app-env` | `ADMIN_INITIAL_PASSWORD`, `SESSION_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_CONFIG_REPO_NAME`, optional `GITHUB_CONFIG_REPO_TOKEN`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_REDIRECT_URI`, `DD_API_KEY`, `DD_APP_KEY`, optional `DD_SITE`, `SCW_SECRET_KEY`, `REPORT_MODEL_API_KEY`, `SCW_DEFAULT_PROJECT_ID`, `VOICE_DEPLOYMENT_ANALYSIS_MODEL`, optional `VOICE_DEPLOYMENT_GATEWAY_BASE_URL`, `ARGOCD_SERVER_URL`, `ARGOCD_INSECURE`, `ARGOCD_CA_CERT_BASE64`. Owners: portal/GitHub admins, Datadog admins, Scaleway admins, Argo CD bootstrap. |
+| `cnp-portal-cloud-env` | Terraform-managed platform settings. Owner: Terraform state and approved cloud operator. Recreate from current reviewed outputs and inputs. |
+| `argocd/argocd-secret` | Argo CD internal credentials and TLS material. Recreate through reviewed Argo CD bootstrap. |
+| External provider access | GitHub App, OAuth, Datadog, Scaleway, cloud federation/IAM, DNS and Terraform backend access. Recover from each provider's approved secret manager/account owner. |
+
+Names above are the current inventory, not a promise that every key is
+required. Add new integration keys and their owners when introducing them. A
+rebuild is not ready if any required credential lacks a tested recovery source.
+Keep the first key-name list in the release record and compare after restore;
+never print values:
+
+```sh
+kubectl -n cnp-portal get secret cnp-portal-app-env -o json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(Object.keys(JSON.parse(s).data).sort().join("\n")))'
+kubectl -n cnp-portal get secret cnp-portal-cloud-env -o json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(Object.keys(JSON.parse(s).data).sort().join("\n")))'
+```
+
 To rotate just the OAuth client later, from the portal repository run:
 
 ```sh
@@ -65,6 +91,16 @@ node scripts/deploy/update-oauth-secret.js /secure/path/oauth-prod.env
 This checks the client/secret pair and registered callback with GitHub before updating the Kubernetes Secret. It restarts the one portal pod and verifies the live redirect. The script replaces the Secret without a plaintext `kubectl.kubernetes.io/last-applied-configuration` annotation. Expect a brief interruption during the `Recreate` rollout.
 
 ## Build and promote an image
+
+### Routine image redeploy
+
+This path assumes the cluster, Secrets and PVC still exist. Record current
+digests, Secret key names, PVC status, Argo revision and health. Verify a fresh
+SQLite backup before changing the image and retain the previous digest for
+rollback. Do not delete/recreate Secrets, PVCs, namespace, certificates,
+ingress, Argo CD, Crossplane providers or cloud resources. Keep the manual Argo
+sync with `prune:false`. Do not run `kubectl delete`, apply a partial Secret,
+`terraform destroy` or a broad Terraform apply as part of image promotion.
 
 Start from the latest `main` in both the portal and config repositories so recent changes from other contributors, including AWS failover and Datadog, are included. The main-branch `CNP Portal release image` workflow builds and pushes to `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal`. Wait for its lint, tests, secret scan, dependency and image checks. `.gitleaksignore` has narrow exceptions for known public Azure role UUIDs; review any new exception rather than disabling scanning. Resolve the new digest from Artifact Registry and pin **the same digest** in `k8s/overlays/prod/kustomization.yaml` and `k8s/provisioner/deployment.yaml`. Do not use a mutable tag in prod.
 
@@ -246,6 +282,45 @@ node scripts/deploy/backup-sqlite.js
 The script takes an online SQLite backup from the running pod, uploads it to GCS, downloads the uploaded object to a private temporary directory, checks SQLite integrity and the users table, and removes temporary copies. Record the printed object URI in the release record. On 19 November 2026, `gs://cnp-portal-backup-512313/sqlite/20261119T185457Z.sqlite` passed this test.
 
 For disaster recovery, first make another backup if the old pod can run. Scale the portal to zero and wait until no pod mounts `cnp-portal-data`. Download the selected object and check it with `better-sqlite3` before replacing the PVC file. Mount the PVC in a temporary pod using the same portal image and UID 1000; move the old `.sqlite`, `-wal` and `-shm` files to a dated recovery directory, copy the verified backup to `/app/data/cnp-portal.sqlite`, then remove the temporary pod. Scale to one and verify login and user/deployment counts. Do not restore over a running SQLite writer. Restore the old files if verification fails.
+
+### Full recovery or new-cluster rebuild
+
+Use this path only after cluster/PVC loss or an intentional new project/region.
+First complete the Secret inventory and confirm recoverable Terraform state,
+provider credentials and a verified SQLite backup. Otherwise recovery is
+blocked: do not claim the services or credentials can be recreated.
+
+1. Record current portal/provisioner image digests, Git revisions, Terraform
+   backend/workspace, project/region/zone, DNS, Argo revisions, Secret key names,
+   backup URI and service owners. Freeze deployments and deletions.
+2. Restore from the existing reviewed Terraform states and correct workspace.
+   Current GCP backend bucket: `cnp-tfstate-512313`; the legacy provider file
+   mentions `cnp-tfstate-508716`, so use the explicit backend override above.
+   Authenticate as the approved operator, review a saved plan and never create
+   an empty replacement state or run `destroy` for recovery.
+3. Restore network, GKE, IAM/workload identity, registry access, Crossplane
+   providers, DNS, storage and cloud integrations in dependency order. Apply
+   current `config-repo/main` bootstrap manifests using “Recreate the platform
+   bootstrap”; verify cert-manager, issuer, Argo CD, providers, ingress and DNS.
+4. Restore `cnp-portal-data` from a selected SQLite backup and verify integrity
+   before starting the portal. Recreate `cnp-portal-cloud-env` from current
+   reviewed Terraform outputs. Restore `cnp-portal-app-env` from the approved
+   encrypted secret store with the scripts above; restore external credentials
+   from their source owners. Compare key names. Do not print or commit values.
+5. Pin reviewed immutable portal and provisioner digests. Keep one portal
+   replica, `Recreate`, PVC retention `Delete=false`, projected tokens and the
+   provisioner read-only filesystem. Render Kustomize and server-dry-run before
+   manual Argo sync.
+6. Before restoring public traffic, verify both deployments, PVC `Bound`, TLS,
+   DNS, Argo `Synced/Healthy`, `/healthz`, `/ready`, `/api/health`, OAuth browser
+   login, Datadog/Argo views, voice, provisioner health and all four OpenBao
+   endpoints. Run portal-driven disposable app tests for every mode claimed
+   restored, including variable delivery, isolation and deletion. Test failover
+   and failback only through the portal workflow.
+
+This process protects data only when backups, Terraform state and provider
+credentials remain available. It cannot recreate secrets with lost source
+credentials. Mark a service unavailable until its checks pass.
 
 ## Rollback
 
