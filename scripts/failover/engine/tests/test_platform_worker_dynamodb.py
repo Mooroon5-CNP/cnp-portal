@@ -161,21 +161,30 @@ class PlatformWorkerOnRealDynamoDB(unittest.TestCase):
     def test_failback_route_reopens_only_a_stopped_worker_whose_gcp_is_fenced(self):
         value = application('weather-api')
         sql, routing = Mock(), Mock()
+        sql.connection.return_value.__enter__ = Mock(return_value='source')
+        sql.connection.return_value.__exit__ = Mock(return_value=False)
         failback = a.Failback(self.store, sql, routing)
-        refused = [dict(paused=False), dict(fence='GCP_FENCE_PENDING'), dict(lease_until=2 ** 40)]
+        refused = [dict(paused=False), dict(lease_until=2 ** 40)]
         for state in refused:
             self.promoted(value, **state)
             with self.assertRaises(a.Blocked):
                 failback.route(value)
+        sql.fence_returned_source.side_effect = ValueError('Clôture non prouvée')   # GCP injoignable ou pas refermé
+        self.promoted(value)
+        with self.assertRaisesRegex(a.Blocked, 'BLOCKED_GCP_NOT_FENCED'):
+            failback.route(value)
         routing.set_closed.assert_not_called()
+        sql.fence_returned_source.side_effect = None
         with self.assertRaises(Exception):                                   # configure n'écrase jamais une bascule
             self.store.configure(value)
         self.client.delete_item(TableName=a.PLATFORM['state_table'], Key=self.store.key('weather-api'))
         self.store.configure(value)                                          # surveillance normale : pas de retour
         with self.assertRaisesRegex(a.Blocked, 'BLOCKED_FAILBACK_STATE'):
             failback.route(value)
-        self.promoted(value)
+        # Clôture enregistrée périmée (passage du worker pendant la pause) : le retour reclôture lui-même et repart.
+        self.promoted(value, fence='GCP_FENCE_PENDING')
         self.assertEqual(failback.route(value), 'GCP_ROUTE_REOPENED')
+        sql.fence_returned_source.assert_called_with('source')
         routing.set_closed.assert_called_once_with(value, False)
         self.assertEqual([event['state'] for event in self.events('weather-api')], ['GCP_ROUTE_REOPENED'])
         self.assertEqual(self.store.control('weather-api')['state'], 'AWS_ACTIVE')     # l'état ne change pas
