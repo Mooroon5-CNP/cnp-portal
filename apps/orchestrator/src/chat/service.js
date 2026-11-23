@@ -38,6 +38,8 @@ const GCP_PATTERN = /\b(gcp|google cloud|gemini cloud assist|cloud assist)\b/i;
 /** Explicit command, or explicit Google Cloud vocabulary; generic words keep their existing CNP routing. */
 function gcaIntent(message, command) {
   if (command && command.capability) return { capability: command.capability, transverse: command.transverse };
+  // Any other explicit slash command (/logs, /deploiement, /applications, /finops) keeps its own tool.
+  if (command) return undefined;
   const text = message.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
   if (!GCP_PATTERN.test(text)) return undefined;
   if (/\b(investig\w*|incident|panne|cause|diagnost\w*|pourquoi|erreurs?|errors?|lent|latence)\b/i.test(text)) return { capability: 'investigate_issue', transverse: false };
