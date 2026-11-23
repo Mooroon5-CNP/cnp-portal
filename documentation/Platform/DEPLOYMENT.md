@@ -120,8 +120,11 @@ kubectl kustomize k8s/overlays/prod
 kubectl apply --dry-run=server -k k8s/overlays/prod
 kubectl -n argocd annotate application cnp-portal argocd.argoproj.io/refresh=hard --overwrite
 kubectl -n argocd patch application cnp-portal --type merge -p '{"operation":{"sync":{"prune":false}}}'
-kubectl -n cnp-portal rollout status deployment/cnp-portal --timeout=120s
-kubectl -n cnp-portal rollout status deployment/openbao-runtime-provisioner --timeout=120s
+# Argo applies the sync a few seconds later: wait for the new digest before rollout status,
+# otherwise rollout status can report the previous, already finished rollout.
+until kubectl -n cnp-portal get deployment cnp-portal -o jsonpath='{.spec.template.spec.containers[0].image}' | grep -q '<new-digest>'; do sleep 3; done
+kubectl -n cnp-portal rollout status deployment/cnp-portal --timeout=180s
+kubectl -n cnp-portal rollout status deployment/openbao-runtime-provisioner --timeout=180s
 ```
 
 Before sync, run `node scripts/deploy/backup-sqlite.js` and record its verified GCS object URI. Check that the rendered portal Deployment has `PORT=3000`, one replica, `RollingUpdate` with `maxUnavailable: 0` and the same-node pod affinity, and the intended digest; check that the provisioner has the same digest, projected token and read-only filesystem. Inspect the rendered `env` by **name**, never by array index: a positional patch previously overwrote the provisioner address and token path. The provisioner must start without importing the portal's SQLite database or mounting its PVC. Sync the reviewed revision manually, then wait for **both** rollouts and Argo CD `Synced/Healthy`. During the short overlap two processes share the SQLite file on one node; WAL locking makes that safe, but the new pod marks `running` failover operations as failed on start, so first check that `failover_operations` has no `running` row, no `failover_provisioning` lease is held and no environment deletion is in progress. If the surge pod cannot start, the old pod keeps serving: revert the digest commit and sync again.
