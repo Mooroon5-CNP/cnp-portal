@@ -80,7 +80,7 @@ patches:
         value: {name: AZURE_SUBSCRIPTION_ID, value: "8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e"}
       - op: add
         path: /spec/template/spec/containers/0/env/-
-        value: {name: CNP_AZURE_RUNTIME_RESOURCE_GROUP, value: "cnp-sov-shared-rg"}
+        value: {name: CNP_AZURE_RUNTIME_RESOURCE_GROUP, value: "cnp-sov-runtime-rg"}
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: CNP_AZURE_FEDERATED_TOKEN_FILE, value: "/var/run/secrets/azure/tokens/azure-identity-token"}

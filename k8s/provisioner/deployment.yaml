@@ -43,8 +43,10 @@ spec:
               value: 8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e
             - name: AZURE_LOCATION
               value: francecentral
+            # Dedicated group for app runtime identities and vaults: Crossplane may attach only these identities
+            # (Managed Identity Operator on this group), never the platform identities of cnp-sov-shared-rg.
             - name: CNP_AZURE_RUNTIME_RESOURCE_GROUP
-              value: cnp-sov-shared-rg
+              value: cnp-sov-runtime-rg
             - name: CNP_AZURE_TENANT_ID
               value: 17c98ba4-ddf8-454c-ba05-95d5326dcf56
             - name: CNP_AZURE_PROVISIONER_CLIENT_ID
