@@ -54,6 +54,16 @@ test('never propagates a failed request body or OpenBao error details', async ()
     .rejects.toThrow('OpenBao gcp indisponible ou accès refusé (HTTP 403).');
 });
 
+test('reports the destroyed latest version number of a reused path, never its values', async () => {
+  const { client, transport } = fake();
+  transport.request.mockRejectedValue(Object.assign(new Error('not found'), { response: { status: 404,
+    data: { data: { data: null, metadata: { version: 3, destroyed: true } } } } }));
+  const error = await client.read('sample-app', 'dev').catch(e => e);
+  expect(error).toMatchObject({ status: 404, currentVersion: 3 });
+  transport.request.mockRejectedValue(Object.assign(new Error('not found'), { response: { status: 404, data: { errors: [] } } }));
+  expect(await client.read('sample-app', 'dev').catch(e => e)).toMatchObject({ status: 404, currentVersion: undefined });
+});
+
 test('obtains a scoped identity token from the Google metadata server', async () => {
   const transport = { get: jest.fn().mockResolvedValue({ data: 'jwt' }) };
   expect(await googleIdentityToken('https://openbao.test:8200', transport)).toBe('jwt');

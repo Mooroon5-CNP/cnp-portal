@@ -41,6 +41,8 @@ function service({ model = require('../models/deployment_variables'), clientFor 
         try { cas = (await client.read(deployment.appName, deployment.environment)).version; }
         catch (error) {
           if (error.status !== 404) throw error;
+          // A reused application name keeps the destroyed versions of its previous owner.
+          cas = error.currentVersion || 0;
         }
         try {
           versions[domain] = await client.write(deployment.appName, deployment.environment, payload, cas);

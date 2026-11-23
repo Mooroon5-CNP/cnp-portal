@@ -70,8 +70,12 @@ class OpenBaoClient {
       // Axios errors can embed the request (and its secret body). Never propagate them.
       const code = error.response?.status;
       const status = Number.isInteger(code) ? ` (HTTP ${code})` : '';
+      // KV v2 answers 404 for a deleted or destroyed latest version but still reports its
+      // number in metadata. Keep only that number: a later CAS write must start from it.
+      const latest = code === 404 ? error.response?.data?.data?.metadata?.version : undefined;
       throw Object.assign(new Error(`OpenBao ${this.domain} indisponible ou accès refusé${status}.`),
-        { status: Number.isInteger(code) ? code : undefined });
+        { status: Number.isInteger(code) ? code : undefined,
+          currentVersion: Number.isInteger(latest) && latest > 0 ? latest : undefined });
     }
   }
 
