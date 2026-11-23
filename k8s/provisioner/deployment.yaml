@@ -5,8 +5,12 @@ metadata:
   namespace: cnp-portal
 spec:
   replicas: 1
+  # Stateless: start the new pod before stopping the old one.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: openbao-runtime-provisioner
@@ -24,7 +28,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: provisioner
-          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:653bcc3b3b2716c8fe454ae3599695aaf343c87cc8d8f6b3650a100b8490c1de
+          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:3c749139fcb39b332b24d111152a09ebb6beced7588aaafeffb693f5e7f08bd6
           imagePullPolicy: Always
           command: [node, src/services/openbao-runtime-provisioner-server.js]
           ports:
