@@ -28,7 +28,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: provisioner
-          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:5366935331928ce89e656d6adb06d4fc74ef515a646c5440afd62b9e9eaaade1
+          image: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:0135657c451aaac884793fb5d5b4f92c3c8209b00d601b90dc6f44db0e429817
           imagePullPolicy: Always
           command: [node, src/services/openbao-runtime-provisioner-server.js]
           ports:

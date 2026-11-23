@@ -99,7 +99,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:5366935331928ce89e656d6adb06d4fc74ef515a646c5440afd62b9e9eaaade1
+        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:0135657c451aaac884793fb5d5b4f92c3c8209b00d601b90dc6f44db0e429817
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
