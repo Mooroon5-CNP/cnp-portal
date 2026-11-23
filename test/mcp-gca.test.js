@@ -73,6 +73,14 @@ describe('Gemini Cloud Assist in the portal chat (MOCKED)', () => {
     expect(mcpClient.callTool.mock.calls[0][1].capability).toBe('investigate_issue');
     expect(classifyWithFallback('quel cout pour cloud run')).toEqual({ kind: 'tool', tool: 'get_finops_recommendation', fallback: true });
   });
+  test('explicit slash commands keep their own tool even when the message mentions GCP', async () => {
+    for (const [message, tool] of [['/logs mon app gcp', 'get_application_logs'], ['/deploiement google cloud', 'get_deployment_status']]) {
+      const { mcpClient } = await turn(message, { roles: ['dev'], context: { applicationId: 'majoutes-api', environment: 'dev' } });
+      const tools = mcpClient.callTool.mock.calls.map(([name]) => name);
+      expect(tools).not.toContain('gcp_cloud_assist');
+      expect(tools).toContain(tool);
+    }
+  });
   test('scenario 3: /diagnostic combines Argo CD, Git, Datadog and GCA, each cited source having been called', async () => {
     const { events, mcpClient } = await turn('/diagnostic latence élevée', { context: { applicationId: 'majoutes-api', environment: 'dev' } });
     expect(mcpClient.callTool.mock.calls.map(([tool]) => tool).sort()).toEqual(['gcp_cloud_assist', 'get_application_logs', 'get_deployment_status']);
