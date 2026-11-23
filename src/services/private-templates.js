@@ -106,11 +106,16 @@ function objectLabels(appName, env) {
  */
 function wrap(appName, env, priv, manifest, wave) {
     const name = `${appName}-${env}-${manifest.kind.toLowerCase()}-${manifest.metadata.name}`;
+    const spec = { providerConfigRef: { name: priv.providerConfig }, forProvider: { manifest } };
+    // Deployment suivi EN DIRECT : sans watch, le provider ne relit l'objet qu'à son sondage (10 min) et l'état observé
+    // (status.atProvider.manifest) que lit le portail reste celui de l'ancienne révision (constaté le 17/11/2026 : le
+    // portail annonçait « démarrage » 10 min après une mise à jour terminée).
+    if (manifest.kind === 'Deployment') spec.watch = true;
     return {
         apiVersion: 'kubernetes.crossplane.io/v1alpha2',
         kind: 'Object',
         metadata: { name, labels: objectLabels(appName, env), annotations: { 'argocd.argoproj.io/sync-wave': String(wave) } },
-        spec: { providerConfigRef: { name: priv.providerConfig }, forProvider: { manifest } },
+        spec,
     };
 }
 
@@ -263,6 +268,9 @@ function tplDatabase(appName, priv, env) {
                     spec: {
                         serviceAccountName: 'db',
                         automountServiceAccountToken: false,
+                        // TOUJOURS sur la VM serveur : son volume local-path est un dossier de ce disque. Créée sur le nœud
+                        // bonus, la base serait perdue au retrait de ce nœud par Cluster Autoscaler.
+                        nodeSelector: { 'node-role.kubernetes.io/control-plane': 'true' },
                         securityContext: { runAsNonRoot: true, runAsUser: POSTGRES_UID, runAsGroup: POSTGRES_UID,
                             fsGroup: POSTGRES_UID, seccompProfile: { type: 'RuntimeDefault' } },
                         containers: [{
@@ -333,6 +341,15 @@ function tplApp(appName, appPort, priv, env, revision) {
                 spec: {
                     serviceAccountName: 'app',
                     automountServiceAccountToken: false,
+                    // De préférence sur la machine de SA base (trafic local, latence minimale) ; en cas de manque de place,
+                    // débordement sur le nœud bonus (trafic vers la base alors chiffré par flannel WireGuard).
+                    affinity: { podAffinity: { preferredDuringSchedulingIgnoredDuringExecution: [{
+                        weight: 100,
+                        podAffinityTerm: {
+                            labelSelector: { matchLabels: { 'app.kubernetes.io/name': appName, 'cnp.io/role': 'db' } },
+                            topologyKey: 'kubernetes.io/hostname',
+                        },
+                    }] } },
                     securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
                         seccompProfile: { type: 'RuntimeDefault' } },
                     containers: [{
@@ -352,7 +369,9 @@ function tplApp(appName, appPort, priv, env, revision) {
                         securityContext: restrictedContainer(),
                         resources: APP_RESOURCES,
                         // Contrat commun aux tiers : /health ne répond 200 que si la base est joignable et inscriptible.
-                        readinessProbe: { httpGet: { path: '/health', port: 'http' }, periodSeconds: 10, failureThreshold: 3 },
+                        // Délai de 5 s (1 s par défaut) : sous charge, /health (requête à la base) dépasse 1 s avec le CPU
+                        // limité, et des pods sains sortaient du trafic (recette HPA du 17/11 : 1 à 2 prêts sur 5).
+                        readinessProbe: { httpGet: { path: '/health', port: 'http' }, timeoutSeconds: 5, periodSeconds: 10, failureThreshold: 3 },
                         livenessProbe: { tcpSocket: { port: 'http' }, initialDelaySeconds: 20, periodSeconds: 20 },
                     }],
                 },
