@@ -255,3 +255,30 @@ côté portail reste dans la demande FinOps correspondante.
 
 Le launcher et la signature loopback restent réservés au développement. Aucun
 hébergement partagé ni accès multiutilisateur autonome n’est déclaré validé.
+
+## Façades `/v1` pour le MCP distant (`ADAPTER_MODE=http`)
+
+Le MCP déployé sur Cloud Run (`cnp-mcp`) n'appelle pas GitHub, Argo CD, Kubernetes ou Datadog
+directement : il lit des façades HTTPS au format de `apps/mcp-server/src/http-adapters.ts`
+(MCP-CNP). Le portail les expose sous `/v1`, en lecture seule, en réutilisant ses adaptateurs
+natifs (`apps/orchestrator/src/sources/native-adapters.cjs`) :
+
+| Route | Source |
+| --- | --- |
+| `GET /v1/applications`, `/v1/applications/{id}`, `/v1/applications/{id}/{env}/workload` | registre du config-repo |
+| `GET /v1/desired-state/{id}/{env}` | config-repo |
+| `GET /v1/deployment-status/{id}/{env}` | Argo CD et état Cloud Run |
+| `GET /v1/image-digest/{id}/{env}` | Kubernetes (apps GKE uniquement) |
+| `GET /v1/logs`, `/v1/metrics/{id}/{env}?days=7|14|30` | Datadog |
+
+- Authentification : `Authorization: Bearer <MCP_FACADE_TOKEN>` (32 octets minimum, comparaison
+  en temps constant). Sans cette variable, `/v1` n'existe pas.
+- Montées avant la session : ni cookie ni redirection de connexion. Toute méthode autre que `GET`
+  reçoit 405 ; les paramètres sont validés avant tout appel (identifiant, `dev`/`prod`, dates ISO,
+  `limit` 1–100, recherche sans guillemets).
+- Erreurs : 404 application/environnement inconnu, 400 entrée invalide, 503 source indisponible
+  ou non configurée, sans détail interne.
+- Les façades renvoient toutes les applications : le filtrage par utilisateur et par équipe reste
+  à la charge du MCP, à partir des droits du JWT émis par le portail.
+- Côté MCP : les cinq paires `PLATFORM_API_`, `GIT_CONFIG_`, `ARGOCD_`, `KUBERNETES_` et `DATADOG_`
+  `BASE_URL=https://portal.apps.mooroon5.fr` et `*_TOKEN=<MCP_FACADE_TOKEN>`, puis `ADAPTER_MODE=http`.

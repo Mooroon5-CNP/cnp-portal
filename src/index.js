@@ -34,6 +34,9 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Read-only source facades for the remote MCP server: bearer token, no session or cookie.
+app.use('/v1', require('./routes/mcp-facade').createMcpFacadeRouter({ logger }));
+
 app.use(session({
   secret: sessionSecret,
   resave: false,
