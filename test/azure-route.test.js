@@ -137,6 +137,22 @@ describe('statut d\'un déploiement Azure après la CI', () => {
 });
 
 describe('azureAppStatusFrom (lecture des conditions Crossplane)', () => {
+  test('une région sans capacité PostgreSQL est annoncée clairement, pas comme une erreur de sous-réseau', () => {
+    const server = { spec: { forProvider: { location: 'italynorth' } }, status: { conditions: [
+      { type: 'Ready', status: 'False' },
+      { type: 'LastAsyncOperation', status: 'False', reason: 'AsyncUpdateFailure',
+        message: 'async update failed: refuse to update the external resource because the following update requires replacing it: cannot change the value of the argument "delegated_subnet_id" from "" to "/subscriptions/x/subnets/snet-data"' },
+    ] } };
+    const status = azureAppStatusFrom({ server });
+    expect(status).toMatchObject({ phase: 'failed', regionUnavailable: 'italynorth' });
+    expect(status.failure).toMatch(/région Azure italynorth indisponible/);
+    expect(status.failure).not.toMatch(/delegated_subnet_id/);
+    const sku = { ...server, status: { conditions: [{ type: 'LastAsyncOperation', status: 'False', reason: 'AsyncCreateFailure', message: 'SkuNotAvailable: Specified SKU is not supported in this region.' }] } };
+    expect(azureAppStatusFrom({ server: sku }).failure).toMatch(/indisponible/);
+    const other = { ...server, status: { conditions: [{ type: 'LastAsyncOperation', status: 'False', reason: 'AsyncCreateFailure', message: 'InvalidParameterValue: storage' }] } };
+    expect(azureAppStatusFrom({ server: other }).failure).toBe('serveur PostgreSQL : InvalidParameterValue: storage');
+  });
+
   const cond = (type, status, extra = {}) => ({ type, status, ...extra });
   const obj = (...conditions) => ({ status: { conditions: conditions } });
   const ok = obj(cond('Ready', 'True'), cond('Synced', 'True'));

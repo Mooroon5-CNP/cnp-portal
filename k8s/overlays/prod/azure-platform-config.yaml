@@ -11,16 +11,17 @@ data:
   AZURE_CLIENT_ID: 857d9fd0-a948-4451-aa43-64e31550d70c
   AZURE_CONTAINERAPP_ENVIRONMENT_DOMAIN: lemoncliff-141cfc76.francecentral.azurecontainerapps.io
   AZURE_CONTAINERAPP_ENVIRONMENT_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.App/managedEnvironments/cnp-sov-fr-cae
-  AZURE_COPY_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-it-vnet/subnets/snet-data
-  AZURE_COPY_LOCATION: italynorth
-  AZURE_COPY_REGION_KEY: it
+  AZURE_COPY_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-se-vnet/subnets/snet-data
+  AZURE_COPY_LOCATION: swedencentral
+  AZURE_COPY_REGION_KEY: se
   AZURE_COPY_RESOURCE_GROUP: cnp-sov-it-rg
   AZURE_DB_DNS_ZONE_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.Network/privateDnsZones/cnp-sov.postgres.database.azure.com
-  # Serveur PostgreSQL principal en Italie (SkuNotAvailable en francecentral, abonnement Free Trial) ; Container Apps en France.
-  AZURE_DB_LOCATION: italynorth
-  AZURE_DB_REGION_KEY: itdb
+  # Bases PostgreSQL : principale en Espagne, copie de prod en Suède (23/11/2026 : France et Italie sans capacité
+  # pour la souscription Free Trial, SkuNotAvailable). Réseaux cnp-sov-es-vnet / cnp-sov-se-vnet dans cnp-sov-it-rg.
+  AZURE_DB_LOCATION: spaincentral
+  AZURE_DB_REGION_KEY: esdb
   AZURE_DB_RESOURCE_GROUP: cnp-sov-it-rg
-  AZURE_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-it-vnet/subnets/snet-data
+  AZURE_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-es-vnet/subnets/snet-data
   AZURE_KEY_VAULT_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.KeyVault/vaults/cnpsovkv8e885538
   AZURE_LOCATION: francecentral
   AZURE_NAME_PREFIX: cnp-sov
