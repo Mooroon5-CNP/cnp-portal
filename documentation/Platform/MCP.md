@@ -89,7 +89,7 @@ secrets runtime. Ne jamais les copier dans un chat, une capture ou un fichier su
 | Argo CD | `ARGOCD_SERVER_URL`, token ou `ARGOCD_USERNAME`/`ARGOCD_PASSWORD` | Propriétaire, santé et synchronisation |
 | Runtime Cloud Run via Crossplane | `KUBE_API_URL`, `KUBE_TOKEN`, `KUBE_CA_CERT` | Image observée et conditions du service |
 | Logs Datadog | `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE` | Recherche sur `service:<applicationId> env:<dev|prod>` |
-| Métriques FinOps | Datadog + `MCP_CPU_PERCENT_METRIC`, `MCP_MEMORY_PERCENT_METRIC` | Pourcentages 0–100 avec couverture observée |
+| Métriques FinOps | Datadog + `MCP_CPU_PERCENT_METRIC`, `MCP_MEMORY_PERCENT_METRIC`, `MCP_METRICS_SCOPE`, `MCP_METRICS_RATIO` | Pourcentages 0–100 avec couverture observée ; Cloud Run : `gcp.run.container.{cpu,memory}.utilizations.avg`, portée `service_name:{app}-{env}`, ratio ×100 |
 | Scaleway Mistral | `REPORT_MODEL_API_KEY`, `SCW_DEFAULT_PROJECT_ID`, `VOICE_DEPLOYMENT_ANALYSIS_MODEL` ; optionnel `MCP_MISTRAL_MODEL` | Classification des demandes ambiguës, synthèse et résolution des noms d’application |
 | Facturation | Aucun adaptateur connecté en V1 | Coûts inconnus, jamais inventés |
 
