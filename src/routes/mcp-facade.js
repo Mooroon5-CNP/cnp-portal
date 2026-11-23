@@ -17,7 +17,8 @@ const ID = /^[a-z0-9][a-z0-9-]{0,199}$/i;
 const ENVIRONMENTS = new Set(['dev', 'prod']);
 const LEVELS = new Set(['DEBUG', 'INFO', 'WARN', 'ERROR']);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
-const CURSOR = /^[A-Za-z0-9_\-=+/.:]{1,512}$/;
+// Same bounds as the MCP input contract (packages/contracts): cursors up to 1000 characters.
+const CURSOR = /^[A-Za-z0-9_\-=+/.:]{1,1000}$/;
 const METRIC_DAYS = new Set([7, 14, 30]);
 
 const invalid = () => new SourceError('INVALID_INPUT', 'facade');
@@ -116,7 +117,7 @@ function createMcpFacadeRouter({ token = process.env.MCP_FACADE_TOKEN, adapters,
     if (Date.parse(from) > Date.parse(to)) throw invalid();
     return source().datadog.logs({
       applicationId: id(req.query.applicationId), environment: environment(req.query.environment), from, to,
-      limit: integer(req.query.limit, { min: 1, max: 100, fallback: 50 }), levels: levels(req.query.levels),
+      limit: integer(req.query.limit, { min: 1, max: 200, fallback: 50 }), levels: levels(req.query.levels),
       query: optionalText(req.query.query), cursor: cursor(req.query.cursor),
     });
   }));

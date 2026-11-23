@@ -85,6 +85,15 @@ describe('MCP source facades', () => {
     expect(adapters.datadog.metrics).toHaveBeenCalledWith('app-2-dancingduck', 'prod', 30);
   });
 
+  test('accepts the largest inputs allowed by the MCP contract', async () => {
+    const { get, adapters } = build();
+    const window = 'applicationId=app&environment=dev&from=2026-11-23T10:00:00Z&to=2026-11-23T11:00:00Z';
+    expect((await get(`/v1/logs?${window}&limit=200&cursor=${'c'.repeat(1000)}`)).status).toBe(200);
+    expect(adapters.datadog.logs).toHaveBeenCalledWith(expect.objectContaining({ limit: 200, cursor: 'c'.repeat(1000) }));
+    expect((await get(`/v1/logs?${window}&limit=201`)).status).toBe(400);
+    expect((await get('/v1/applications?limit=100')).status).toBe(200);
+  });
+
   test('refuses a missing or wrong token without calling any source', async () => {
     const { app, adapters, get } = build();
     const none = await request(app).get('/v1/applications');
