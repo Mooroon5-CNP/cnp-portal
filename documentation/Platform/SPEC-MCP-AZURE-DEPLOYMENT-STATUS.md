@@ -80,6 +80,8 @@ app-2-dancingduck/dev  partial  platform, git, argo available · souhaité 38060
 
 ## 7. Hors périmètre (suivi)
 
-- **Cloud privé k3s** : ses manifestes (`Object` provider-kubernetes) ne sont pas non plus lus par ces
-  adaptateurs ; à traiter de la même façon.
+- ~~**Cloud privé k3s**~~ : traité le 23/11 (branche `fix/mcp-private-deployment-status`). L'état souhaité vient du
+  `Deployment` enveloppé dans l'`Object` provider-kubernetes de `apps/<app>/crossplane/<env>/app.yaml`, l'état observé
+  de l'Application Argo `<app>-<env>` et de `getPrivateAppStatus` (image seulement en phase `ready`, `failed` →
+  `Degraded`, sinon `Progressing`). `workload` reste `null` et l'empreinte Kubernetes (GKE) ne s'applique pas.
 - **Valeur `azure_container_apps` dans le contrat MCP** : à décider avec le MCP.

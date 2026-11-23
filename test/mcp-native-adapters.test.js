@@ -119,3 +119,50 @@ describe('Azure Container Apps (SPEC-MCP-AZURE-DEPLOYMENT-STATUS)', () => {
     await expect(adapter.kubernetes.imageDigest('real-app', 'dev')).rejects.toMatchObject({ code: 'SOURCE_NOT_CONFIGURED' });
   });
 });
+
+describe('private k3s cloud (provider-kubernetes Objects)', () => {
+  const t = require('../src/services/private-templates');
+  const priv = { ecrRegistry: '111.dkr.ecr.eu-west-3.amazonaws.com', appsDomain: 'prive.apps.example.fr',
+    providerConfig: 'cnp-prive', certIssuer: 'letsencrypt-prod' };
+  const revision = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd';
+  const expectedImage = `${priv.ecrRegistry}/real-app:${revision}`;
+  function privateCloud(status) {
+    const getFileWithSha = jest.fn(async (_owner, _repo, path) => {
+      if (path === 'apps/registry.yaml') return { content: registry };
+      const env = path.match(/^apps\/real-app\/crossplane\/(dev|prod)\/app\.yaml$/)?.[1];
+      // The real generator output, so the test follows any change of the private templates.
+      if (env) return { content: t.privateCrossplaneFiles('real-app', 8080, priv, env, revision)['app.yaml'] };
+      const error = new Error('missing'); error.response = { status: 404 }; throw error;
+    });
+    const argoClient = { getApplicationDetails: jest.fn(async () => ({ status: { sync: { status: 'Synced' }, health: { status: 'Healthy' },
+      operationState: { finishedAt: '2026-11-23T18:00:00Z' }, summary: { images: [] } } })) };
+    const runtimeClient = { getPrivateAppStatus: jest.fn(async () => status), getV2ServiceStatus: jest.fn(), getAzureContainerAppStatus: jest.fn() };
+    return { adapter: createNativeAdapters({ SourceError, settings, githubClient: { getFileWithSha }, argoClient, runtimeClient }), argoClient, runtimeClient };
+  }
+
+  test('desired state comes from the Deployment wrapped in app.yaml, observed state from the k3s Objects', async () => {
+    const { adapter, argoClient, runtimeClient } = privateCloud({ phase: 'ready', observedImage: expectedImage, failure: null });
+    for (const env of ['dev', 'prod']) {
+      expect(await adapter.git.desired('real-app', env)).toEqual({ version: revision, imageDigest: null, sourceRevision: revision });
+      expect(await adapter.argo.observed('real-app', env)).toEqual({ version: revision, imageDigest: null,
+        syncStatus: 'Synced', healthStatus: 'Healthy', lastDeploymentAt: '2026-11-23T18:00:00Z' });
+      expect(argoClient.getApplicationDetails).toHaveBeenLastCalledWith(`real-app-${env}`);
+      expect(runtimeClient.getPrivateAppStatus).toHaveBeenLastCalledWith('real-app', env);
+    }
+    expect(runtimeClient.getV2ServiceStatus).not.toHaveBeenCalled();
+    expect(runtimeClient.getAzureContainerAppStatus).not.toHaveBeenCalled();
+  });
+
+  test('a rollout in progress hides the image; a failed rollout is Degraded', async () => {
+    expect(await privateCloud({ phase: 'rollout', observedImage: 'old', failure: null }).adapter.argo.observed('real-app', 'dev'))
+      .toMatchObject({ version: null, healthStatus: 'Progressing' });
+    expect(await privateCloud({ phase: 'failed', observedImage: null, failure: 'aucun pod prêt' }).adapter.argo.observed('real-app', 'dev'))
+      .toMatchObject({ healthStatus: 'Degraded' });
+  });
+
+  test('workload is unknown and the GKE digest is not applicable', async () => {
+    const { adapter } = privateCloud({ phase: 'ready', observedImage: expectedImage, failure: null });
+    expect(await adapter.platform.workload('real-app', 'dev')).toBeNull();
+    await expect(adapter.kubernetes.imageDigest('real-app', 'dev')).rejects.toMatchObject({ code: 'SOURCE_NOT_CONFIGURED' });
+  });
+});
