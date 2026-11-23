@@ -123,28 +123,17 @@ async function searchMcpLogs(input) {
   }) };
 }
 
-// Scope of the FinOps metrics query. `{app}` and `{env}` are replaced by the validated application
-// and environment. Default: APM-style tags; Cloud Run integration metrics use `service_name:{app}-{env}`.
-function mcpMetricsScope(applicationId, environment, template = process.env.MCP_METRICS_SCOPE || 'service:{app},env:{env}') {
-  if (!/^[a-z0-9_.:{},-]+$/i.test(template) || !template.includes('{app}')) throw new Error('INVALID_METRIC_SCOPE');
-  return template.replace(/\{app\}/g, applicationId).replace(/\{env\}/g, environment);
-}
-
-// App-scoped CPU/memory metrics. Values are percentages (0..100); set MCP_METRICS_RATIO=true for
-// metrics expressed as ratios (0..1), such as gcp.run.container.cpu.utilizations.avg.
+// Configure app-scoped metrics whose values are already percentages (0..100).
 async function queryMcpMetrics(applicationId, environment, days) {
-  if (!/^[a-z0-9-]+$/i.test(applicationId) || !['dev', 'prod'].includes(environment)) throw new Error('INVALID_INPUT');
+  if (!/^[a-z0-9-]+$/i.test(applicationId)) throw new Error('INVALID_INPUT');
   const to = Math.floor(Date.now() / 1000), from = to - days * 86400;
   const client = makeClient();
-  const scope = mcpMetricsScope(applicationId, environment);
-  const scale = process.env.MCP_METRICS_RATIO === 'true' ? 100 : 1;
   const query = async (metric) => {
     if (!/^[a-zA-Z0-9_.]+$/.test(metric)) throw new Error('INVALID_METRIC');
     const response = await client.get('/api/v1/query', { params: {
-      query: `avg:${metric}{${scope}}`, from, to,
+      query: `avg:${metric}{service:${applicationId},env:${environment}}`, from, to,
     } });
     return (response.data.series || []).flatMap((series) => series.pointlist || [])
-      .map(([timestamp, value]) => [timestamp, Number.isFinite(value) ? value * scale : value])
       .filter(([timestamp, value]) => Number.isFinite(timestamp) && Number.isFinite(value) && value >= 0 && value <= 100);
   };
   const [cpu, memory] = await Promise.all([query(process.env.MCP_CPU_PERCENT_METRIC), query(process.env.MCP_MEMORY_PERCENT_METRIC)]);
@@ -347,4 +336,4 @@ async function getMonitor(monitorId) {
   }
 }
 
-module.exports = { K3S_CLUSTER, logsScopeQuery, searchServiceLogs, getServiceMetrics, listMonitors, getMonitor, searchMcpLogs, queryMcpMetrics, mcpMetricsScope, getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };
+module.exports = { K3S_CLUSTER, logsScopeQuery, searchServiceLogs, getServiceMetrics, listMonitors, getMonitor, searchMcpLogs,queryMcpMetrics, getGoldenSignals, getLogs, getMonitors, silenceMonitor, createMonitor, checkConnectivity };
