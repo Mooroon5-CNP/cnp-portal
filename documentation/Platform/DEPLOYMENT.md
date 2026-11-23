@@ -104,6 +104,16 @@ sync with `prune:false`. Do not run `kubectl delete`, apply a partial Secret,
 
 Start from the latest `main` in both the portal and config repositories so recent changes from other contributors, including AWS failover and Datadog, are included. The main-branch `CNP Portal release image` workflow builds and pushes to `europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal`. Wait for its lint, tests, secret scan, dependency and image checks. `.gitleaksignore` has narrow exceptions for known public Azure role UUIDs; review any new exception rather than disabling scanning. Resolve the new digest from Artifact Registry and pin **the same digest** in `k8s/overlays/prod/kustomization.yaml` and `k8s/provisioner/deployment.yaml`. Do not use a mutable tag in prod.
 
+**Why the digest change is merged into `main`.** The Argo CD Application
+`cnp-portal` follows `main:k8s/overlays/prod` with manual sync. Argo deploys
+what `main` describes, so the digest bump must be committed to `main` before
+the sync. Make it on a `deploy/image-<short-digest>` branch, review, then merge
+into `main`. Merging alone deploys nothing; the rollout starts only at the
+manual sync. Never sync another revision or run `kubectl set image`: the live
+cluster would drift from `main`, and the next sync from `main` would silently
+roll back. Every deploy is therefore one commit, and a rollback is a revert of
+that commit followed by a sync.
+
 ```sh
 gcloud artifacts docker images describe europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal:<main-sha> --format='value(image_summary.digest)'
 kubectl kustomize k8s/overlays/prod
@@ -115,6 +125,24 @@ kubectl -n cnp-portal rollout status deployment/openbao-runtime-provisioner --ti
 ```
 
 Before sync, run `node scripts/deploy/backup-sqlite.js` and record its verified GCS object URI. Check that the rendered portal Deployment has `PORT=3000`, one replica, `RollingUpdate` with `maxUnavailable: 0` and the same-node pod affinity, and the intended digest; check that the provisioner has the same digest, projected token and read-only filesystem. Inspect the rendered `env` by **name**, never by array index: a positional patch previously overwrote the provisioner address and token path. The provisioner must start without importing the portal's SQLite database or mounting its PVC. Sync the reviewed revision manually, then wait for **both** rollouts and Argo CD `Synced/Healthy`. During the short overlap two processes share the SQLite file on one node; WAL locking makes that safe, but the new pod marks `running` failover operations as failed on start, so first check that `failover_operations` has no `running` row, no `failover_provisioning` lease is held and no environment deletion is in progress. If the surge pod cannot start, the old pod keeps serving: revert the digest commit and sync again.
+
+Pre-sync overlap check (read-only; all three counts must be `0`):
+
+```sh
+kubectl -n cnp-portal exec deploy/cnp-portal -- node -e "
+const d=new (require('better-sqlite3'))(process.env.DB_PATH,{readonly:true});
+console.log('running failover operations', d.prepare(\"select count(*) n from failover_operations where state='running'\").get().n);
+console.log('held failover leases', d.prepare('select count(*) n from failover_provisioning where lease_until > '+Date.now()).get().n);
+console.log('deletions in progress', d.prepare(\"select count(*) n from environment_deletions where state not in ('completed','failed')\").get().n);"
+```
+
+After the sync, check: both pods `1/1` on the new digest with no restarts,
+`/healthz` and `/ready` return 200 on `https://portal.apps.mooroon5.fr`,
+Argo `Synced/Healthy` at the merge commit, and that Secret key names and the
+PVC volume are unchanged from the values recorded before the sync. In
+addition to the SQLite backup, take a disk snapshot of the PVC's GCE disk
+(`gcloud compute disks snapshot <pv-disk> --zone europe-west9-b`); the PV
+reclaim policy is `Delete`.
 
 The Azure platform ConfigMap in this overlay is generated from `cnp/azure`'s non-secret `terraform output -json portal_environment`; the Azure identity ConfigMap holds `terraform output -raw openbao_portal_client_id`. Re-export and review both values after an Azure infrastructure replacement before syncing the portal. The portal's projected Kubernetes token successfully exchanged for an Entra token on 20 November 2026. This proves portal federation, but each Azure application still needs its own runtime identity and Key Vault before deployment with variables.
 
