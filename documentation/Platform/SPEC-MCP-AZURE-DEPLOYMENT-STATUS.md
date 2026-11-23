@@ -1,6 +1,6 @@
 # SPEC — Statut de déploiement des applications Azure dans le chat MCP
 
-Date : 23 novembre 2026 · Statut : en cours de correction (branche `fix/mcp-azure-deployment-status`)
+Date : 23 novembre 2026 · Statut : **corrigé et déployé** (commit `53f083a`, image `1b0ea4e`, production le 23/11 à 17:24 UTC)
 
 ## 1. Problème constaté
 
@@ -68,6 +68,15 @@ Pour une application Azure (dev ou prod), `get_deployment_status` renvoie :
 - Après déploiement : depuis le pod du portail, `get_deployment_status` pour `testapp09/dev` renvoie
   `success` ou `partial` avec `git:available` et `argo:available`, l'image `a9bb92b…` et `Healthy`.
 - Non-régression : même appel pour `app-2-dancingduck/dev` (GCP) inchangé.
+
+### Résultat en production (23/11, 17:25 UTC)
+
+```
+testapp09/dev          partial  platform, git, argo available · souhaité a9bb92b = observé a9bb92b · Synced/Healthy
+app-2-dancingduck/dev  partial  platform, git, argo available · souhaité 38060aa = observé 38060aa · Synced/Healthy
+```
+
+`partial` uniquement parce que la source `kubernetes` (empreinte d'image) ne s'applique pas hors GKE.
 
 ## 7. Hors périmètre (suivi)
 
