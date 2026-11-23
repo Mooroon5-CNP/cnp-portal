@@ -105,7 +105,9 @@ async function ensureAzureIdentity(deployment, { subscription = process.env.AZUR
   const vault = await getOrCreate(transport, token, `${names.vault}?api-version=${VAULT_VERSION}`,
     { location, tags: { cnp_environment: names.key, cnp_owner: 'openbao_runtime_provisioner' },
       properties: { tenantId, sku: { family: 'A', name: 'standard' }, enableRbacAuthorization: true,
-        softDeleteRetentionInDays: 7, enablePurgeProtection: false } });
+        // Never send enablePurgeProtection=false: Azure rejects it with HTTP 400 ("cannot be set to false").
+        // Omitting it leaves purge protection off, so a deleted app's vault can still be purged.
+        softDeleteRetentionInDays: 7 } });
   if (vault.id?.toLowerCase() !== names.vault.toLowerCase()
     || vault.tags?.cnp_environment !== names.key || vault.properties?.enableRbacAuthorization !== true) {
     throw new Error('Coffre Azure existant hors du périmètre attendu.');

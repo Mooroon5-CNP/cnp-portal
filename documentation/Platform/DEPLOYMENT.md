@@ -172,6 +172,19 @@ The AWS OpenBao address, audience, role and mount come from `cnp/cluster/aws/19-
 | A credential refresh removes another feature's key | All three targeted Secret scripts preserve existing `cnp-portal-app-env` keys. Compare key names before/after; run the Secret preservation regression test. Never replace the Secret with a partial manifest. |
 | Failover application deletion takes time | Inventory the exact app and owner **before** confirming deletion. The portal's asynchronous teardown can wait for cloud resources. Watch its state until `completed`; do not remove cloud resources directly or claim completion while it is running. |
 
+### Secrets and variables: what to watch on every deployment (incidents of 23 November 2026)
+
+| Symptom | Cause | What to do |
+| --- | --- | --- |
+| `Variables indisponibles : Provisionnement Azure indisponible ou accès refusé (HTTP 400)` | The provisioner created the Key Vault with `enablePurgeProtection: false`; Azure rejects that explicit value (`cannot be set to false`). First seen for the first new Azure vault (`testapp09`/prod). Fixed by omitting the property. | The Azure activity log names the cause: `az monitor activity-log list --offset 3h --status Failed`. The portal message hides Azure's detail on purpose; never print tokens to debug it. |
+| `Variables non préparées : OpenBao gcp … (HTTP 400)` when an app name is reused | Deleting an app destroys its OpenBao KV versions but keeps the path metadata; a write with `cas=0` is refused. | Fixed in the portal (the CAS write starts after the destroyed version). If it reappears, read the path's metadata version; do not delete OpenBao metadata by hand. |
+| Chat: every MCP call `MCP_UNAUTHENTICATED` (401) | `cnp-mcp-jwt-secret` in Secret Manager ends with a trailing newline and Cloud Run passes it raw; the portal copy must contain the **exact same bytes**. | Copy it with a pipe, never by hand. Compare hashes, not values: `sha256sum` of the Secret Manager value and of the decoded Kubernetes key. |
+| MCP real mode stops (`SOURCE_UNAVAILABLE` everywhere) | The portal facades need `MCP_FACADE_TOKEN` in `cnp-portal-app-env`, equal to Secret Manager `cnp-mcp-facade-token` **version 2** pinned on Cloud Run `cnp-mcp`. | Rotate both together (new version, update the portal key, then the Cloud Run pin). Version 1 is disabled and its value unknown. |
+| A feature loses its configuration after a credential change | `cnp-portal-app-env` holds every application key (OAuth, GitHub App, Datadog, voice, MCP). | Only merge-patch targeted keys (`kubectl patch … --type merge` with `stringData`), compare key names before/after, and never apply a partial Secret or recreate it. |
+| Secret Manager value unreadable for an operator | `roles/editor` cannot read secret values. | Grant `roles/secretmanager.secretAccessor` on the **single** secret, by the project owner, only when needed. |
+
+Before each sync: record the key names of `cnp-portal-app-env`, `cnp-portal-cloud-env`, `cnp-portal-token`, `cnp-portal-tls` (names only) and compare after the rollout. A deployment never needs to modify these Secrets.
+
 If the platform Terraform must be reapplied, the actual GCP state bucket is `cnp-tfstate-512313`; the legacy provider file still mentions `cnp-tfstate-508716`. Initialize explicitly with `terraform init -backend-config=bucket=cnp-tfstate-512313`, use approved credentials and review the plan before apply. Avoid carrying this discrepancy into an unreviewed full apply.
 
 ## Verify the release
