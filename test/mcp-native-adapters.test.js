@@ -78,3 +78,44 @@ test('legacy dev uses its declared Argo owner and never grants an unregistered e
   expect(runtimeClient.getV2ServiceStatus).toHaveBeenCalledWith('real-app');
   await expect(adapter.git.desired('real-app', 'prod')).rejects.toMatchObject({ code: 'ENVIRONMENT_NOT_FOUND' });
 });
+
+describe('Azure Container Apps (SPEC-MCP-AZURE-DEPLOYMENT-STATUS)', () => {
+  const azureClaim = (env) => `apiVersion: containerapp.azure.upbound.io/v1beta2\nkind: ContainerApp\nmetadata:\n  name: real-app-${env}\nspec:\n  forProvider:\n    template:\n      container:\n        - name: app\n          image: acr.example/real-app:abcdefabcdefabcdefabcdefabcdefabcdefabcd\n`;
+  function azure(runtime) {
+    const getFileWithSha = jest.fn(async (_owner, _repo, path) => {
+      if (path === 'apps/registry.yaml') return { content: registry };
+      const env = path.match(/^apps\/real-app\/crossplane\/(dev|prod)\/containerapp-claim\.yaml$/)?.[1];
+      if (env) return { content: azureClaim(env) };
+      const error = new Error('missing'); error.response = { status: 404 }; throw error;
+    });
+    const argoClient = { getApplicationDetails: jest.fn(async () => ({ status: { sync: { status: 'Synced' }, health: { status: 'Healthy' },
+      operationState: { finishedAt: '2026-11-23T16:49:00Z' }, summary: { images: [] } } })) };
+    const runtimeClient = { getAzureContainerAppStatus: jest.fn(async () => runtime), getV2ServiceStatus: jest.fn() };
+    return { adapter: createNativeAdapters({ SourceError, settings, githubClient: { getFileWithSha }, argoClient, runtimeClient }), argoClient, runtimeClient };
+  }
+
+  test('desired and observed state come from the ContainerApp claim and its Crossplane status', async () => {
+    const { adapter, argoClient, runtimeClient } = azure({ exists: true, ready: true, image: 'acr.example/real-app:abcdefabcdefabcdefabcdefabcdefabcdefabcd', failure: null });
+    for (const env of ['dev', 'prod']) {
+      expect(await adapter.git.desired('real-app', env)).toEqual({ version: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd', imageDigest: null, sourceRevision: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd' });
+      expect(await adapter.argo.observed('real-app', env)).toEqual({ version: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd', imageDigest: null,
+        syncStatus: 'Synced', healthStatus: 'Healthy', lastDeploymentAt: '2026-11-23T16:49:00Z' });
+      expect(argoClient.getApplicationDetails).toHaveBeenLastCalledWith(`real-app-${env}`);
+      expect(runtimeClient.getAzureContainerAppStatus).toHaveBeenLastCalledWith(`real-app-${env}`);
+    }
+    expect(runtimeClient.getV2ServiceStatus).not.toHaveBeenCalled();
+  });
+
+  test('the image is only reported once the Container App is ready; a failure is Degraded', async () => {
+    const pending = azure({ exists: true, ready: false, image: 'acr.example/real-app:old', failure: null });
+    expect(await pending.adapter.argo.observed('real-app', 'dev')).toMatchObject({ version: null, healthStatus: 'Progressing' });
+    const failed = azure({ exists: true, ready: false, image: null, failure: 'LinkedAuthorizationFailed' });
+    expect(await failed.adapter.argo.observed('real-app', 'dev')).toMatchObject({ healthStatus: 'Degraded' });
+  });
+
+  test('workload is unknown (contract has no Azure value) and the Kubernetes digest is not applicable', async () => {
+    const { adapter } = azure({ exists: true, ready: true, image: null, failure: null });
+    expect(await adapter.platform.workload('real-app', 'dev')).toBeNull();
+    await expect(adapter.kubernetes.imageDigest('real-app', 'dev')).rejects.toMatchObject({ code: 'SOURCE_NOT_CONFIGURED' });
+  });
+});
