@@ -15,6 +15,7 @@ function rowToUser(row) {
     role:           row.role,
     active:         row.active === 1,
     approved:       row.approved === 1,
+    mustChangePassword: row.must_change_password === 1,
     createdAt:      row.created_at,
     updatedAt:      row.updated_at,
   };
@@ -40,13 +41,13 @@ function findPending() {
   return db.prepare('SELECT * FROM users WHERE approved = 0 ORDER BY created_at ASC').all().map(rowToUser);
 }
 
-function create({ githubId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 1, approved = 0 }) {
+function create({ githubId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 1, approved = 0, mustChangePassword = false }) {
   const id = uuidv4();
   const now = new Date().toISOString();
   db.prepare(`
-    INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, githubId, username, email, avatarUrl, passwordHash, role, active ? 1 : 0, approved ? 1 : 0, now, now);
+    INSERT INTO users (id, github_id, username, email, avatar_url, password_hash, role, active, approved, must_change_password, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, githubId, username, email, avatarUrl, passwordHash, role, active ? 1 : 0, approved ? 1 : 0, mustChangePassword ? 1 : 0, now, now);
   return findById(id);
 }
 
@@ -68,6 +69,12 @@ function update(id, fields) {
   return findById(id);
 }
 
+function setPassword(id, passwordHash, mustChangePassword = false) {
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?')
+    .run(passwordHash, mustChangePassword ? 1 : 0, new Date().toISOString(), id);
+  return findById(id);
+}
+
 function upsertFromGithub({ githubId, githubUsername, email, avatarUrl }) {
   let user = findByGithubId(githubId);
   if (user) {
@@ -82,4 +89,4 @@ function remove(id) {
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
 }
 
-module.exports = { findById, findByGithubId, findByUsername, findAll, findPending, create, update, remove, upsertFromGithub };
+module.exports = { findById, findByGithubId, findByUsername, findAll, findPending, create, update, setPassword, remove, upsertFromGithub };

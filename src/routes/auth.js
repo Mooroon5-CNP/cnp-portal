@@ -7,6 +7,7 @@ const router = express.Router();
 const userStore = require('../models/user');
 const tokenStore = require('../models/tokenStore');
 const { createLoginLimiter } = require('../middleware/login-limit');
+const { requireAuth } = require('../middleware/auth');
 
 function renewSession(req, user) {
   return new Promise((resolve, reject) => {
@@ -121,6 +122,32 @@ router.get('/github/callback', async (req, res) => {
     req.flash('error', 'Échec de l\'authentification GitHub. Veuillez réessayer.');
     res.redirect('/auth/login');
   }
+});
+
+// First sign-in with a temporary password: the account must choose its own before using the portal.
+router.get('/change-password', requireAuth, (req, res) => {
+  res.render('change-password', { title: 'Nouveau mot de passe — CNP Portal', user: req.user, forced: req.user.mustChangePassword });
+});
+
+router.post('/change-password', requireAuth, createLoginLimiter(), async (req, res, next) => {
+  const { currentPassword, newPassword, confirmPassword } = req.body || {};
+  const fail = (message) => { req.flash('error', message); return res.redirect('/auth/change-password'); };
+  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || typeof confirmPassword !== 'string') {
+    return fail('Tous les champs sont requis.');
+  }
+  if (!req.user.passwordHash || !(await bcrypt.compare(currentPassword, req.user.passwordHash))) {
+    return fail('Le mot de passe actuel est incorrect.');
+  }
+  if (newPassword !== confirmPassword) return fail('La confirmation ne correspond pas.');
+  if (Buffer.byteLength(newPassword) < 12 || Buffer.byteLength(newPassword) > 72) {
+    return fail('Le nouveau mot de passe doit contenir entre 12 et 72 caractères.');
+  }
+  if (newPassword === currentPassword) return fail('Le nouveau mot de passe doit être différent du temporaire.');
+  try {
+    const updated = userStore.setPassword(req.user.id, await bcrypt.hash(newPassword, 12), false);
+    await renewSession(req, updated);
+    res.redirect('/');
+  } catch (error) { next(error); }
 });
 
 router.post('/logout', (req, res) => {

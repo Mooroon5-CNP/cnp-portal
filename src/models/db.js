@@ -48,6 +48,11 @@ if (!cols.includes('approved')) {
   db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1');
 }
 
+if (!cols.includes('must_change_password')) {
+  // Accounts created by a manager carry a temporary password that must be replaced at first sign-in.
+  db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+}
+
 // Preserve the explicitly enabled local development account during upstream bootstrap.
 const adminExists = db.prepare('SELECT id, password_hash FROM users WHERE username = ?').get('admin');
 const defaultPassword = adminExists?.password_hash && bcrypt.compareSync('admin', adminExists.password_hash);
