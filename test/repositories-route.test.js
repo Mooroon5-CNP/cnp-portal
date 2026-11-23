@@ -55,8 +55,8 @@ test('success redirects to a result page, never to a deployment action; replay d
     expect(page.text).toContain('/deployments#repository=');
     expect(page.text).toContain('Voir le repo sur GitHub');
     expect(page.text).toContain('href="https://github.com/team/sample"');
-    expect(page.text).toContain('href="/docs/APPLICATION_TEMPLATE_GUIDE.md"');
-    const guide = await request(app).get('/docs/APPLICATION_TEMPLATE_GUIDE.md');
+    expect(page.text).toContain('href="/docs/Users/TEMPLATES.md"');
+    const guide = await request(app).get('/docs/Users/TEMPLATES.md');
     expect(guide.status).toBe(200);
     expect(guide.text).toContain('Commencer à coder avec les templates CNP');
     expect(guide.text).toContain('requirements.txt');

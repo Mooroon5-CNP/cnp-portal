@@ -13,8 +13,11 @@ const DOCS_DIR = path.resolve(process.cwd(), 'documentation');
 
 const DEVOPS_PREFIX = 'devops/';
 
+// DevOps-only documents: the historical devops/ folder and the DevOps guide moved under Users/.
+const DEVOPS_FILES = new Set(['Users/DEVOPS_GUIDE.md']);
+
 function isDevopsFile(relPath) {
-  return relPath.startsWith(DEVOPS_PREFIX);
+  return relPath.startsWith(DEVOPS_PREFIX) || DEVOPS_FILES.has(relPath);
 }
 
 function canSeeDevopsFiles(user) {
@@ -38,7 +41,7 @@ function listDocFiles(dir, base = '') {
 
 function sortedFiles(allFiles) {
   // PLATFORM_CONTRACT.md first, DEVELOPER_GUIDE.md second, then alphabetical, devops/ section last
-  const ORDER = ['PLATFORM_CONTRACT.md', 'DEVELOPER_GUIDE.md'];
+  const ORDER = ['Users/PLATFORM_CONTRACT.md', 'Users/DEVELOPER_GUIDE.md'];
   return [...allFiles].sort((a, b) => {
     const ai = ORDER.indexOf(a);
     const bi = ORDER.indexOf(b);
@@ -54,7 +57,7 @@ function sortedFiles(allFiles) {
 }
 
 router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
-  return res.redirect('/docs/PLATFORM_CONTRACT.md');
+  return res.redirect('/docs/Users/PLATFORM_CONTRACT.md');
 });
 
 router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {

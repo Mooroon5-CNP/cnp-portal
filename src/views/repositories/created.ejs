@@ -11,7 +11,7 @@
     <p>Pour commencer : clonez le repo, créez une branche de travail et suivez le guide des templates pour lancer l’application et connaître les fichiers à préserver.</p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
       <a class="btn btn-secondary" href="<%= repository.url %>" target="_blank" rel="noopener noreferrer">Voir le repo sur GitHub</a>
-      <a class="btn btn-secondary" href="/docs/APPLICATION_TEMPLATE_GUIDE.md">Aller voir la documentation</a>
+      <a class="btn btn-secondary" href="/docs/Users/TEMPLATES.md">Aller voir la documentation</a>
     </div>
     <p>Dans le formulaire de déploiement, choisissez <%= repository.template === 'sqlite' ? 'GCP SQLite avec stockage persistant' : 'GCP Cloud SQL ou Azure PostgreSQL' %> pour ce modèle.</p>
     <a class="btn btn-primary" href="/deployments#repository=<%= encodeURIComponent(repository.url) %>&amp;port=<%= repository.port %>">Déployer ce repo</a>
