@@ -37,6 +37,20 @@ test('writes and verifies the same generation on GCP and AWS before recording pu
   expect(JSON.stringify(metadata.save.mock.calls)).not.toContain('https://example.test');
 });
 
+test('a reused application name continues after the destroyed versions of its previous owner', async () => {
+  const { clients, stores, variables } = fixture();
+  for (const [domain, latest] of [['gcp', 1], ['aws', 2]]) {
+    stores[domain].version = latest;
+    clients[domain].read.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('destroyed'), { status: 404, currentVersion: latest });
+    });
+  }
+  const result = await variables.prepare(deployment, { FEATURE: 'on' });
+  expect(clients.gcp.write).toHaveBeenCalledWith('sample-app', 'prod', expect.any(Object), 1);
+  expect(clients.aws.write).toHaveBeenCalledWith('sample-app', 'prod', expect.any(Object), 2);
+  expect(result.versions).toEqual({ gcp: 2, aws: 3 });
+});
+
 test('a failed AWS write never publishes a partial generation', async () => {
   const { clients, variables } = fixture();
   clients.aws.write.mockRejectedValueOnce(new Error('AWS unavailable'));
