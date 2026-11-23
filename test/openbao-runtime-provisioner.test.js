@@ -165,6 +165,9 @@ test('Azure provisioner creates isolated resources and verifies role assignments
       return { data: resources.get(url) };
     }
     if (method === 'PUT') {
+      // Mirrors Azure: an explicit enablePurgeProtection=false is rejected with HTTP 400 (seen live on 2026-11-23).
+      if (url.includes('/Microsoft.KeyVault/vaults/') && !url.includes('roleAssignments')
+        && data.properties?.enablePurgeProtection === false) throw missing(400);
       const value = url.includes('roleAssignments')
         ? { id: url.split('?')[0].replace('https://management.azure.com', ''), properties: data.properties }
         : { id: url.split('?')[0].replace('https://management.azure.com', ''), tags: data.tags,
