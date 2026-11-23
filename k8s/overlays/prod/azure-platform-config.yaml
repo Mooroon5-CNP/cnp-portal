@@ -16,7 +16,11 @@ data:
   AZURE_COPY_REGION_KEY: it
   AZURE_COPY_RESOURCE_GROUP: cnp-sov-it-rg
   AZURE_DB_DNS_ZONE_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.Network/privateDnsZones/cnp-sov.postgres.database.azure.com
-  AZURE_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-fr-vnet/subnets/snet-data
+  # Serveur PostgreSQL principal en Italie (SkuNotAvailable en francecentral, abonnement Free Trial) ; Container Apps en France.
+  AZURE_DB_LOCATION: italynorth
+  AZURE_DB_REGION_KEY: itdb
+  AZURE_DB_RESOURCE_GROUP: cnp-sov-it-rg
+  AZURE_DB_SUBNET_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-it-rg/providers/Microsoft.Network/virtualNetworks/cnp-sov-it-vnet/subnets/snet-data
   AZURE_KEY_VAULT_ID: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-shared-rg/providers/Microsoft.KeyVault/vaults/cnpsovkv8e885538
   AZURE_LOCATION: francecentral
   AZURE_NAME_PREFIX: cnp-sov

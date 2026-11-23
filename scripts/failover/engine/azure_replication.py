@@ -574,6 +574,9 @@ class AzurePlatform:
         env = environ if environ is not None else os.environ
         self.subscription = env['AZURE_SUBSCRIPTION_ID']
         self.primary_rg, self.primary_key = env['PRIMARY_RESOURCE_GROUP'], env.get('PRIMARY_KEY', 'fr')
+        # Serveurs PostgreSQL principaux hors du groupe des Container Apps (portail : AZURE_DB_RESOURCE_GROUP, base en Italie
+        # depuis le 23/11/2026). Absent : le groupe principal, comme avant. Les noms publics restent dans primary_rg.
+        self.primary_db_rg = env.get('PRIMARY_DB_RESOURCE_GROUP') or self.primary_rg
         self.copy_rg, self.copy_key = env['COPY_RESOURCE_GROUP'], env.get('COPY_KEY', 'it')
         self.zone_rg, self.zone = env['DNS_ZONE_RESOURCE_GROUP'], env['DNS_ZONE']
         self.vault = env['VAULT_NAME']
@@ -633,7 +636,7 @@ class AzurePlatform:
     def pairs(self):
         copies = dict(self._servers(self.copy_rg, 'copy-db', self.copy_key))
         return [Pair(app, env, server, copies[(app, env)])
-                for (app, env), server in self._servers(self.primary_rg, 'app-db', self.primary_key) if (app, env) in copies]
+                for (app, env), server in self._servers(self.primary_db_rg, 'app-db', self.primary_key) if (app, env) in copies]
 
     def _record(self, pair):
         return (self._rg(self.zone_rg) + f'/providers/Microsoft.Network/privateDnsZones/{self.zone}/CNAME/{pair.alias}'
@@ -677,11 +680,11 @@ class AzurePlatform:
 
     def app_servers(self):
         """Tous les serveurs d'app, dev compris, et de copie : (app, env, Server)."""
-        found = [(a, e, s) for (a, e), s in self._servers(self.primary_rg, 'app-db', self.primary_key, include_dev=True)]
+        found = [(a, e, s) for (a, e), s in self._servers(self.primary_db_rg, 'app-db', self.primary_key, include_dev=True)]
         return found + [(a, e, s) for (a, e), s in self._servers(self.copy_rg, 'copy-db', self.copy_key, include_dev=True)]
 
     def _server_url(self, server):
-        rg = self.primary_rg if server.key == self.primary_key else self.copy_rg
+        rg = self.primary_db_rg if server.key == self.primary_key else self.copy_rg
         return self._rg(rg) + f'/providers/Microsoft.DBforPostgreSQL/flexibleServers/{server.name}'
 
     def server_state(self, server):
