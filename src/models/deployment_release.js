@@ -25,6 +25,10 @@ if (!db.pragma('table_info(deployment_releases)').some(column => column.name ===
 }
 
 module.exports = {
+  // Production candidates waiting for a manager decision (sidebar badge).
+  countAwaitingApproval() {
+    return db.prepare("SELECT COUNT(*) AS c FROM deployment_releases WHERE state = 'pending'").get().c;
+  },
   get(deploymentId, revision) {
     return db.prepare('SELECT * FROM deployment_releases WHERE deployment_id = ? AND revision = ?').get(deploymentId, revision);
   },

@@ -15,8 +15,8 @@
       <li class="<%= locals.currentPage === 'deployments' ? 'active' : '' %>">
         <a href="/deployments" style="display:flex;align-items:center;justify-content:space-between;">
           <span><span class="nav-icon">⬆</span> Déploiements</span>
-          <% if (locals.pendingMrCount > 0) { %>
-          <span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= locals.pendingMrCount %></span>
+          <% if (locals.requestCounts && requestCounts.deployments > 0) { %>
+          <span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= requestCounts.deployments %></span>
           <% } %>
         </a>
       </li>
@@ -57,7 +57,12 @@
         <a href="/mcp-chat"><span class="nav-icon">◇</span> Assistant MCP</a>
       </li>
       <li class="<%= locals.currentPage === 'argocd' ? 'active' : '' %>">
-        <a href="/argocd"><span class="nav-icon">⟳</span> ArgoCD</a>
+        <a href="/argocd" style="display:flex;align-items:center;justify-content:space-between;">
+          <span><span class="nav-icon">⟳</span> ArgoCD</span>
+          <% if (locals.requestCounts && requestCounts.argocd > 0) { %>
+          <span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= requestCounts.argocd %></span>
+          <% } %>
+        </a>
       </li>
       <li class="<%= locals.currentPage === 'docs' ? 'active' : '' %>">
         <a href="/docs"><span class="nav-icon">📄</span> Documentation</a>
@@ -71,7 +76,12 @@
     <ul class="nav-menu">
       <% if (user.role === 'manager') { %>
       <li class="<%= locals.currentPage === 'admin' ? 'active' : '' %>">
-        <a href="/admin/users"><span class="nav-icon">👥</span> Utilisateurs</a>
+        <a href="/admin/users" style="display:flex;align-items:center;justify-content:space-between;">
+          <span><span class="nav-icon">👥</span> Utilisateurs</span>
+          <% if (locals.requestCounts && requestCounts.users > 0) { %>
+          <span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;"><%= requestCounts.users %></span>
+          <% } %>
+        </a>
       </li>
       <% } %>
       <li class="<%= locals.currentPage === 'teams' ? 'active' : '' %>">

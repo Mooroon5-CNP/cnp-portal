@@ -61,6 +61,9 @@ function toObj(row) {
 }
 
 module.exports = {
+  countPending() {
+    return db.prepare("SELECT COUNT(*) AS c FROM argocd_access_requests WHERE status = 'pending'").get().c;
+  },
   create({ userId, appName, reason }) {
     const id  = uuidv4();
     const now = new Date().toISOString();

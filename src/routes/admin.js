@@ -5,6 +5,8 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission, requireRole, can } = require('../middleware/rbac');
 const userStore = require('../models/user');
+const teamService = require('../services/teams');
+const { createManagedAccount, AccountError, ROLES } = require('../services/account-creation');
 
 const MOCK_SECRETS = [
   { name: 'cnp-portal-prod-github-oauth',    type: 'Opaque', namespace: 'cnp-portal', keys: ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_REDIRECT_URI'] },
@@ -32,6 +34,8 @@ router.get('/users', requireAuth, requireRole('manager', 'devops'), (req, res) =
     title: 'Gestion des utilisateurs — CNP Portal',
     currentPage: 'admin',
     users,
+    teams: teamService.listTeams(),
+    roles: ROLES,
     user: req.user,
     can: (p) => can(req.user, p),
   });
@@ -59,6 +63,18 @@ router.get('/users/events', requireAuth, requireRole('manager', 'devops'), (req,
     clearInterval(heartbeat);
     sseClients.delete(clientId);
   });
+});
+
+// Create a local account with a random one-time password — manager only
+router.post('/users/create', requireAuth, requirePermission('users:create'), async (req, res, next) => {
+  try {
+    const { username, role, teamId } = req.body || {};
+    const { user, credentials } = await createManagedAccount({ username, role, teamId: teamId || null });
+    res.status(201).json({ ok: true, id: user.id, ...credentials });
+  } catch (error) {
+    if (error instanceof AccountError) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
 });
 
 // Approve pending user — manager + devops

@@ -51,7 +51,16 @@ app.use(flash());
 app.use(requestMiddleware(logger));
 app.use(populateUser);
 
+// A manager-created account must replace its temporary password before reaching anything else.
+const PASSWORD_CHANGE_ALLOWED = new Set(['/auth/change-password', '/auth/logout', '/healthz', '/ready']);
+app.use((req, res, next) => {
+  if (!req.user || !req.user.mustChangePassword || PASSWORD_CHANGE_ALLOWED.has(req.path)) return next();
+  if (['GET', 'HEAD'].includes(req.method)) return res.redirect('/auth/change-password');
+  res.status(403).json({ error: 'PASSWORD_CHANGE_REQUIRED' });
+});
+
 const manifestMrModel = require('./models/manifest_mr');
+const { managerRequestCounts } = require('./services/request-badges');
 
 app.use((req, res, next) => {
   res.locals.user = req.user || null;
@@ -59,6 +68,7 @@ app.use((req, res, next) => {
   res.locals.can = req.user ? (p) => can(req.user, p) : () => false;
   res.locals.pendingMrCount   = 0;
   res.locals.rejectedMrCount  = 0;
+  res.locals.requestCounts    = managerRequestCounts(req.user);
   if (req.user) {
     try {
       if (req.user.role === 'manager') {
