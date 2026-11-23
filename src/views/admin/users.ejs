@@ -13,6 +13,9 @@
           <div class="page-title">Gestion des utilisateurs</div>
           <div class="page-subtitle">Administration des comptes et des rôles CNP</div>
         </div>
+        <% if (can('users:create')) { %>
+        <button type="button" class="btn btn-primary" onclick="openCreateModal()">+ Ajouter un utilisateur</button>
+        <% } %>
       </div>
 
       <%# ── Pending approvals section (live via SSE) ── %>
@@ -141,6 +144,40 @@
   </main>
 </div>
 
+<% if (can('users:create')) { %>
+<!-- Create user modal -->
+<div id="createUserModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);width:480px;max-width:92vw;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
+    <h3 style="margin:0 0 12px;">Ajouter un utilisateur</h3>
+    <form id="createUserForm" style="display:flex;flex-direction:column;gap:12px;">
+      <input type="text" name="username" placeholder="Identifiant" autocomplete="off" required minlength="3" maxlength="32">
+      <select name="role">
+        <% roles.forEach(r => { %><option value="<%= r %>" <%= r === 'dev' ? 'selected' : '' %>><%= r %></option><% }) %>
+      </select>
+      <select name="teamId">
+        <option value="">Aucune équipe</option>
+        <% teams.forEach(t => { %><option value="<%= t.id %>"><%= t.name %></option><% }) %>
+      </select>
+      <div id="createUserError" class="flash flash-error" style="display:none;font-size:13px;"></div>
+      <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-primary">Créer le compte</button>
+        <button type="button" class="btn btn-secondary" onclick="closeCreateModal()">Annuler</button>
+      </div>
+    </form>
+    <div id="createUserResult" style="display:none;">
+      <div class="flash flash-success" style="font-size:13px;margin-bottom:12px;">
+        Compte créé. Ce mot de passe n'est affiché qu'une seule fois ; l'utilisateur devra le changer à sa première connexion.
+      </div>
+      <pre id="createUserCredentials" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;user-select:all;"></pre>
+      <div style="display:flex;gap:10px;margin-top:12px;">
+        <button type="button" class="btn btn-primary" id="copyCredentialsBtn">Copier</button>
+        <button type="button" class="btn btn-secondary" onclick="closeCreateModal(true)">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+<% } %>
+
 <!-- Remove user confirmation modal -->
 <div id="removeUserModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
   <div style="background:var(--surface);width:440px;border-radius:8px;padding:24px;box-shadow:var(--shadow);">
@@ -248,6 +285,41 @@
     document.getElementById('removeUserModal').style.display = 'flex';
   }
   window.openRemoveModal = openRemoveModal;
+
+  // Create user (manager only): shows the credentials once, ready to copy and send.
+  const createModal = document.getElementById('createUserModal');
+  if (createModal) {
+    const form = document.getElementById('createUserForm');
+    const result = document.getElementById('createUserResult');
+    const errorBox = document.getElementById('createUserError');
+    const credentialsBox = document.getElementById('createUserCredentials');
+    window.openCreateModal = () => {
+      form.reset(); form.style.display = ''; result.style.display = 'none'; errorBox.style.display = 'none';
+      createModal.style.display = 'flex';
+    };
+    window.closeCreateModal = (reload) => {
+      createModal.style.display = 'none'; credentialsBox.textContent = '';
+      if (reload) window.location.reload();
+    };
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorBox.style.display = 'none';
+      const body = Object.fromEntries(new FormData(form));
+      try {
+        const res = await fetch('/admin/users/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+        credentialsBox.textContent = `Identifiant : ${data.username}\nMot de passe : ${data.password}\nLien : ${data.url}`;
+        form.style.display = 'none'; result.style.display = '';
+      } catch (error) {
+        errorBox.textContent = error.message; errorBox.style.display = '';
+      }
+    });
+    document.getElementById('copyCredentialsBtn').addEventListener('click', async (event) => {
+      try { await navigator.clipboard.writeText(credentialsBox.textContent); event.target.textContent = 'Copié ✓'; }
+      catch { const range = document.createRange(); range.selectNodeContents(credentialsBox); getSelection().removeAllRanges(); getSelection().addRange(range); event.target.textContent = 'Sélectionné : Ctrl+C'; }
+    });
+  }
 
   // Connect SSE
   const evtSource = new EventSource('/admin/users/events');
