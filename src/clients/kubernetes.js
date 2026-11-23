@@ -531,6 +531,15 @@ function azureAppStatusFrom({ server, database, containerApp }) {
     const op = conditionOf(body, 'LastAsyncOperation');
     if (op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)) {
       const detail = String(op.message || op.reason).replace(/\s+/g, ' ').trim();
+      // Azure refused the server for lack of capacity in the region: it drops the half-created server and Crossplane
+      // then reports a misleading "delegated_subnet_id from """ replacement. Say what actually happened.
+      if (name === 'serveur PostgreSQL' && (/SkuNotAvailable|RegionalAllocationFailed/i.test(detail)
+        || /delegated_subnet_id" from "" to/.test(detail))) {
+        const region = body?.spec?.forProvider?.location || 'demandée';
+        return { phase: 'failed', regionUnavailable: region,
+          failure: `serveur PostgreSQL : région Azure ${region} indisponible pour cette souscription (capacité refusée par Azure). `
+            + 'Réessayez plus tard ou configurez une autre région pour les bases (AZURE_DB_LOCATION).' };
+      }
       return { phase: 'failed', failure: `${name} : ${detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}` };
     }
   }
