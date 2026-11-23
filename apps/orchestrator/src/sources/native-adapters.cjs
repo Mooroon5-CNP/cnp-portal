@@ -38,6 +38,16 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       return fail('SOURCE_UNAVAILABLE', source);
     }
   }
+  // Multi-document YAML (private k3s app.yaml holds several provider-kubernetes Objects).
+  async function documents(path, source = 'git') {
+    try {
+      return yaml.loadAll((await githubClient.getFileWithSha(owner, repo, path, settings.github.configRepoToken)).content)
+        .filter(Boolean);
+    } catch (error) {
+      if (error.response?.status === 404) return null;
+      return fail('SOURCE_UNAVAILABLE', source);
+    }
+  }
   async function resolveDeployment(id, env) {
     const app = await get(id);
     if (!app) return fail('APPLICATION_NOT_FOUND', 'git');
@@ -56,6 +66,14 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       return { platform: 'azure_container_apps', manifest: azureApp, runtimeName: azureApp.metadata?.name || `${id}-${env}`,
         image: container?.image || null };
     }
+    // Private k3s cloud: app.yaml wraps the app Deployment in a provider-kubernetes Object (private-templates.js).
+    const privateObjects = await documents(`apps/${id}/crossplane/${env}/app.yaml`);
+    const privateApp = privateObjects?.find(item => item?.kind === 'Object' && item.spec?.forProvider?.manifest?.kind === 'Deployment');
+    if (privateApp) {
+      const manifest = privateApp.spec.forProvider.manifest;
+      return { platform: 'private_k3s', manifest, runtimeName: `${id}-${env}`, appName: id, environment: env,
+        image: manifest.spec?.template?.spec?.containers?.[0]?.image || null };
+    }
     const overlay = await document(`apps/${id}/overlays/${env}/kustomization.yaml`);
     if (!overlay) return fail('ENVIRONMENT_NOT_FOUND', 'git');
     const deployment = await document(`apps/${id}/overlays/${env}/deployment.yaml`)
@@ -70,6 +88,11 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
   }
   const versionOf = (image) => image && !image.includes('@') && /:[^/]+$/.test(image) ? image.slice(image.lastIndexOf(':') + 1) : null;
   const digestOf = (image) => image?.match(/@(sha256:[a-f0-9]{64})$/i)?.[1] || null;
+  // getPrivateAppStatus summary -> the { ready, image, failure } shape used for Cloud Run and Azure.
+  function privateRuntime(status) {
+    return { ready: status?.phase === 'ready', image: status?.observedImage || null,
+      failure: status?.phase === 'failed' ? status.failure || 'Déploiement en échec.' : null };
+  }
   async function observed(id, env) {
     const deployment = await resolveDeployment(id, env);
     const explicit = JSON.parse(process.env.MCP_ARGO_APPLICATIONS || '{}')[`${id}/${env}`];
@@ -85,7 +108,9 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       const cloud = deployment.platform === 'cloud_run'
         ? await runtimeClient.getV2ServiceStatus(deployment.runtimeName)
         : deployment.platform === 'azure_container_apps'
-          ? await runtimeClient.getAzureContainerAppStatus(deployment.runtimeName) : null;
+          ? await runtimeClient.getAzureContainerAppStatus(deployment.runtimeName)
+          : deployment.platform === 'private_k3s'
+            ? privateRuntime(await runtimeClient.getPrivateAppStatus(deployment.appName, deployment.environment)) : null;
       const observedImage = cloud ? (cloud.ready ? cloud.image : null) : images[0];
       const runtimeHealth = cloud?.failure ? 'Degraded' : cloud && !cloud.ready ? 'Progressing' : healthStatus;
       return { version: versionOf(observedImage), imageDigest: digestOf(observedImage), syncStatus, healthStatus: runtimeHealth,
@@ -122,8 +147,8 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       },
       workload: async (id, env) => {
         const deployment = await resolveDeployment(id, env);
-        // The MCP contract only knows gke and cloud_run: an Azure workload is reported as unknown, never mislabelled.
-        if (deployment.platform === 'azure_container_apps') return null;
+        // The MCP contract only knows gke and cloud_run: Azure and private k3s workloads are unknown, never mislabelled.
+        if (deployment.platform === 'azure_container_apps' || deployment.platform === 'private_k3s') return null;
         if (deployment.platform === 'cloud_run') {
           const volumes = deployment.manifest.spec?.forProvider?.template?.volumes || [];
           return { platform: 'cloud_run', stateless: volumes.length === 0, http: true, requiresKubernetes: false };
