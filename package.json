@@ -20,7 +20,8 @@
     "test:live-sources": "node scripts/check-live-sources.cjs",
     "test:generation": "node scripts/test-generation.mjs",
     "test:context": "node scripts/test-context-resolution.mjs",
-    "test:live-environments": "node scripts/test-mcp-live-environments.mjs"
+    "test:live-environments": "node scripts/test-mcp-live-environments.mjs",
+    "test:gca-integration": "node scripts/test-gca-integration.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.86",

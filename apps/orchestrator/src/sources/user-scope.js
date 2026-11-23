@@ -16,12 +16,15 @@ function createUserScope(client, catalog, deployments = require('../../../../src
       return environments.length ? [{ ...item, environments }] : [];
     });
     const scopedCatalog = { listApplications: async () => filter(await catalog.listApplications()) };
-    const scopedClient = { callTool: async (tool, args, metadata) => {
-      if (tool !== 'list_applications' && (!args.applicationId || !['dev', 'prod'].includes(args.environment)
+    const scopedClient = { callTool: async (tool, args, metadata = {}) => {
+      // Gemini Cloud Assist may run without a CNP target; a target, when given, is checked like any other tool.
+      const targetless = tool === 'list_applications' || (tool === 'gcp_cloud_assist' && !args.applicationId && !args.environment);
+      if (!targetless && (!args.applicationId || !['dev', 'prod'].includes(args.environment)
         || !allowed(args.applicationId, args.environment))) {
         const error = new Error('FORBIDDEN'); error.code = 'FORBIDDEN'; throw error;
       }
-      const result = await client.callTool(tool, args, metadata);
+      const authorizedTarget = targetless ? undefined : { applicationId: args.applicationId, environment: args.environment };
+      const result = await client.callTool(tool, args, { ...metadata, ...(authorizedTarget ? { authorizedTarget } : {}) });
       if (tool === 'list_applications' && result.status !== 'error') {
         return { ...result, data: { ...result.data, applications: filter(result.data.applications, args.environment) } };
       }

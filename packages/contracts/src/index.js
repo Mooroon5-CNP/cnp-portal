@@ -146,6 +146,42 @@ const responseSchemas = Object.freeze({
     'FinOps requires partial status and the missing-cost warning'),
 });
 
+// Gemini Cloud Assist (mirror of MCP-CNP packages/contracts). Mandatory 7-section diagnostic answer.
+const text = (max) => z.string().min(1).max(max);
+const answerSourceSchema = z.string().min(1).max(64).regex(/^[a-z_]+$/);
+const correlationIdSchema = z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/);
+const diagnosticAnswerSchema = z.strictObject({
+  summary: text(2000),
+  observations: z.array(z.strictObject({ source: answerSourceSchema, fact: text(8000), resource: z.string().max(500).nullable(), observedAt: timestampSchema.nullable() })).max(50),
+  diagnosis: z.array(z.strictObject({ kind: z.enum(['fact', 'hypothesis']), statement: text(4000) })).max(30),
+  evidence: z.array(z.strictObject({
+    source: answerSourceSchema, resource: z.string().max(500).nullable(),
+    period: z.strictObject({ from: timestampSchema, to: timestampSchema }).nullable(), observedAt: timestampSchema.nullable(), values: z.string().max(2000).nullable(),
+  })).max(50),
+  recommendations: z.array(z.strictObject({ priority: z.number().int().min(1).max(10), action: text(2000), executed: z.literal(false) })).max(20),
+  confidence: z.strictObject({ level: z.enum(['high', 'medium', 'low']), justification: text(1000) }),
+  limitations: z.array(text(1000)).max(30),
+});
+/** A source may be cited only if it was actually called and answered. */
+function citesOnlyCalledSources(answer, sources) {
+  const available = new Set(sources.filter((source) => source.status === 'available').map((source) => source.source));
+  return [...answer.observations, ...answer.evidence].every((item) => available.has(item.source));
+}
+const gcaCapabilities = Object.freeze(['ask_cloud_assist', 'investigate_issue', 'optimize_costs']);
+const gcpCloudAssistToolName = 'gcp_cloud_assist';
+const gcpCloudAssistInputSchema = z.strictObject({
+  capability: z.enum(gcaCapabilities), question: z.string().min(1).max(4000), conversationId: correlationIdSchema,
+  applicationId: identifierSchema.optional(), environment: environmentSchema.optional(),
+});
+const gcpCloudAssistDataSchema = z.strictObject({
+  capability: z.enum(gcaCapabilities), conversationId: correlationIdSchema, sessionContinued: z.boolean(),
+  structured: z.boolean(), actionProposed: z.boolean(), answer: diagnosticAnswerSchema,
+});
+const gcpCloudAssistResponseSchema = responseSchema(gcpCloudAssistToolName, gcpCloudAssistDataSchema)
+  .refine((response) => response.status === 'error' || citesOnlyCalledSources(response.data.answer, response.meta.sources),
+    'An answer may only cite sources that were actually called');
+const chatToolNames = Object.freeze([...toolNames, gcpCloudAssistToolName]);
+
 const chatTurnRequestSchema = z.strictObject({
   conversationId: z.string().uuid().optional(),
   message: z.string().trim().min(1).max(4000),
@@ -169,10 +205,11 @@ const eventBase = { correlationId: z.string().uuid() };
 const chatEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...eventBase, type: z.literal('turn_started'), conversationId: z.string().uuid() }),
   z.strictObject({ ...eventBase, type: z.literal('clarification_required'), question: z.string().min(1) }),
-  z.strictObject({ ...eventBase, type: z.literal('tool_started'), tool: z.enum(toolNames) }),
-  z.strictObject({ ...eventBase, type: z.literal('tool_completed'), tool: z.enum(toolNames), status: z.enum(['success', 'partial', 'error']) }),
+  z.strictObject({ ...eventBase, type: z.literal('tool_started'), tool: z.enum(chatToolNames) }),
+  z.strictObject({ ...eventBase, type: z.literal('tool_completed'), tool: z.enum(chatToolNames), status: z.enum(['success', 'partial', 'error']) }),
   z.strictObject({ ...eventBase, type: z.literal('tool_result'), status: z.enum(['success', 'partial']), result: z.discriminatedUnion('tool',
     toolNames.map(tool => z.strictObject({ tool: z.literal(tool), data: dataSchemas[tool] }))) }),
+  z.strictObject({ ...eventBase, type: z.literal('diagnostic_answer'), answer: diagnosticAnswerSchema, sources: z.array(sourceSummarySchema) }),
   z.strictObject({ ...eventBase, type: z.literal('warning'), code: z.string(), message: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('answer_delta'), text: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('turn_completed'), sources: z.array(sourceSummarySchema) }),
@@ -197,4 +234,6 @@ module.exports = {
   getApplicationLogsDataSchema, getFinOpsRecommendationDataSchema, dataSchemas,
   sourceStatusSchema, toolIssueSchema, responseSchemas,
   chatTurnRequestSchema, chatEventSchema, getInputJsonSchema, getOutputJsonSchema,
+  diagnosticAnswerSchema, citesOnlyCalledSources, gcaCapabilities, gcpCloudAssistToolName,
+  gcpCloudAssistInputSchema, gcpCloudAssistResponseSchema, chatToolNames,
 };
