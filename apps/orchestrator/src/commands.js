@@ -5,8 +5,8 @@ const commands = Object.freeze([
   { command: '/deploiement', title: 'Déploiement', description: 'État, version et synchronisation de l’application sélectionnée', tool: 'get_deployment_status', prompt: 'Quel est le statut du déploiement ?' },
   { command: '/logs', title: 'Logs', description: 'Consulter les logs récents de l’application sélectionnée', tool: 'get_application_logs', prompt: 'Montre les logs' },
   { command: '/finops', title: 'FinOps', description: 'Utilisation et recommandation de ressources', tool: 'get_finops_recommendation', prompt: 'Donne une recommandation FinOps' },
-  { command: '/gcp', title: 'Google Cloud', description: 'Question Google Cloud (Gemini Cloud Assist, managers uniquement)', tool: 'gcp_cloud_assist', capability: 'ask_cloud_assist', prompt: 'Question Google Cloud :' },
-  { command: '/diagnostic', title: 'Diagnostic', description: 'Diagnostic croisé Argo CD, Datadog et Gemini Cloud Assist (managers uniquement)', tool: 'gcp_cloud_assist', capability: 'investigate_issue', transverse: true, prompt: 'Diagnostique un incident :' },
+  { command: '/gcp', title: 'Google Cloud', description: 'Question sur les ressources Google Cloud (Gemini Cloud Assist, lecture seule)', tool: 'gcp_cloud_assist', capability: 'ask_cloud_assist', prompt: 'Question Google Cloud :' },
+  { command: '/diagnostic', title: 'Diagnostic', description: 'Diagnostic croisé Argo CD, Datadog et Gemini Cloud Assist de l’application sélectionnée', tool: 'gcp_cloud_assist', capability: 'investigate_issue', transverse: true, prompt: 'Diagnostique un incident :' },
 ]);
 function resolveCommand(message) {
   const [name, ...rest] = message.trim().split(/\s+/);
