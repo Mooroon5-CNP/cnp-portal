@@ -6,7 +6,8 @@ jest.mock('../src/config/env', () => ({ config: {
 } }));
 jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), getRef: jest.fn(), createBranch: jest.fn(),
   checkActionsEnabled: jest.fn(), setRepoSecret: jest.fn(), setRepoVariable: jest.fn() }));
-jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), removeApplicationSetPath: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn() }));
+jest.mock('../src/clients/kubernetes', () => ({ applyApplicationSet: jest.fn(), removeApplicationSetPath: jest.fn(), getV2ServiceStatus: jest.fn(), getArgocdApplicationIfExists: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(), refreshArgocdApplication: jest.fn().mockResolvedValue() }));
+jest.mock('../src/services/openbao-runtime-provisioner-client', () => ({ ensure: jest.fn().mockResolvedValue(null), remove: jest.fn().mockResolvedValue(null) }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
 
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
@@ -123,6 +124,27 @@ test('main CI publishes dev once and concurrent polls share the same work', asyn
   expect(published).toHaveLength(1); expect(published[0].ref).toBe('heads/main');
   expect(trees[0].tree.every(file => file.path.startsWith('apps/pixelcam/crossplane/dev/'))).toBe(true);
   await service.reconcile(dep); expect(published).toHaveLength(1);
+});
+
+test('a dev publication asks Argo CD to refresh the application at once', async () => {
+  kubernetes.refreshArgocdApplication.mockClear();
+  await service.reconcile(dep);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(published).toHaveLength(1);
+  expect(kubernetes.refreshArgocdApplication).toHaveBeenCalledWith(`${dep.appName}-${dep.environment}`);
+  kubernetes.refreshArgocdApplication.mockRejectedValueOnce(new Error('argo down'));
+  variableRecords.save(dep.id, { generation: 'refresh-failure', names: ['FEATURE'], versions: { gcp: 1 } });
+  await expect(service.reconcile(dep)).resolves.toBeDefined();
+});
+
+test('the runtime identity is ensured at each release of an app with variables, never without variables', async () => {
+  const provisioner = require('../src/services/openbao-runtime-provisioner-client');
+  provisioner.ensure.mockClear();
+  await service.reconcile(dep);
+  expect(provisioner.ensure).not.toHaveBeenCalled();
+  variableRecords.save(dep.id, { generation: 'with-variables', names: ['FEATURE'], versions: { gcp: 1 } });
+  await service.reconcile(dep);
+  expect(provisioner.ensure).toHaveBeenCalledWith(expect.objectContaining({ appName: dep.appName, environment: dep.environment }));
 });
 
 test('changing variables republishes the same successful CI revision and keeps the image', async () => {

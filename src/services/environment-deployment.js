@@ -488,9 +488,15 @@ async function interruptedApproval(api, dep, release) {
   }
   const token = releases.acquire(dep.id, release.revision, release.run_id);
   if (!token) return { phase: 'deploying', message: 'Vérification de la publication en cours.' };
-  try { releases.save(dep.id, release.revision, token, 'published'); }
+  try { releases.save(dep.id, release.revision, token, 'published'); refreshArgo(dep); }
   finally { releases.release(dep.id, release.revision, token); }
   return readiness(dep, release.revision);
+}
+
+// Ask Argo CD to read the config repo now instead of at its next poll (up to 3 min). This also unblocks an application
+// stuck on a previously failed revision (23/11/2026: testapp09 needed a manual refresh). Best effort: Argo still polls.
+function refreshArgo(dep) {
+  Promise.resolve().then(() => kubernetes.refreshArgocdApplication(`${dep.appName}-${dep.environment}`)).catch(() => {});
 }
 
 async function reconcile(dep) {
@@ -541,6 +547,9 @@ async function reconcile(dep) {
       if (['pending', 'approving'].includes(fresh.state)) return { ...result, phase: 'approval', message: 'Validation manager requise.', prUrl: fresh.pr_url };
       // Azure : le mot de passe de cnp_runtime doit exister avant que Crossplane lise les claims. Relançable, sans rotation :
       // les apps inscrites avant le rôle applicatif (16/11/2026) l'obtiennent à leur prochaine publication.
+      // Runtime identity and vault of an app with variables: ensured at each release, not only at creation (idempotent),
+      // so an app created before a runtime group change, or whose identity was removed, gets it back without manual step.
+      if (deploymentVariables.get(dep.id)) await require('./openbao-runtime-provisioner-client').ensure(dep);
       if (azure.isAzure(dep)) await databaseSecrets(dep, 'app-sql-secrets');
       const files = manifests(dep, revision);
       let runtimeRefs = null;
@@ -583,6 +592,7 @@ async function reconcile(dep) {
       if (dep.environment === 'dev') {
         await commitFiles(api, target(), files, `deploy(${dep.appName}): dev ${revision}`, 'main', guard);
         releases.save(dep.id, revision, token, 'published', { runtimeRefs });
+        refreshArgo(dep);
         return { ...result, ...await readiness(dep, revision) };
       }
       const branch = `cnp-release/${dep.id}/${revision}/${generation || 'none'}`;
@@ -637,6 +647,7 @@ async function review(dep, revision, approve, { reviewedBy } = {}) {
         throw new Error('Le merge GitHub a été refusé.');
       }
       releases.save(dep.id, revision, token, 'published');
+      refreshArgo(dep);
     } else {
       await api.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', { ...target(), pull_number: release.pr_number, state: 'closed' });
       releases.save(dep.id, revision, token, 'rejected', { reviewedBy });
