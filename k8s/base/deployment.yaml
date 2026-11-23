@@ -12,8 +12,15 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: cnp-portal
+  # Start the new pod before stopping the old one. The SQLite volume is
+  # ReadWriteOnce, so the podAffinity below keeps the surge pod on the node
+  # that already has the disk attached; both processes share the WAL-mode
+  # database for the few seconds of overlap.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -31,10 +38,22 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
       automountServiceAccountToken: false
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: cnp-portal
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: cnp-portal
           image: europe-west9-docker.pkg.dev/cnp-terraform-500015-508716/cnp-registry/cnp-portal:1.0.0
           imagePullPolicy: Always
+          lifecycle:
+            preStop:
+              # Let the ingress drop this endpoint before SIGTERM.
+              exec:
+                command: [sleep, "5"]
           ports:
             - name: http
               containerPort: 3000

@@ -6,7 +6,7 @@
 - Portal source: `Mooroon5-CNP/cnp-portal`, branch `main`, overlay `k8s/overlays/prod`.
 - GitOps source: `Mooroon5-CNP/config-repo`, branch `main`, applications `cert-manager`, `cnp-portal-bootstrap`, `cnp-portal`.
 - URL: `https://portal.apps.mooroon5.fr` via ingress-nginx `34.163.88.46`.
-- One pod, `Recreate` rollout, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`). A rollout interrupts active sessions. Do not increase replicas without migrating the database and session store.
+- One pod, SQLite on `cnp-portal-data` (10 Gi `standard-rwo`, PV reclaim policy `Delete`). Rollouts start the new pod before stopping the old one (`RollingUpdate`, `maxSurge: 1`, `maxUnavailable: 0`); a required pod affinity keeps the surge pod on the node that already has the ReadWriteOnce disk attached, and both processes share the WAL-mode database for the few seconds of overlap. Sessions are in memory, so a rollout still signs everyone out. Do not increase replicas without migrating the database and session store.
 - MCP UI and code remain present. The real MCP-CNP service is a later promotion; the current client uses test data.
 - Both the portal and the dedicated OpenBao runtime provisioner currently use image `sha256:6769759244337d47ed4ba2fdde1adc69a94fdf70bd2d371e7f633e190c32edd9`. On 21 November both Deployments were `1/1`, Argo CD reported `Synced/Healthy` for the portal and Dancing Duck prod, and `/api/health` returned `ok` for GitHub, Argo CD, Datadog, Kubernetes and Crossplane. Recheck these facts before each release; they are a dated observation, not a permanent guarantee.
 - [OpenBao](OPENBAO.md) documents the variable paths; endpoint health does not prove application-level delivery.
@@ -88,7 +88,7 @@ To rotate just the OAuth client later, from the portal repository run:
 node scripts/deploy/update-oauth-secret.js /secure/path/oauth-prod.env
 ```
 
-This checks the client/secret pair and registered callback with GitHub before updating the Kubernetes Secret. It restarts the one portal pod and verifies the live redirect. The script replaces the Secret without a plaintext `kubectl.kubernetes.io/last-applied-configuration` annotation. Expect a brief interruption during the `Recreate` rollout.
+This checks the client/secret pair and registered callback with GitHub before updating the Kubernetes Secret. It restarts the one portal pod and verifies the live redirect. The script replaces the Secret without a plaintext `kubectl.kubernetes.io/last-applied-configuration` annotation. The old pod keeps serving until the new one is ready; users are signed out because sessions are in memory.
 
 ## Build and promote an image
 
@@ -114,7 +114,7 @@ kubectl -n cnp-portal rollout status deployment/cnp-portal --timeout=120s
 kubectl -n cnp-portal rollout status deployment/openbao-runtime-provisioner --timeout=120s
 ```
 
-Before sync, run `node scripts/deploy/backup-sqlite.js` and record its verified GCS object URI. Check that the rendered portal Deployment has `PORT=3000`, one replica, `Recreate`, and the intended digest; check that the provisioner has the same digest, projected token and read-only filesystem. Inspect the rendered `env` by **name**, never by array index: a positional patch previously overwrote the provisioner address and token path. The provisioner must start without importing the portal's SQLite database or mounting its PVC. Sync the reviewed revision manually, then wait for **both** rollouts and Argo CD `Synced/Healthy`. `Recreate` prevents concurrent SQLite writers.
+Before sync, run `node scripts/deploy/backup-sqlite.js` and record its verified GCS object URI. Check that the rendered portal Deployment has `PORT=3000`, one replica, `RollingUpdate` with `maxUnavailable: 0` and the same-node pod affinity, and the intended digest; check that the provisioner has the same digest, projected token and read-only filesystem. Inspect the rendered `env` by **name**, never by array index: a positional patch previously overwrote the provisioner address and token path. The provisioner must start without importing the portal's SQLite database or mounting its PVC. Sync the reviewed revision manually, then wait for **both** rollouts and Argo CD `Synced/Healthy`. During the short overlap two processes share the SQLite file on one node; WAL locking makes that safe, but the new pod marks `running` failover operations as failed on start, so first check that `failover_operations` has no `running` row, no `failover_provisioning` lease is held and no environment deletion is in progress. If the surge pod cannot start, the old pod keeps serving: revert the digest commit and sync again.
 
 The Azure platform ConfigMap in this overlay is generated from `cnp/azure`'s non-secret `terraform output -json portal_environment`; the Azure identity ConfigMap holds `terraform output -raw openbao_portal_client_id`. Re-export and review both values after an Azure infrastructure replacement before syncing the portal. The portal's projected Kubernetes token successfully exchanged for an Entra token on 20 November 2026. This proves portal federation, but each Azure application still needs its own runtime identity and Key Vault before deployment with variables.
 
@@ -308,7 +308,7 @@ blocked: do not claim the services or credentials can be recreated.
    encrypted secret store with the scripts above; restore external credentials
    from their source owners. Compare key names. Do not print or commit values.
 5. Pin reviewed immutable portal and provisioner digests. Keep one portal
-   replica, `Recreate`, PVC retention `Delete=false`, projected tokens and the
+   replica, `RollingUpdate` with same-node affinity, PVC retention `Delete=false`, projected tokens and the
    provisioner read-only filesystem. Render Kustomize and server-dry-run before
    manual Argo sync.
 6. Before restoring public traffic, verify both deployments, PVC `Bound`, TLS,

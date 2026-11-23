@@ -76,7 +76,7 @@ function kubectl(args, input) {
           && authorization.searchParams.get('client_id') === clientId
           && authorization.searchParams.get('redirect_uri') === callback;
       }
-    } catch (_) { /* ingress can briefly return an error during Recreate */ }
+    } catch (_) { /* ingress can briefly return an error while the pod is replaced */ }
     if (!verified) await new Promise(resolve => setTimeout(resolve, 2000));
   }
   if (!verified) throw new Error('Live portal OAuth redirect does not match the verified app.');
