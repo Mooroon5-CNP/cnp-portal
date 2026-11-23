@@ -40,6 +40,10 @@ function findPending() {
   return db.prepare('SELECT * FROM users WHERE approved = 0 ORDER BY created_at ASC').all().map(rowToUser);
 }
 
+function countPending() {
+  return db.prepare('SELECT COUNT(*) AS c FROM users WHERE approved = 0').get().c;
+}
+
 function create({ githubId = null, username, email = null, avatarUrl = null, passwordHash = null, role = 'dev', active = 1, approved = 0 }) {
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -82,4 +86,4 @@ function remove(id) {
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
 }
 
-module.exports = { findById, findByGithubId, findByUsername, findAll, findPending, create, update, remove, upsertFromGithub };
+module.exports = { findById, findByGithubId, findByUsername, findAll, findPending, countPending, create, update, remove, upsertFromGithub };

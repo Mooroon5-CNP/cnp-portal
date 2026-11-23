@@ -52,6 +52,7 @@ app.use(requestMiddleware(logger));
 app.use(populateUser);
 
 const manifestMrModel = require('./models/manifest_mr');
+const { managerRequestCounts } = require('./services/request-badges');
 
 app.use((req, res, next) => {
   res.locals.user = req.user || null;
@@ -59,6 +60,7 @@ app.use((req, res, next) => {
   res.locals.can = req.user ? (p) => can(req.user, p) : () => false;
   res.locals.pendingMrCount   = 0;
   res.locals.rejectedMrCount  = 0;
+  res.locals.requestCounts    = managerRequestCounts(req.user);
   if (req.user) {
     try {
       if (req.user.role === 'manager') {
