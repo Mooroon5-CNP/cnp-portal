@@ -58,13 +58,24 @@ const gcaMessages = {
 };
 const gcaFailure = (result) => result.errorCode || (result.errors && result.errors[0] && result.errors[0].code) || 'GCA_UNAVAILABLE';
 
+const GCA_CONSOLE_URL = 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-512313';
+
 /** Gemini Cloud Assist turn: read-only, structured, never rewritten by the generative model. */
 async function* runGcaTurn(request, dependencies, { correlationId, conversationId, intent }) {
   const { actor } = dependencies;
-  const roles = dependencies.gcaRoles || ['manager', 'devops'];
+  // Managers only: GCA analyses the whole Google Cloud project with a shared service identity.
+  const roles = dependencies.gcaRoles || ['manager'];
   if (!actor || !actor.roles.some((role) => roles.includes(role))) {
     yield event({ type: 'error', correlationId, code: 'FORBIDDEN', retryable: false,
-      message: 'Gemini Cloud Assist est réservé aux rôles manager et devops : il analyse le projet Google Cloud avec une identité de service partagée.' });
+      message: 'Gemini Cloud Assist est indisponible pour votre rôle. Pour diagnostiquer une application, utilisez /deploiement et /logs.' });
+    return;
+  }
+  // Until Google opens the Cloud Assist MCP Private Preview to the project, managers use it in the console.
+  if (!dependencies.gcaChatEnabled) {
+    yield event({ type: 'error', correlationId, code: 'GCA_NOT_ENABLED', retryable: false,
+      message: 'Gemini Cloud Assist n’est pas encore disponible dans le chat : Google n’a pas encore ouvert l’accès (Private Preview). '
+        + 'Utilisez-le dans la console Google Cloud, avec l’icône Gemini Cloud Assist en haut de la page.',
+      link: { href: dependencies.gcaConsoleUrl || GCA_CONSOLE_URL, label: 'Ouvrir Gemini Cloud Assist dans la console Google Cloud' } });
     return;
   }
   if (dependencies.clearClarification) await dependencies.clearClarification({ conversationId });

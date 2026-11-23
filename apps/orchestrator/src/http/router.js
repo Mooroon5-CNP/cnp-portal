@@ -100,6 +100,8 @@ function createRouter({ requireAuth, chatService, catalog, runtimeForUser, dataM
       for await (const event of chatService.run(req.body, {
         ...(runtimeForUser ? runtimeForUser(req.user) : {}),
         actor: { userId: String(req.user.id), roles: [req.user.role], authenticated: true },
+        gcaChatEnabled: process.env.GCA_CHAT_ENABLED === 'true',
+        ...(process.env.GCA_CONSOLE_URL ? { gcaConsoleUrl: process.env.GCA_CONSOLE_URL } : {}),
         allowedTools: ['list_applications', 'get_deployment_status', 'get_application_logs', 'get_finops_recommendation'],
         pageContext: req.session.mcpPageContext,
         confirmedConversationContext,
