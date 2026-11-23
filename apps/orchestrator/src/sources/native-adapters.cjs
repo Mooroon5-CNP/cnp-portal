@@ -48,6 +48,14 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
     if (claim) return { platform: 'cloud_run', manifest: claim,
       legacy: !selected, runtimeName: claim.metadata?.name || (selected ? `${id}-${env}` : id),
       image: claim.spec?.forProvider?.template?.containers?.[0]?.image || null };
+    // Azure Container Apps (portal Azure path): one ContainerApp claim per environment.
+    const azureApp = await document(`apps/${id}/crossplane/${env}/containerapp-claim.yaml`);
+    if (azureApp?.kind === 'ContainerApp') {
+      const template = azureApp.spec?.forProvider?.template;
+      const container = Array.isArray(template?.container) ? template.container[0] : template?.containers?.[0];
+      return { platform: 'azure_container_apps', manifest: azureApp, runtimeName: azureApp.metadata?.name || `${id}-${env}`,
+        image: container?.image || null };
+    }
     const overlay = await document(`apps/${id}/overlays/${env}/kustomization.yaml`);
     if (!overlay) return fail('ENVIRONMENT_NOT_FOUND', 'git');
     const deployment = await document(`apps/${id}/overlays/${env}/deployment.yaml`)
@@ -75,8 +83,10 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       // Argo's summary is desired managed-resource state, not Cloud Run's serving revision.
       // Use the observed runtime and withhold its version until it is actually ready.
       const cloud = deployment.platform === 'cloud_run'
-        ? await runtimeClient.getV2ServiceStatus(deployment.runtimeName) : null;
-      const observedImage = deployment.platform === 'cloud_run' ? (cloud?.ready ? cloud.image : null) : images[0];
+        ? await runtimeClient.getV2ServiceStatus(deployment.runtimeName)
+        : deployment.platform === 'azure_container_apps'
+          ? await runtimeClient.getAzureContainerAppStatus(deployment.runtimeName) : null;
+      const observedImage = cloud ? (cloud.ready ? cloud.image : null) : images[0];
       const runtimeHealth = cloud?.failure ? 'Degraded' : cloud && !cloud.ready ? 'Progressing' : healthStatus;
       return { version: versionOf(observedImage), imageDigest: digestOf(observedImage), syncStatus, healthStatus: runtimeHealth,
         lastDeploymentAt: raw.status?.operationState?.finishedAt || null };
@@ -84,7 +94,7 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
   }
   async function imageDigest(id, env) {
     const deployment = await resolveDeployment(id, env);
-    if (deployment.platform === 'cloud_run') return fail('SOURCE_NOT_CONFIGURED', 'kubernetes');
+    if (deployment.platform !== 'gke') return fail('SOURCE_NOT_CONFIGURED', 'kubernetes');
     if (!settings.kubernetes.apiUrl || !settings.kubernetes.token || !settings.kubernetes.caCert) return fail('SOURCE_NOT_CONFIGURED', 'kubernetes');
     const kc = new k8s.KubeConfig();
     kc.loadFromOptions({ clusters: [{ name: 'cnp', server: settings.kubernetes.apiUrl, caData: settings.kubernetes.caCert }],
@@ -112,6 +122,8 @@ function createNativeAdapters({ SourceError, githubClient = github, argoClient =
       },
       workload: async (id, env) => {
         const deployment = await resolveDeployment(id, env);
+        // The MCP contract only knows gke and cloud_run: an Azure workload is reported as unknown, never mislabelled.
+        if (deployment.platform === 'azure_container_apps') return null;
         if (deployment.platform === 'cloud_run') {
           const volumes = deployment.manifest.spec?.forProvider?.template?.volumes || [];
           return { platform: 'cloud_run', stateless: volumes.length === 0, http: true, requiresKubernetes: false };

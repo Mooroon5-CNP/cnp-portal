@@ -549,6 +549,24 @@ function azureAppStatusFrom({ server, database, containerApp }) {
   return { phase: 'containerapp', failure: null };
 }
 
+/**
+ * Azure Container App of one environment, read from its Crossplane object: the image is the OBSERVED one
+ * (status.atProvider), only meaningful once the Container App is ready. Used by the MCP deployment status.
+ */
+async function getAzureContainerAppStatus(name) {
+  const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  try {
+    const app = await getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', name);
+    if (!app) return { exists: false, ready: false, image: null, failure: null };
+    const op = conditionOf(app, 'LastAsyncOperation');
+    const failure = op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)
+      ? String(op.message || op.reason).replace(/\s+/g, ' ').trim().slice(0, 300) : null;
+    return { exists: true, ready: conditionOf(app, 'Ready')?.status === 'True', image: azureObservedImage(app), failure };
+  } catch (err) {
+    handleError(err, `getAzureContainerAppStatus(${name})`);
+  }
+}
+
 async function getAzureObject(api, group, version, plural, name) {
   try { return (await api.getClusterCustomObject(group, version, plural, name)).body; }
   catch (err) {
@@ -720,6 +738,7 @@ module.exports = {
   getCompositeResources, checkConnectivity,
   applyApplicationSet, deleteApplicationSet, removeApplicationSetPath,
   applyArgocdApplication, deleteArgocdApplication, cascadeDeleteArgocdApplication, getArgocdApplicationIfExists,
+  getAzureContainerAppStatus,
   deleteNamespace,
   getCleanupResource, CLEANUP_KINDS,
   getPrivateAppStatus,
