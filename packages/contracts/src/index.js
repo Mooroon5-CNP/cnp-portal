@@ -213,7 +213,9 @@ const chatEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...eventBase, type: z.literal('warning'), code: z.string(), message: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('answer_delta'), text: z.string() }),
   z.strictObject({ ...eventBase, type: z.literal('turn_completed'), sources: z.array(sourceSummarySchema) }),
-  z.strictObject({ ...eventBase, type: z.literal('error'), code: z.string(), message: z.string(), retryable: z.boolean() }),
+  z.strictObject({ ...eventBase, type: z.literal('error'), code: z.string(), message: z.string(), retryable: z.boolean(),
+    // Optional external link shown with the error; only the Google Cloud console is allowed.
+    link: z.strictObject({ href: z.string().url().startsWith('https://console.cloud.google.com/'), label: z.string().min(1).max(120) }).optional() }),
 ]);
 
 function getInputJsonSchema(tool) {
