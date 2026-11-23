@@ -20,7 +20,7 @@ npm ci
 
 Create `.env` from [.env.example](.env.example) if it does not exist, then configure
 GitHub, Argo CD, Kubernetes and Datadog as needed. Keep existing `.env` and
-`.env.cloud` files. See the [MCP guide](documentation/MCP_INTEGRATION.md) for details.
+`.env.cloud` files. See the [MCP guide](documentation/Platform/MCP.md) for details.
 
 Start both services from `cnp-portal`:
 
@@ -80,9 +80,9 @@ GCP public names default to `<app>.dev.apps.mooroon5.fr` and
 `<app>.apps.mooroon5.fr`, configurable with `APPLICATIONS_BASE_DOMAIN`.
 DNS, certificates and cloud permissions must be ready.
 
-See [deployment details](documentation/Cloud/DEPLOYMENT_ENVIRONMENTS.md),
-[cloud setup](documentation/Cloud/README.md) and
-[failover configuration](documentation/Cloud/FAILOVER-CONFIGURATION.md).
+See the [production runbook](documentation/Platform/DEPLOYMENT.md) for
+deployment and operations, and [architecture and services](documentation/Platform/ARCHITECTURE_DIAGRAMS.md)
+for the cloud diagrams and service catalogue.
 
 ## MCP assistant
 
@@ -95,7 +95,7 @@ Logs need Datadog credentials; FinOps recommendations need metrics. Optional
 `GENAI_*` settings enable generated summaries and application-name resolution.
 `TYPESAFE_*` settings enable Jev routing for ambiguous requests.
 
-See the [MCP integration guide](documentation/MCP_INTEGRATION.md) for configuration,
+See the [MCP integration guide](documentation/Platform/MCP.md) for configuration,
 source requirements and troubleshooting.
 
 ## Configuration and persistence
@@ -114,7 +114,7 @@ source requirements and troubleshooting.
 
 Keep SQLite persistent for deployment and release recovery. Restarting with a
 generated session secret invalidates existing sessions. Cloud and IAM setup is
-described in the [cloud README](documentation/Cloud/README.md).
+described in the [production runbook](documentation/Platform/DEPLOYMENT.md).
 
 ## Checks
 

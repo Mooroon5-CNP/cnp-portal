@@ -160,5 +160,5 @@ manipulations directes de l’infrastructure. Pour livrer en production, suivez 
 processus de votre équipe et les validations affichées par le portail.
 
 Pour les responsabilités générales et l’infrastructure, consultez aussi le
-[contrat de plateforme](/docs/PLATFORM_CONTRACT.md). En cas de doute sur un fichier
+[contrat de plateforme](PLATFORM_CONTRACT.md). En cas de doute sur un fichier
 géré par CNP, demandez à l’équipe plateforme avant de le modifier.

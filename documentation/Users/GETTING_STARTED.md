@@ -30,7 +30,7 @@ Votre rôle initial est `dev`. Un `manager` peut le modifier depuis l'interface 
 3. Choisissez l'équipe propriétaire et le cloud cible
 4. Validez : le portail ajoute le workflow GitHub Actions dans votre dépôt et crée les manifests dans `config-repo`
 
-À chaque push sur `main`, le pipeline GitHub Actions construit l'image, la pousse dans Artifact Registry et met à jour `config-repo` ; ArgoCD synchronise ensuite le déploiement. Voir [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) pour le détail.
+À chaque push sur `main`, le pipeline GitHub Actions construit l'image, la pousse dans Artifact Registry et met à jour `config-repo` ; ArgoCD synchronise ensuite le déploiement. Voir [guide développeur](DEVELOPER_GUIDE.md) pour le détail.
 
 ## Accès Datadog / ArgoCD
 
