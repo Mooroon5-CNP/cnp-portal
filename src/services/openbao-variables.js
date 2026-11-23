@@ -5,7 +5,7 @@ const { domainsForDeployment } = require('./openbao-routing');
 const { OpenBaoClient } = require('./openbao-client');
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED = /^(?:PORT|APP_PORT|DB_|DD_|CNP_)/i;
+const RESERVED = /^(?:PORT$|APP_PORT$|DB_|DD_|CNP_)/i;
 const GENERATION_KEY = 'CNP_VARIABLES_GENERATION';
 
 function validate(values) {

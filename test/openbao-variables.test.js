@@ -141,3 +141,9 @@ test('rejects reserved, malformed and non-string variables before OpenBao', () =
   for (const values of [{ DB_PASSWORD: 'x' }, { PORT: '8080' }, { CNP_TOKEN: 'x' }, { 'BAD-NAME': 'x' },
     { FEATURE: 1 }]) expect(() => validate(values)).toThrow();
 });
+
+test('accepts names that only start like reserved exact names', () => {
+  expect(validate({ PORTAL_URL: 'https://example.test', APP_PORTAL: 'enabled' })).toEqual([
+    ['PORTAL_URL', 'https://example.test'], ['APP_PORTAL', 'enabled'],
+  ]);
+});

@@ -8,8 +8,11 @@ test('imports .env names and values without executing substitutions', () => {
     .toEqual([{ name: 'API_KEY', value: 'value with spaces' }, { name: 'EMPTY', value: '' },
       { name: 'URL', value: 'https://example.test' }]);
   expect(() => parseDotEnv('KEY=$(cat /tmp/secret)')).toThrow('Substitution');
-  expect(() => parseDotEnv('API_KEY=one\nAPI_KEY=two')).toThrow('doublon');
-  expect(() => parseDotEnv('DB_PASSWORD=forbidden')).toThrow('réservée');
+  expect(() => parseDotEnv('API_KEY=one\nAPI_KEY=two')).toThrow('API_KEY en doublon (ligne 2)');
+  expect(() => parseDotEnv('DB_HOST=forbidden')).toThrow('DB_HOST réservée par la plateforme');
+  expect(parseDotEnv('PORTAL_URL=https://example.test\nAPP_PORTAL=enabled')).toEqual([
+    { name: 'PORTAL_URL', value: 'https://example.test' }, { name: 'APP_PORTAL', value: 'enabled' },
+  ]);
 });
 
 test('server accepts manual rows and rejects duplicate or forged reserved names', () => {
