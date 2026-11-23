@@ -37,6 +37,26 @@ function validateAzureAppName(appName) {
 }
 
 const ENVIRONMENTS = ['dev', 'prod'];
+
+/**
+ * Emplacement du serveur PostgreSQL PRINCIPAL. Il peut différer de celui de la Container App (AZURE_DB_LOCATION,
+ * AZURE_DB_RESOURCE_GROUP, AZURE_DB_REGION_KEY) ; chaque valeur absente reprend celle de la Container App, si bien que
+ * sans ces variables rien ne change. Tout ce qui désigne le serveur principal (gabarits, état, suppression) passe par ici.
+ */
+function azureDb(azure) {
+    return {
+        location: azure.dbLocation || azure.location,
+        resourceGroup: azure.dbResourceGroup || azure.resourceGroup,
+        regionKey: azure.dbRegionKey || azure.regionKey,
+        subnetId: azure.dbSubnetId,
+    };
+}
+
+/** Serveur de copie de prod utile ? Non quand le serveur principal est déjà dans la région de copie : une copie au même endroit ne protège de rien. */
+function azureHasCopy(azure) {
+    return azure.copyLocation ? azureDb(azure).location !== azure.copyLocation : true;
+}
+
 // « <app>-<env> » doit tenir dans les 32 caractères d'un nom de Container App : 27 pour « -prod ».
 const MAX_APP_NAME_WITH_ENV = 27;
 
@@ -50,7 +70,7 @@ const MAX_APP_NAME_WITH_ENV = 27;
 function azureNames(appName, azure, env) {
     validateAzureAppName(appName);
     if (env === undefined || env === 'legacy') {
-        const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-dev-${azure.nameSuffix}`;
+        const server = `${azure.namePrefix}-${azureDb(azure).regionKey}-${appName}-dev-${azure.nameSuffix}`;
         if (server.length > 63) {
             throw new Error(`Nom de serveur PostgreSQL trop long (${server.length} > 63) : ${server}`);
         }
@@ -67,12 +87,17 @@ function azureNames(appName, azure, env) {
     if (appName.length > MAX_APP_NAME_WITH_ENV) {
         throw new Error(`Nom d'application trop long pour Azure avec un environnement (${appName.length} > ${MAX_APP_NAME_WITH_ENV}) : ${appName}`);
     }
-    const server = `${azure.namePrefix}-${azure.regionKey}-${appName}-${env}-${azure.nameSuffix}`;
+    const server = `${azure.namePrefix}-${azureDb(azure).regionKey}-${appName}-${env}-${azure.nameSuffix}`;
     // Serveur de copie (prod seulement) : même nom, clé de la région de copie à la place de celle du calcul.
     const copyServer = `${azure.namePrefix}-${azure.copyRegionKey || 'it'}-${appName}-${env}-${azure.nameSuffix}`;
     for (const name of [server, copyServer]) {
         if (name.length > 63) throw new Error(`Nom de serveur PostgreSQL trop long (${name.length} > 63) : ${name}`);
     }
+    // Clés de région identiques : le serveur principal et sa copie auraient le même nom (AZURE_DB_REGION_KEY = AZURE_COPY_REGION_KEY).
+    if (server === copyServer) {
+        throw new Error(`Le serveur principal et le serveur de copie auraient le même nom (${server}) : clés de région à distinguer.`);
+    }
+    const hasCopy = env === 'prod' && azureHasCopy(azure);
     const serverHost = `${server}.postgres.database.azure.com`;
     // Prod : l'app passe par un ALIAS DNS par app (CNAME <app>-prod-db dans la zone privée PostgreSQL), tenu par le moteur
     // de réplication (cnp-portal/scripts/failover/engine/azure_replication.py) : il désigne le serveur actif, France ou
@@ -82,6 +107,7 @@ function azureNames(appName, azure, env) {
     return {
         server,
         copyServer,
+        hasCopy,
         database: `${appName}-${env}-appdb`,
         passwordSecret: `${appName}-${env}-pg-password`,
         // Rôle applicatif cnp_runtime (comme sur GCP) : Secret Kubernetes créé par le portail (platform_secrets.py), recopié
@@ -92,7 +118,8 @@ function azureNames(appName, azure, env) {
         containerApp: `${appName}-${env}`,
         serverHost,
         alias,
-        host: env === 'prod' ? alias : serverHost,
+        // Sans serveur de copie, aucun alias n'est tenu par le moteur (il ne traite que les paires) : le serveur directement.
+        host: hasCopy ? alias : serverHost,
     };
 }
 
@@ -103,19 +130,20 @@ function header(text) {
 function tplAzureFlexibleServer(appName, azure, env) {
     const n = azureNames(appName, azure, env);
     const tagEnv = env === 'prod' ? 'prod' : 'dev';
+    const db = azureDb(azure);
     const doc = {
         apiVersion: 'dbforpostgresql.azure.upbound.io/v1beta1',
         kind: 'FlexibleServer',
         metadata: { name: n.server, annotations: { 'argocd.argoproj.io/sync-wave': '0' } },
         spec: {
             forProvider: {
-                location: azure.location,
-                resourceGroupName: azure.resourceGroup,
+                location: db.location,
+                resourceGroupName: db.resourceGroup,
                 version: '16',
                 skuName: 'B_Standard_B1ms',
                 storageMb: 32768,
                 autoGrowEnabled: false,
-                delegatedSubnetId: azure.dbSubnetId,
+                delegatedSubnetId: db.subnetId,
                 privateDnsZoneId: azure.dbDnsZoneId,
                 publicNetworkAccessEnabled: false,
                 administratorLogin: DB_ADMIN,
@@ -134,7 +162,7 @@ function tplAzureFlexibleServer(appName, azure, env) {
     return header(
         `Serveur PostgreSQL de l'app ${appName} (tier souveraineté, Azure), créé par Crossplane via le portail.\n` +
         `Un serveur par app et par environnement : son administrateur ne voit que les bases de cette app. Tag cnp-env=${tagEnv}` +
-        `${tagEnv === 'dev' ? ' : non copié' : ' : répliqué vers son serveur de copie (flexibleserver-copy.yaml) ; l\'app y accède par l\'alias ${n.alias}'}.\n` +
+        `${n.hasCopy ? ` : répliqué vers son serveur de copie (flexibleserver-copy.yaml) ; l'app y accède par l'alias ${n.alias}` : ' : non copié'}.\n` +
         `Le mot de passe est généré dans le Secret ${n.passwordSecret} (${CROSSPLANE_NAMESPACE}).`
     ) + yaml.dump(doc, DUMP);
 }
@@ -322,7 +350,7 @@ function tplAzureKeyVaultSecrets(appName, azure, env) {
 // Fichiers propres à la prod : copie de la base dans la région de copie.
 const PROD_COPY_FILES = ['flexibleserver-copy.yaml'];
 
-function tplAzureKustomization(env) {
+function tplAzureKustomization(env, azure = {}) {
     return yaml.dump({
         apiVersion: 'kustomize.config.k8s.io/v1beta1',
         kind: 'Kustomization',
@@ -332,7 +360,7 @@ function tplAzureKustomization(env) {
             'flexibleserver-database.yaml',
             'containerapp-claim.yaml',
             ...(ENVIRONMENTS.includes(env) ? ['keyvault-secrets.yaml'] : []),
-            ...(env === 'prod' ? PROD_COPY_FILES : []),
+            ...(env === 'prod' && azureHasCopy(azure) ? PROD_COPY_FILES : []),
         ],
     }, DUMP);
 }
@@ -346,8 +374,8 @@ function azureCrossplaneFiles(appName, appPort, azure, env, revision) {
         'containerapp-claim.yaml': tplAzureContainerApp(appName, appPort, azure, env, revision),
     };
     if (ENVIRONMENTS.includes(env)) files['keyvault-secrets.yaml'] = tplAzureKeyVaultSecrets(appName, azure, env);
-    if (env === 'prod') files['flexibleserver-copy.yaml'] = tplAzureCopyServer(appName, azure, env);
-    files['kustomization.yaml'] = tplAzureKustomization(env);
+    if (env === 'prod' && azureHasCopy(azure)) files['flexibleserver-copy.yaml'] = tplAzureCopyServer(appName, azure, env);
+    files['kustomization.yaml'] = tplAzureKustomization(env, azure);
     return files;
 }
 
@@ -418,5 +446,5 @@ module.exports = {
     ENVIRONMENTS, MAX_APP_NAME_WITH_ENV, validateAzureAppName, azureNames, azureCrossplaneFiles, azureConfigRepoPaths,
     tplAzureCiWorkflow, azureRepoVariables, azureAppUrl,
     tplAzureFlexibleServer, tplAzureDatabase, tplAzureSecretName, tplAzureContainerApp, tplAzureKustomization,
-    tplAzureCopyServer, tplAzureKeyVaultSecrets, PROD_COPY_FILES,
+    tplAzureCopyServer, tplAzureKeyVaultSecrets, PROD_COPY_FILES, azureDb, azureHasCopy,
 };

@@ -88,6 +88,17 @@ class AzurePlatformTest(unittest.TestCase):
                          [('todo', 'prod', 'fr.example', 'it.example', 'fr', 'it')])
         self.assertEqual(pairs[0].alias, 'todo-prod-db')
 
+    def test_primary_servers_in_their_own_resource_group_when_configured(self):
+        # Base principale en Italie (PRIMARY_DB_RESOURCE_GROUP), Container Apps en France : les serveurs app-db sont lus là.
+        self.arm.servers['rg-it'].append(server('cnp-sov-itdb-solo-dev', 'itdb.example', 'app-db', app='solo', env='dev'))
+        platform = ar.AzurePlatform({**ENV, 'PRIMARY_DB_RESOURCE_GROUP': 'rg-it', 'PRIMARY_KEY': 'itdb'}, opener=self.arm)
+        found = platform.app_servers()
+        self.assertIn(('solo', 'dev', 'cnp-sov-itdb-solo-dev'), [(a, e, s.name) for a, e, s in found])
+        self.assertNotIn('cnp-sov-fr-todo-prod', [s.name for _, _, s in found])
+        self.assertEqual(platform.server_state(next(s for _, _, s in found if s.name == 'cnp-sov-itdb-solo-dev')), 'Ready')
+        self.assertTrue(any('/resourceGroups/rg-it/providers/Microsoft.DBforPostgreSQL/flexibleServers/cnp-sov-itdb-solo-dev' in c[1]
+                            for c in self.arm.calls))
+
     def test_servers_being_deleted_are_left_out_but_stopped_ones_stay(self):
         dropping = server('cnp-sov-it-todo-prod', 'it.example', 'copy-db')
         dropping['properties'] = {'state': 'Dropping'}

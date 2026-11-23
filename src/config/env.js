@@ -131,6 +131,11 @@ const config = {
     pullIdentityId:    process.env.AZURE_ACRPULL_IDENTITY_ID,
     dbSubnetId:        process.env.AZURE_DB_SUBNET_ID,
     dbDnsZoneId:       process.env.AZURE_DB_DNS_ZONE_ID,
+    // Serveur PostgreSQL principal hors de la région de calcul (23/11/2026 : SkuNotAvailable en francecentral sur l'abonnement
+    // Free Trial, la base passe en Italie, la Container App reste en France). Vides : mêmes valeurs que la Container App.
+    dbLocation:        process.env.AZURE_DB_LOCATION || process.env.AZURE_LOCATION || 'francecentral',
+    dbResourceGroup:   process.env.AZURE_DB_RESOURCE_GROUP || process.env.AZURE_RESOURCE_GROUP,
+    dbRegionKey:       process.env.AZURE_DB_REGION_KEY || process.env.AZURE_REGION_KEY || 'fr',
     // Copie de la base de PROD : un serveur de copie par app, dans la région de copie (Italie depuis le 15/11/2026),
     // et les mots de passe recopiés dans le Key Vault pour le job de copie (azure/10-db-copy-job-v2.tf).
     copyRegionKey:     process.env.AZURE_COPY_REGION_KEY || 'it',
