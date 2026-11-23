@@ -41,6 +41,7 @@ function toObj(row) {
 }
 
 module.exports = {
+    countPending: () => db.prepare("SELECT COUNT(*) AS c FROM deletion_requests WHERE status = 'pending'").get().c,
     create: ({ deploymentId, requestedBy, reason }) => {
         const id = uuidv4();
         const now = new Date().toISOString();
