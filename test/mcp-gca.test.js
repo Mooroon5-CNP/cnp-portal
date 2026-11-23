@@ -46,11 +46,12 @@ function stubClient(overrides = {}) {
     return handler(args, metadata.correlationId);
   }) };
 }
-async function turn(message, { roles = ['manager'], context, mcpClient = stubClient(), generateAnswer } = {}) {
+async function turn(message, { roles = ['manager'], context, mcpClient = stubClient(), generateAnswer, gcaChatEnabled = true, gcaRoles } = {}) {
   const events = [];
   for await (const item of runChatTurn({ message, ...(context ? { context } : {}) }, {
     mcpClient, classify: classifyWithFallback, buildKnownContext: createKnownContextBuilder(new FixtureCatalog()),
-    actor: { userId: 'user-1', roles, authenticated: true }, now: () => new Date(NOW), generateAnswer,
+    actor: { userId: 'user-1', roles, authenticated: true }, now: () => new Date(NOW), generateAnswer, gcaChatEnabled,
+    ...(gcaRoles ? { gcaRoles } : {}),
   })) events.push(chatEventSchema.parse(item));
   return { events, mcpClient, types: events.map((item) => item.type) };
 }
@@ -134,6 +135,28 @@ describe('Gemini Cloud Assist in the portal chat (MOCKED)', () => {
     const executed = { ...gcaAnswer, recommendations: [{ priority: 1, action: 'restart', executed: true }] };
     expect(() => gcpCloudAssistResponseSchema.parse({ status: 'success', warnings: [], errors: [], meta: meta('gcp_cloud_assist', 'c', [{ source: 'gemini_cloud_assist', status: 'available' }]),
       data: { capability: 'ask_cloud_assist', conversationId: 'c', sessionContinued: false, structured: true, actionProposed: false, answer: executed } })).toThrow();
+  });
+  test('GCA is reserved to managers: dev and devops get an unavailable message and never reach the MCP', async () => {
+    for (const role of ['dev', 'devops']) {
+      const result = await turn('/gcp quels services Cloud Run sont en erreur ?', { roles: [role] });
+      expect(result.events.at(-1)).toMatchObject({ type: 'error', code: 'FORBIDDEN', retryable: false });
+      expect(result.events.at(-1).message).toMatch(/indisponible pour votre rôle/);
+      expect(result.events.at(-1).link).toBeUndefined();
+      expect(result.mcpClient.callTool).not.toHaveBeenCalled();
+    }
+  });
+  test('while the Google preview is closed, managers get a console link instead of a failing call', async () => {
+    for (const message of ['/gcp quels services Cloud Run sont en erreur ?', '/diagnostic']) {
+      const result = await turn(message, { gcaChatEnabled: false, context: { applicationId: 'majoutes-api', environment: 'dev' } });
+      expect(result.events.at(-1)).toMatchObject({ type: 'error', code: 'GCA_NOT_ENABLED', retryable: false,
+        link: { href: 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-512313' } });
+      expect(result.mcpClient.callTool).not.toHaveBeenCalled();
+    }
+  });
+  test('an error link outside the Google Cloud console is rejected by the event contract', () => {
+    const base = { type: 'error', correlationId: '00000000-0000-4000-8000-000000000000', code: 'X', message: 'm', retryable: false };
+    expect(() => chatEventSchema.parse({ ...base, link: { href: 'https://evil.example/', label: 'x' } })).toThrow();
+    expect(chatEventSchema.parse({ ...base, link: { href: 'https://console.cloud.google.com/home', label: 'x' } }).link.href).toMatch(/^https:/);
   });
   test('a bare /gcp asks for the question instead of calling GCA', async () => {
     const { events, mcpClient } = await turn('/gcp');

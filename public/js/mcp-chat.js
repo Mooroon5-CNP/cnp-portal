@@ -164,6 +164,12 @@
     if (event.type === 'warning') addMessage('notice', event.message, 'mcp-message-warning');
     if (event.type === 'error') {
       assistant.textContent = event.message;
+      if (event.link && /^https:\/\/console\.cloud\.google\.com\//.test(event.link.href)) {
+        const link = document.createElement('a');
+        link.href = event.link.href; link.textContent = event.link.label;
+        link.target = '_blank'; link.rel = 'noopener noreferrer'; link.className = 'mcp-external-link';
+        assistant.appendChild(document.createElement('br')); assistant.appendChild(link);
+      }
       const reference = document.createElement('small');
       reference.textContent = `Référence : ${event.correlationId}`;
       assistant.appendChild(reference);
