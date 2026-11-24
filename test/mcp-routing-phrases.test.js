@@ -46,3 +46,20 @@ test('a Mistral refusal of a change is still a refusal, and a change never reach
   expect(await classify({ userRequest: 'supprime testapp09', knownContext: context })).toMatchObject({ kind: 'mutation' });
   expect(decide).not.toHaveBeenCalled();
 });
+
+test('an application name containing "gcp" is not a Gemini Cloud Assist question', async () => {
+  const { runChatTurn } = require('../apps/orchestrator/src/chat/service');
+  const events = [];
+  const mcpClient = { callTool: jest.fn(async () => { throw new Error('stop after routing'); }) };
+  const buildKnownContext = async () => ({ target: { applicationId: 'cnp-demo-gcp-gab', environment: 'production' }, permissions: { allowedTools: tools } });
+  try {
+    for await (const e of runChatTurn({ message: 'Le deploy de cnp-demo-gcp-gab est ok en prod ?' },
+      { mcpClient, buildKnownContext, classify: classifyWithFallback, actor: { userId: 'u', roles: ['manager'], authenticated: true }, now: () => new Date() })) events.push(e);
+  } catch { /* the stub MCP stops the turn once the tool is chosen */ }
+  expect(events.some(e => e.type === 'error' && e.code === 'GCA_NOT_ENABLED')).toBe(false);
+  expect(mcpClient.callTool.mock.calls[0][0]).toBe('get_deployment_status');
+  const gca = [];
+  for await (const e of runChatTurn({ message: 'que dit gcp sur mes services ?' },
+    { mcpClient, buildKnownContext, classify: classifyWithFallback, actor: { userId: 'u', roles: ['manager'], authenticated: true }, now: () => new Date() })) gca.push(e);
+  expect(gca.at(-1)).toMatchObject({ code: 'GCA_NOT_ENABLED' });
+});

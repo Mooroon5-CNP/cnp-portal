@@ -43,7 +43,8 @@ function answerFor(tool, result) {
   return `Recommandation : ${result.data.recommendation}. Les montants financiers restent indisponibles.`;
 }
 
-const GCP_PATTERN = /\b(gcp|google cloud|gemini cloud assist|cloud assist)\b/i;
+// "gcp" only as a word of its own: an application name such as cnp-demo-gcp-gab is not a Google Cloud question.
+const GCP_PATTERN = /(?<![\w-])(gcp|google cloud|gemini cloud assist|cloud assist)(?![\w-])/i;
 /** Explicit command, or explicit Google Cloud vocabulary; generic words keep their existing CNP routing. */
 function gcaIntent(message, command) {
   if (command && command.capability) return { capability: command.capability, transverse: command.transverse };
