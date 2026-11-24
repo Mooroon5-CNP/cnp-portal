@@ -22,11 +22,15 @@ test('writes a new version to Key Vault and returns a pinned reference without t
   expect(JSON.stringify(refs)).not.toContain('private-value');
 });
 
-test('recovers its own soft-deleted secret (re-created app) and then writes the new version', async () => {
+test.each([
+  ['documented shape', { code: 'ObjectIsDeletedButRecoverable' }],
+  // Shape actually returned by Azure on 24/11/2026 (testapp09 dev stuck on HTTP 409):
+  ['real Azure shape', { code: 'Conflict', message: 'Secret is currently in a deleted but recoverable state', innererror: { code: 'ObjectIsDeletedButRecoverable' } }],
+])('recovers its own soft-deleted secret (re-created app) and then writes the new version (%s)', async (_label, conflict) => {
   const id = secretName(dep, 'API_KEY');
   const version = 'b'.repeat(32);
   const missing = Object.assign(new Error('missing'), { response: { status: 404 } });
-  const deleted = Object.assign(new Error('conflict'), { response: { status: 409, data: { error: { code: 'ObjectIsDeletedButRecoverable' } } } });
+  const deleted = Object.assign(new Error('conflict'), { response: { status: 409, data: { error: conflict } } });
   const ownTags = { cnp_app: dep.appName, cnp_env: dep.environment, cnp_owner: 'portal_variables' };
   let recovered = false;
   const transport = {
