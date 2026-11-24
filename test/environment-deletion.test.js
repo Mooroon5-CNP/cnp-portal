@@ -8,6 +8,7 @@ jest.mock('../src/clients/kubernetes', () => ({
 }));
 jest.mock('../src/services/environment-deployment', () => ({ remove: jest.fn(), commitFiles: jest.fn(),
   identity: dep => ({ name: `${dep.appName}-${dep.environment}` }), workflowName: app => `cnp-${app}.yml` }));
+jest.mock('../src/services/openbao-runtime-provisioner-client', () => ({ releaseDomain: jest.fn(), remove: jest.fn() }));
 const yaml = require('js-yaml');
 const db = require('../src/models/db');
 const deployments = require('../src/models/deployment');
@@ -192,4 +193,20 @@ test('last-environment cleanup deletes only unchanged CNP variables and keeps a 
   const deleted = api.request.mock.calls.filter(([route]) => route.startsWith('DELETE ')).map(([, args]) => args.name);
   expect(deleted).toEqual(['WIF_PROVIDER']);
   expect(cleanup.get(dep.id).state).toBe('completed');
+});
+
+test('Azure: the public name is released before the Container App is withdrawn; pending release waits', async () => {
+  const provisioner = require('../src/services/openbao-runtime-provisioner-client');
+  db.prepare("UPDATE deployments SET target_cluster='azure' WHERE id=?").run(dep.id);
+  dep = deployments.get(dep.id);
+  start(); await step(); await step(); // inventory (none for Azure), release (no bucket)
+  expect(cleanup.get(dep.id).step).toBe('remove');
+  provisioner.releaseDomain.mockResolvedValue({ released: false, reason: 'domain detached' });
+  await step();
+  expect(deployment.remove).not.toHaveBeenCalled();
+  expect(cleanup.get(dep.id)).toMatchObject({ step: 'remove', state: 'waiting', message: expect.stringContaining('domain detached') });
+  provisioner.releaseDomain.mockResolvedValue({ released: true });
+  await step();
+  expect(deployment.remove).toHaveBeenCalledTimes(1);
+  expect(cleanup.get(dep.id).step).toBe('verify');
 });
