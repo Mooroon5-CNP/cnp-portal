@@ -11,6 +11,15 @@ const { commands, resolveCommand } = require('../commands');
 const { buildToolArguments } = require('../orchestration/arguments');
 const { AmbiguousContextError } = require('../context/known-context-builder');
 const { buildTransverseAnswer, collectSources, assertCitedSources } = require('../generation/diagnostic');
+const { fleetPlan, runFleetTurn, mentionsFleet } = require('./fleet');
+
+const GREETING = /^\s*(bonjour|bonsoir|salut|coucou|hello|hi|hey|aide|help|merci|que\s+(?:peux|sais)[\s-]+tu\s+faire|qu'?est[\s-]+ce\s+que\s+tu\s+(?:peux|sais)\s+faire)\b[\s!?.,]*/i;
+const WELCOME = 'Bonjour ! Je consulte vos applications CNP en lecture seule. Par exemple :\n'
+  + '- « Quelles applications sont désynchronisées ? »\n'
+  + '- « Montre les erreurs de la dernière heure sur toutes les apps »\n'
+  + '- « Comment va <application> en prod ? »\n'
+  + '- « Combien coûte <application> ? »\n'
+  + 'Tapez / pour la liste des commandes.';
 
 function event(value) {
   return chatEventSchema.parse(value);
@@ -162,6 +171,13 @@ async function* runChatTurn(rawRequest, dependencies) {
   // An explicit command replaces the previous intent; free-text replies retain it.
   if (command && dependencies.clearClarification) await dependencies.clearClarification({ conversationId });
   const localDecision = classifyWithFallback(request.message);
+  // Greetings and "what can you do" get a short answer with examples instead of a menu-like clarification.
+  if (!command && GREETING.test(request.message) && localDecision.kind === 'clarification'
+    && request.message.replace(GREETING, '').trim().length < 3) {
+    yield event({ type: 'answer_delta', correlationId, text: WELCOME });
+    yield event({ type: 'turn_completed', correlationId, sources: [] });
+    return;
+  }
   if (localDecision.kind === 'mutation') {
     yield event({ type: 'error', correlationId, code: 'FORBIDDEN', retryable: false,
       message: 'Le chat MCP est strictement en lecture seule et ne peut pas effectuer cette action.' });
@@ -196,6 +212,7 @@ async function* runChatTurn(rawRequest, dependencies) {
       pendingClarificationId: dependencies.pendingClarificationId,
       userRequest: request.message,
       resolveApplication: Boolean(intendedTool && intendedTool !== 'list_applications' && !bareCommand
+        && !mentionsFleet(request.message)
         && !/^(?:en\s+)?(?:dev|development|prod|production|staging)$/i.test(request.message.trim())),
     });
   } catch (error) {
@@ -246,6 +263,15 @@ async function* runChatTurn(rawRequest, dependencies) {
     return;
   }
   const args = buildToolArguments(tool, knownContext, dependencies.now());
+  // No application given (or "toutes les apps", "non sync"): answer for every accessible application at once.
+  const fleet = fleetPlan({ tool, message: request.message, target: knownContext.target, argsMissing: !args });
+  if (fleet && knownContext.permissions.allowedTools.includes(fleet.tool)) {
+    yield* runFleetTurn({ message: request.message, plan: fleet, correlationId },
+      { mcpClient: dependencies.mcpClient, inputSchemas, responseSchemas, now: dependencies.now,
+        generateAnswer: dependencies.generateAnswer }, event);
+    if (dependencies.clearClarification) await dependencies.clearClarification({ conversationId });
+    return;
+  }
   if (!args) {
     await register(tool, knownContext.target);
     yield event({
