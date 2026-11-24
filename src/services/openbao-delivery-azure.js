@@ -113,7 +113,9 @@ class AzureVariableDelivery {
         } catch (error) {
           // A re-created application finds its previous secret soft-deleted (vault soft delete, 7 days):
           // Key Vault answers 409 ObjectIsDeletedButRecoverable. Recover our own secret, then write the new version.
-          if (error.response?.status !== 409 || error.response?.data?.error?.code !== 'ObjectIsDeletedButRecoverable') throw error;
+          // Real Key Vault shape (24/11/2026): { error: { code: 'Conflict', innererror: { code: 'ObjectIsDeletedButRecoverable' } } }.
+          const conflict = error.response?.data?.error;
+          if (error.response?.status !== 409 || ![conflict?.code, conflict?.innererror?.code].includes('ObjectIsDeletedButRecoverable')) throw error;
           await this.recoverOwnSecret(deployment, id, options);
           ({ data } = await this.transport.put(`${url}?api-version=7.4`, body, options));
         }
