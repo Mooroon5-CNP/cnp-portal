@@ -64,6 +64,12 @@ class GcpVariableDelivery {
     }
     if (existing.labels?.cnp_app !== deployment.appName || existing.labels?.cnp_env !== deployment.environment
       || existing.labels?.cnp_owner !== 'portal_variables') throw new Error('Secret GCP existant hors du périmètre du portail.');
+    await this.grantAccessor(token, resource);
+    return id;
+  }
+
+  // The app's dedicated runtime account reads this secret (idempotent).
+  async grantAccessor(token, resource) {
     const policy = await this.request(token, 'GET', `${resource}:getIamPolicy`);
     const member = `serviceAccount:${this.runtimeServiceAccount}`;
     const bindings = policy.bindings || [];
@@ -74,7 +80,18 @@ class GcpVariableDelivery {
         : [...bindings, { role: 'roles/secretmanager.secretAccessor', members: [member] }];
       await this.request(token, 'POST', `${resource}:setIamPolicy`, { policy: { ...policy, bindings: updated } });
     }
-    return id;
+  }
+
+  // Existing secrets the revision references besides its variables (database password, operator runtime secrets):
+  // once the dedicated account replaces the shared one, it must read them too (24/11/2026, testapp09 dev).
+  async grantRuntimeAccess(secretIds) {
+    if (!this.runtimeServiceAccount) throw new Error('Compte GCP runtime dédié manquant.');
+    const ids = [...new Set(secretIds)];
+    if (ids.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,255}$/.test(id))) throw new Error('Secret GCP référencé invalide.');
+    if (!ids.length) return [];
+    const token = await this.accessToken(this.transport);
+    for (const id of ids) await this.grantAccessor(token, `/secrets/${id}`);
+    return ids;
   }
 
   async deliver(deployment, values) {

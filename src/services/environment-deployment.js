@@ -587,6 +587,13 @@ async function reconcile(dep) {
         if (custom.some(item => occupied.has(item.name))) throw new Error('Variable OpenBao en conflit avec le runtime existant.');
         if (custom.length) claim.spec.forProvider.template.serviceAccount = openbaoRuntime.gcpRuntimeIdentity(dep);
         container.env = container.env.filter(item => !runtime.some(secret => secret.name === item.name)).concat(runtime, custom);
+        if (custom.length) {
+          // The dedicated account replaces the shared one: it must also read every other secret of this revision
+          // (database password, operator runtime secrets), or Cloud Run refuses the revision.
+          const own = new Set(custom.map(item => item.valueSource.secretKeyRef.secret));
+          const others = container.env.map(item => item.valueSource?.secretKeyRef?.secret).filter(id => id && !own.has(id));
+          await openbaoRuntime.grantRuntimeSecretAccess(dep, others);
+        }
         files[claimPath] = yaml.dump(claim);
       }
       if (dep.environment === 'dev') {

@@ -13,7 +13,8 @@ jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getPro
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/services/application-routing', () => ({ network: jest.fn(() => 'network: test'), hasOwnedRoute: jest.fn().mockResolvedValue(true), sync: jest.fn().mockResolvedValue(), status: jest.fn().mockResolvedValue(true) }));
 jest.mock('../src/services/openbao-runtime', () => ({ references: jest.fn().mockResolvedValue([]),
-  gcpRuntimeIdentity: jest.fn().mockReturnValue('app-run@test-project.iam.gserviceaccount.com') }));
+  gcpRuntimeIdentity: jest.fn().mockReturnValue('app-run@test-project.iam.gserviceaccount.com'),
+  grantRuntimeSecretAccess: jest.fn().mockResolvedValue([]) }));
 
 jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
@@ -158,6 +159,20 @@ test('changing variables republishes the same successful CI revision and keeps t
   const claim = yaml.load(trees.at(-1).tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
   expect(claim.spec.forProvider.template.containers[0].image).toBe(`registry.test/project/apps/pixelcam:${revision}`);
   expect(claim.spec.forProvider.template.containers[0].env.some(item => item.name === 'FEATURE')).toBe(true);
+});
+
+test('the dedicated runtime account is granted every other secret of the revision, never without variables', async () => {
+  openbaoRuntime.grantRuntimeSecretAccess.mockClear();
+  await service.reconcile(dep);
+  expect(openbaoRuntime.grantRuntimeSecretAccess).not.toHaveBeenCalled();
+  variableRecords.save(dep.id, { generation: 'grant-generation', names: ['FEATURE'], versions: { gcp: 1 } });
+  openbaoRuntime.references.mockResolvedValueOnce([{ name: 'FEATURE', valueSource: { secretKeyRef: { secret: 'cnp-feature', version: '1' } } }]);
+  await service.reconcile(dep);
+  const claim = yaml.load(trees.at(-1).tree.find(file => file.path.endsWith('cloudrun-claim.yaml')).content);
+  const referenced = claim.spec.forProvider.template.containers[0].env.map(item => item.valueSource?.secretKeyRef?.secret).filter(Boolean);
+  const granted = openbaoRuntime.grantRuntimeSecretAccess.mock.calls.at(-1)[1];
+  expect(granted).not.toContain('cnp-feature');
+  expect([...granted, 'cnp-feature'].sort()).toEqual([...new Set(referenced)].sort());
 });
 
 test('an unchanged image cannot report success until Cloud Run observes the new secret version', async () => {

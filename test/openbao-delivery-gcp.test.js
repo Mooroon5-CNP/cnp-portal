@@ -79,3 +79,21 @@ test('a client without runtime identity can make cleanup requests but cannot pub
     accessToken: jest.fn().mockResolvedValue('token') });
   await expect(adapter.deliver(dep, { API_KEY: 'private-value' })).rejects.toThrow('runtime dédié manquant');
 });
+
+test('grants the dedicated runtime account read access to existing referenced secrets, idempotently', async () => {
+  const policies = { 'testapp09-dev-db-password': { bindings: [{ role: 'roles/secretmanager.secretAccessor', members: ['serviceAccount:cloud-run-sa@test-project.iam.gserviceaccount.com'] }], etag: 'e1' },
+    'already': { bindings: [{ role: 'roles/secretmanager.secretAccessor', members: ['serviceAccount:run@test-project.iam.gserviceaccount.com'] }], etag: 'e2' } };
+  const transport = { request: jest.fn(async ({ url, data }) => {
+    const id = url.match(/\/secrets\/([^:]+):/)?.[1];
+    if (url.endsWith(':getIamPolicy')) return { data: policies[id] };
+    if (url.endsWith(':setIamPolicy')) { policies[id] = data.policy; return { data: {} }; }
+    throw new Error('Unexpected request');
+  }) };
+  const adapter = new GcpVariableDelivery({ project: 'test-project', region: 'europe-west9',
+    runtimeServiceAccount: 'run@test-project.iam.gserviceaccount.com', transport, accessToken: jest.fn().mockResolvedValue('t') });
+  await adapter.grantRuntimeAccess(['testapp09-dev-db-password', 'already', 'testapp09-dev-db-password']);
+  expect(policies['testapp09-dev-db-password'].bindings[0].members).toEqual([
+    'serviceAccount:cloud-run-sa@test-project.iam.gserviceaccount.com', 'serviceAccount:run@test-project.iam.gserviceaccount.com']);
+  expect(transport.request.mock.calls.filter(([r]) => r.url.endsWith(':setIamPolicy'))).toHaveLength(1);
+  await expect(adapter.grantRuntimeAccess(['../other'])).rejects.toThrow('invalide');
+});
