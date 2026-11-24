@@ -54,14 +54,16 @@ test('cloud privé : aucune copie à supprimer, seulement les versions OpenBao d
   expect(destroy.mock.calls.map(call => call[2])).toEqual([4]);
 });
 
-test('GCP : les identités runtime sont retirées, même sans variable enregistrée ; jamais ailleurs', async () => {
+test('GCP et Azure : les identités runtime sont retirées, même sans variable enregistrée ; jamais en cloud privé', async () => {
   records.get.mockReturnValue(null);
   await cleanup(dep);
   expect(provisioner.remove).toHaveBeenCalledWith(dep);
   provisioner.remove.mockClear();
   await cleanup({ ...dep, targetCluster: 'private-aws' });
-  await cleanup({ ...dep, targetCluster: 'azure' });
   expect(provisioner.remove).not.toHaveBeenCalled();
+  // Azure (incident du 24/11/2026 : identité et coffre orphelins après suppression) : coffre et identité de l'app retirés.
+  await cleanup({ ...dep, targetCluster: 'azure' });
+  expect(provisioner.remove).toHaveBeenCalledWith({ ...dep, targetCluster: 'azure' });
 });
 
 test('une suppression d\'identité refusée arrête le nettoyage avant OpenBao', async () => {

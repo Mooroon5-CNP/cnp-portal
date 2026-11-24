@@ -5,7 +5,7 @@ const express = require('express');
 const fs = require('fs');
 const https = require('https');
 const { ensureGcpIdentity, removeGcpIdentity } = require('./openbao-gcp-identity');
-const { ensureAzureIdentity } = require('./openbao-azure-identity');
+const { ensureAzureIdentity, removeAzureIdentity } = require('./openbao-azure-identity');
 const { ensureAwsRole, removeAwsRole } = require('./openbao-aws-identity');
 
 const API = `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT || 443}`;
@@ -57,7 +57,9 @@ app.post('/ensure', route(['gcp', 'azure'], async deployment => {
 }));
 
 // Suppression d'un environnement GCP : rôle AWS du secours d'abord (prod avec secours, comme à la création), puis compte GCP.
-app.post('/remove', route(['gcp'], async deployment => {
+// Azure : coffre et identité runtime de l'environnement.
+app.post('/remove', route(['gcp', 'azure'], async deployment => {
+  if (deployment.targetCluster === 'azure') return { removed: true, azure: await removeAzureIdentity(deployment) };
   const aws = deployment.failoverRequested === true && deployment.environment === 'prod' ? await removeAwsRole(deployment) : false;
   const gcp = await removeGcpIdentity(deployment);
   return { removed: true, aws, gcp };

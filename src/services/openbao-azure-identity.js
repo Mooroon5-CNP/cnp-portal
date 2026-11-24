@@ -102,12 +102,20 @@ async function ensureAzureIdentity(deployment, { subscription = process.env.AZUR
     || identity.tags?.cnp_environment !== names.key || !GUID.test(identity.properties?.principalId || '')) {
     throw new Error('Identité Azure existante hors du périmètre attendu.');
   }
-  const vault = await getOrCreate(transport, token, `${names.vault}?api-version=${VAULT_VERSION}`,
-    { location, tags: { cnp_environment: names.key, cnp_owner: 'openbao_runtime_provisioner' },
-      properties: { tenantId, sku: { family: 'A', name: 'standard' }, enableRbacAuthorization: true,
-        // Never send enablePurgeProtection=false: Azure rejects it with HTTP 400 ("cannot be set to false").
-        // Omitting it leaves purge protection off, so a deleted app's vault can still be purged.
-        softDeleteRetentionInDays: 7 } });
+  const vaultBody = { location, tags: { cnp_environment: names.key, cnp_owner: 'openbao_runtime_provisioner' },
+    properties: { tenantId, sku: { family: 'A', name: 'standard' }, enableRbacAuthorization: true,
+      // Never send enablePurgeProtection=false: Azure rejects it with HTTP 400 ("cannot be set to false").
+      // Omitting it leaves purge protection off, so a deleted app's vault can still be purged.
+      softDeleteRetentionInDays: 7 } };
+  let vault;
+  try { vault = await getOrCreate(transport, token, `${names.vault}?api-version=${VAULT_VERSION}`, vaultBody); }
+  catch (error) {
+    // App recréée moins de 7 jours après sa suppression (coffre non purgé) : le nom est réservé par le coffre supprimé,
+    // qui est le sien (même nom haché) ; on le récupère au lieu d'échouer.
+    if (error.message !== 'Provisionnement Azure non confirmé.') throw error;
+    vault = await getOrCreate(transport, token, `${names.vault}?api-version=${VAULT_VERSION}`,
+      { ...vaultBody, properties: { ...vaultBody.properties, createMode: 'recover' } });
+  }
   if (vault.id?.toLowerCase() !== names.vault.toLowerCase()
     || vault.tags?.cnp_environment !== names.key || vault.properties?.enableRbacAuthorization !== true) {
     throw new Error('Coffre Azure existant hors du périmètre attendu.');
@@ -119,4 +127,46 @@ async function ensureAzureIdentity(deployment, { subscription = process.env.AZUR
   return { identity: names.identity, vault: names.vault };
 }
 
-module.exports = { namesFor, assignmentGuid, ensureAzureIdentity };
+async function deleteOwned(transport, token, path, key, kind) {
+  let resource;
+  try { resource = await request(transport, token, 'GET', path); }
+  catch (error) { if (error.status === 404) return false; throw error; }
+  // Jamais une ressource que le provisionneur n'a pas créée pour CET environnement.
+  if (resource?.tags?.cnp_environment !== key || resource?.tags?.cnp_owner !== 'openbao_runtime_provisioner') {
+    throw new Error(`${kind} Azure existant hors du périmètre attendu.`);
+  }
+  try { await request(transport, token, 'DELETE', path); }
+  catch (error) { if (error.status !== 404) throw error; }
+  return true;
+}
+
+// Suppression d'un environnement Azure : coffre de l'app (ses secrets et ses attributions de rôle disparaissent avec lui),
+// puis son identité runtime. Le coffre supprimé est purgé si Azure l'accepte ; sinon il l'est seul au bout de 7 jours
+// (softDeleteRetentionInDays) et une recréation de l'app dans l'intervalle le récupère (ensureAzureIdentity).
+async function removeAzureIdentity(deployment, { subscription = process.env.AZURE_SUBSCRIPTION_ID,
+  group = process.env.CNP_AZURE_RUNTIME_RESOURCE_GROUP, location = process.env.AZURE_LOCATION,
+  tenantId = process.env.CNP_AZURE_TENANT_ID,
+  clientId = process.env.CNP_AZURE_PROVISIONER_CLIENT_ID,
+  tokenFile = process.env.CNP_AZURE_FEDERATED_TOKEN_FILE,
+  transport = axios, accessToken = federatedAccessToken } = {}) {
+  const names = namesFor(deployment, subscription, group);
+  if (!GUID.test(tenantId || '') || !GUID.test(clientId || '') || !REGION.test(location || '') || !tokenFile) {
+    throw new Error('Identité Azure du provisionneur non configurée.');
+  }
+  const token = await accessToken({ tenantId, clientId, tokenFile, transport,
+    scope: 'https://management.azure.com/.default' });
+  const vault = await deleteOwned(transport, token, `${names.vault}?api-version=${VAULT_VERSION}`, names.key, 'Coffre');
+  let purged = false;
+  if (vault) {
+    const vaultName = names.vault.split('/').pop();
+    try {
+      await request(transport, token, 'POST',
+        `/subscriptions/${subscription}/providers/Microsoft.KeyVault/locations/${location}/deletedVaults/${vaultName}/purge?api-version=${VAULT_VERSION}`);
+      purged = true;
+    } catch (_) { /* purge refusée (droit au niveau abonnement) : purge automatique au bout de 7 jours */ }
+  }
+  const identity = await deleteOwned(transport, token, `${names.identity}?api-version=${IDENTITY_VERSION}`, names.key, 'Identité');
+  return { vault, purged, identity };
+}
+
+module.exports = { namesFor, assignmentGuid, ensureAzureIdentity, removeAzureIdentity };

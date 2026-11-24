@@ -33,9 +33,10 @@ async function ensure(deployment, options) {
   await call('ensure', ['gcp', 'azure'], deployment, options);
 }
 
-// Suppression d'un environnement GCP : compte runtime dédié et, en prod avec secours, rôle AWS de l'app.
+// Suppression d'un environnement : GCP, compte runtime dédié et, en prod avec secours, rôle AWS de l'app ;
+// Azure, coffre et identité runtime de l'app.
 async function remove(deployment, options) {
-  return call('remove', ['gcp'], deployment, options);
+  return call('remove', ['gcp', 'azure'], deployment, options);
 }
 
 module.exports = { ensure, remove };

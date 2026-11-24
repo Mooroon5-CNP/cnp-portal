@@ -33,6 +33,41 @@ function list(app) {
 function manager(user) {
   if (!user?.id || user.role !== 'manager') throw new Error('Validation manager requise.');
 }
+// Opérations lancées par CE processus. Un déploiement du portail démarre le nouveau pod avant d'arrêter l'ancien :
+// sans suivi, une opération en vol sur l'ancien pod (le contrôle de santé de la surveillance, toutes les ~90 s)
+// restait « running » pour toujours et gelait la surveillance de la bascule (incident du 24/11/2026, 14:14).
+const inflight = new Map();
+let draining = false;
+function accepting() {
+  if (draining) throw Object.assign(new Error('Portail en cours de redémarrage : opération reportée au prochain passage.'), { retryable: true });
+}
+function track(id, promise) {
+  inflight.set(id, promise);
+  promise.finally(() => inflight.delete(id));
+}
+const isDraining = () => draining;
+// Arrêt du portail (SIGTERM) : plus aucune nouvelle opération ; celles en vol ont `timeoutMs` pour finir ; les autres
+// sont marquées échouées (reprenables) au lieu de rester « running » sans processus.
+async function drain(timeoutMs = 20000) {
+  draining = true;
+  const pending = [...inflight.values()];
+  let timer;
+  await Promise.race([Promise.allSettled(pending), new Promise(resolve => { timer = setTimeout(resolve, timeoutMs); })]);
+  clearTimeout(timer);
+  const abandoned = [...inflight.keys()];
+  for (const id of abandoned) {
+    db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE id=? AND state='running'")
+      .run(JSON.stringify({ error: 'Portail arrêté pendant l’opération. Reprendre la tâche suivie.' }), id);
+  }
+  return { completed: pending.length - abandoned.length, abandoned: abandoned.length };
+}
+// Filet de sécurité (pod tué brutalement, nœud perdu) : une opération « running » qu'aucun processus de CE pod ne suit,
+// plus vieille que `maxAgeMs`, est marquée échouée. Utilisé pour le contrôle de santé (quelques secondes d'habitude).
+function releaseStale(row, maxAgeMs) {
+  if (!row || row.state !== 'running' || inflight.has(row.id) || Date.now() - Date.parse(row.created_at) < maxAgeMs) return false;
+  return db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE id=? AND state='running'")
+    .run(JSON.stringify({ error: 'Opération sans processus (portail redémarré). Relancée automatiquement.' }), row.id).changes === 1;
+}
 function run(request) {
   return new Promise((resolve, reject) => {
     const child = execFile(process.env.CNP_FAILOVER_OPERATOR_PYTHON || process.env.CNP_FAILOVER_PYTHON || 'python3',
@@ -53,7 +88,7 @@ function previous(app, action) {
   return list(app).find(row => row.action === action && row.state === 'completed');
 }
 function start(app, action, user) {
-  manager(user); schema();
+  manager(user); accepting(); schema();
   if (!actions.includes(action) && !TEARDOWN.includes(action)) throw new Error('Opération inconnue.');
   const document = service.profileFor(app);
   if (TEARDOWN.includes(action)) {
@@ -64,7 +99,7 @@ function start(app, action, user) {
     fs.mkdirSync(request.work, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(request.work, 'request.json'), JSON.stringify(request), { mode: 0o600 });
     db.prepare('INSERT INTO failover_operations VALUES (?,?,?,?,?,?,?,?,?)').run(id, app, action, 'running', hash(document), user.id, null, new Date().toISOString(), null);
-    void finish(id, request);
+    track(id, finish(id, request));
     return { id, state: 'running' };
   }
   if (!document || document.profile.mode === 'stateless') throw new Error('Profil SQL requis.');
@@ -125,7 +160,7 @@ function start(app, action, user) {
   fs.mkdirSync(request.work, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(request.work, 'request.json'), JSON.stringify(request), { mode: 0o600 });
   db.prepare('INSERT INTO failover_operations VALUES (?,?,?,?,?,?,?,?,?)').run(id, app, action, 'running', hash(document), user.id, null, new Date().toISOString(), null);
-  void finish(id, request);
+  track(id, finish(id, request));
   return { id, state: 'running' };
 }
 async function finish(id, request) {
@@ -196,7 +231,7 @@ async function createProfile(app, mode, contract, user) {
   return service.configure(app, { profile, credentials: {}, secrets: { app }, observations: {} }, user);
 }
 function retry(id, user) {
-  manager(user); schema();
+  manager(user); accepting(); schema();
   const row = db.prepare('SELECT * FROM failover_operations WHERE id=?').get(id);
   if (!row || row.state !== 'failed') throw new Error('Opération non disponible pour reprise.');
   const document = service.profileFor(row.app);
@@ -204,7 +239,7 @@ function retry(id, user) {
   if (list(row.app).some(value => ['running', 'applying'].includes(value.state))) throw new Error('Opération déjà en cours.');
   const request = JSON.parse(fs.readFileSync(path.join(workRoot, id, 'request.json')));
   db.prepare("UPDATE failover_operations SET state='running',result=NULL WHERE id=?").run(id);
-  void finish(id, request);
+  track(id, finish(id, request));
   return { id, state: 'running' };
 }
 function recoverInterrupted() {
@@ -212,4 +247,4 @@ function recoverInterrupted() {
   db.prepare("UPDATE failover_operations SET state='failed',result=? WHERE state='running'")
     .run(JSON.stringify({ error: 'Portail redémarré pendant l’opération. Reprendre la tâche suivie.' }));
 }
-module.exports = { list, start, retry, createProfile, recoverInterrupted, run };
+module.exports = { list, start, retry, createProfile, recoverInterrupted, run, drain, isDraining, releaseStale };
