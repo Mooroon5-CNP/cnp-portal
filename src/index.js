@@ -128,6 +128,14 @@ if (require.main === module) {
   app.listen(PORT, HOST, () => {
     logger.info({ message: `CNP Portal started on port ${PORT}`, env: process.env.NODE_ENV || 'development' });
   });
+  // Arrêt (déploiement, nœud drainé) : laisser finir les opérations de bascule en vol au lieu de les couper.
+  process.once('SIGTERM', () => {
+    logger.info({ message: 'SIGTERM: draining failover operations' });
+    require('./services/failover-operations').drain(20000)
+      .then(result => logger.info({ message: 'Failover operations drained', ...result }))
+      .catch(error => logger.error({ message: `Drain failed: ${error.message}` }))
+      .finally(() => process.exit(0));
+  });
 }
 
 module.exports = app;

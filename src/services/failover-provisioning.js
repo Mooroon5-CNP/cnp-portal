@@ -235,7 +235,8 @@ async function advance(app) {
     if (!document) throw new Error('Profil absent ; aucune ressource modifiée.');
     if (row.state === 'completed') {
       const health = operations.list(app).find(value => value.action === 'health');
-      if (health && ['running', 'applying'].includes(health.state)) return;
+      // Un contrôle « running » sans processus (ancien pod arrêté) est libéré après 5 min ; le prochain passage en relance un.
+      if (health && ['running', 'applying'].includes(health.state)) { operations.releaseStale(health, 300000); return; }
       const revision = await pendingRevision(app, health);
       if (revision) {
         const now = new Date().toISOString();
@@ -340,7 +341,7 @@ function startReconciler() {
   operations.recoverInterrupted();
   let running = false;
   const tick = async () => {
-    if (running) return;
+    if (running || operations.isDraining()) return;
     running = true;
     try {
       for (const row of db.prepare("SELECT app FROM failover_provisioning WHERE state IN ('running','review','waiting','completed')").all()) await advance(row.app);

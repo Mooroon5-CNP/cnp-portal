@@ -189,7 +189,64 @@ test('Azure provisioner creates isolated resources and verifies role assignments
   expect(transport.request.mock.calls.slice(count).every(([request]) => request.method === 'GET')).toBe(true);
 });
 
-test('portal asks the provisioner to remove GCP runtime identities only', async () => {
+test('Azure removal deletes only the app vault and identity it created, and tolerates an absent one', async () => {
+  const { removeAzureIdentity } = require('../src/services/openbao-azure-identity');
+  const subscription = '8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e';
+  const azureDep = { ...dep, targetCluster: 'azure' };
+  const names = namesFor(azureDep, subscription, 'cnp-runtime');
+  const tags = { cnp_environment: 'test-app/dev', cnp_owner: 'openbao_runtime_provisioner' };
+  const existing = new Map([[names.vault, { id: names.vault, tags }], [names.identity, { id: names.identity, tags }]]);
+  const calls = [];
+  const transport = { request: jest.fn(async ({ method, url }) => {
+    const path = url.replace('https://management.azure.com', '').split('?')[0];
+    calls.push(`${method} ${path.split('/').slice(-2).join('/')}`);
+    if (method === 'GET') { if (!existing.has(path)) throw missing(404); return { data: existing.get(path) }; }
+    if (method === 'DELETE') { existing.delete(path); return { data: {} }; }
+    if (method === 'POST' && path.endsWith('/purge')) throw missing(403); // droit d'abonnement absent : purge différée
+    throw new Error(`Unexpected ${method} ${url}`);
+  }) };
+  const options = { subscription, group: 'cnp-runtime', location: 'francecentral', tenantId: '22222222-2222-4222-a222-222222222222',
+    clientId: '33333333-3333-4333-a333-333333333333', tokenFile: '/fake', transport, accessToken: async () => 'fake-token' };
+  await expect(removeAzureIdentity(azureDep, options)).resolves.toEqual({ vault: true, purged: false, identity: true });
+  expect(existing.size).toBe(0);
+  expect(calls.filter(call => call.startsWith('DELETE'))).toHaveLength(2);
+  await expect(removeAzureIdentity(azureDep, options)).resolves.toEqual({ vault: false, purged: false, identity: false });
+  existing.set(names.vault, { id: names.vault, tags: { ...tags, cnp_environment: 'other-app/dev' } });
+  await expect(removeAzureIdentity(azureDep, options)).rejects.toThrow('hors du périmètre');
+  expect(existing.has(names.vault)).toBe(true);
+});
+
+test('Azure ensure recovers its own soft-deleted vault when an app is recreated within 7 days', async () => {
+  const subscription = '8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e';
+  const azureDep = { ...dep, targetCluster: 'azure' };
+  const names = namesFor(azureDep, subscription, 'cnp-runtime');
+  const resources = new Map();
+  const transport = { request: jest.fn(async ({ method, url, data }) => {
+    const path = url.replace('https://management.azure.com', '').split('?')[0];
+    if (method === 'GET' && url.includes('/roleDefinitions?')) {
+      const roleName = decodeURIComponent(url).includes('Officer') ? 'Key Vault Secrets Officer' : 'Key Vault Secrets User';
+      return { data: { value: [{ id: `/subscriptions/${subscription}/providers/Microsoft.Authorization/roleDefinitions/${roleName.length}`, properties: { roleName } }] } };
+    }
+    if (method === 'GET') { if (!resources.has(path)) throw missing(404); return { data: resources.get(path) }; }
+    if (method === 'PUT') {
+      if (path === names.vault && data.properties.createMode !== 'recover') throw missing(409); // nom réservé par le coffre supprimé
+      const value = { id: path, tags: data.tags, properties: path.includes('userAssignedIdentities')
+        ? { principalId: '11111111-1111-4111-a111-111111111111' } : data.properties };
+      resources.set(path, value); return { data: value };
+    }
+    throw new Error(`Unexpected ${method} ${url}`);
+  }) };
+  jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+  const pending = ensureAzureIdentity(azureDep, { subscription, group: 'cnp-runtime', location: 'francecentral',
+    tenantId: '22222222-2222-4222-a222-222222222222', clientId: '33333333-3333-4333-a333-333333333333',
+    portalPrincipalId: '44444444-4444-4444-a444-444444444444', tokenFile: '/fake', transport, accessToken: async () => 'fake-token' });
+  for (let i = 0; i < 30; i += 1) await jest.advanceTimersByTimeAsync(1000);
+  jest.useRealTimers();
+  await expect(pending).resolves.toEqual({ identity: names.identity, vault: names.vault });
+  expect(resources.get(names.vault).properties.createMode).toBe('recover');
+});
+
+test('portal asks the provisioner to remove GCP and Azure runtime identities', async () => {
   const transport = { post: jest.fn().mockResolvedValue({ data: { removed: true, aws: true, gcp: true } }) };
   const options = { address: 'http://provisioner.test:3001', tokenFile: '/fake/token', readFile: () => 'portal-token', transport };
   const prod = { ...dep, environment: 'prod', failoverRequested: true };
@@ -197,9 +254,11 @@ test('portal asks the provisioner to remove GCP runtime identities only', async 
   expect(transport.post).toHaveBeenCalledWith('http://provisioner.test:3001/remove',
     { appName: 'test-app', environment: 'prod', targetCluster: 'gcp', failoverRequested: true },
     expect.objectContaining({ headers: { Authorization: 'Bearer portal-token' } }));
-  await expect(provisionerClient.remove({ ...dep, targetCluster: 'azure' }, options)).resolves.toBeNull();
+  await expect(provisionerClient.remove({ ...dep, targetCluster: 'private-aws' }, options)).resolves.toBeNull();
   await expect(provisionerClient.remove(dep, { ...options, address: '' })).resolves.toBeNull();
   expect(transport.post).toHaveBeenCalledTimes(1);
+  await provisionerClient.remove({ ...dep, targetCluster: 'azure' }, options);
+  expect(transport.post.mock.calls[1][1]).toMatchObject({ targetCluster: 'azure' });
   transport.post.mockResolvedValue({ data: {} });
   await expect(provisionerClient.remove(dep, options)).rejects.toThrow('non confirmée');
 });

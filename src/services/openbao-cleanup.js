@@ -35,7 +35,12 @@ async function azure(deployment, names) {
     const url = `${delivery.vaultUrl}/secrets/${secretName(deployment, name)}?api-version=7.4`;
     let existing;
     try { ({ data: existing } = await axios.get(url, { headers, timeout: 10000, maxRedirects: 0 })); }
-    catch (error) { if (error.response?.status === 404) continue; throw new Error('Lecture Azure Key Vault indisponible.'); }
+    catch (error) {
+      if (error.response?.status === 404) continue;
+      // Coffre de l'app déjà supprimé (reprise d'une suppression) : ses secrets ont disparu avec lui.
+      if (error.code === 'ENOTFOUND') return;
+      throw new Error('Lecture Azure Key Vault indisponible.');
+    }
     if (existing.tags?.cnp_app !== deployment.appName || existing.tags?.cnp_env !== deployment.environment
       || existing.tags?.cnp_owner !== 'portal_variables') throw new Error('Secret Azure existant hors du périmètre du portail.');
     try { await axios.delete(url, { headers, timeout: 10000, maxRedirects: 0 }); }
@@ -58,11 +63,15 @@ async function cleanup(deployment) {
   // Identités runtime créées par le provisionneur (compte GCP de l'environnement, rôle AWS du secours) : retirées même sans
   // variables enregistrées, car elles naissent au déploiement. Après les ressources (elles ne servent plus), avant OpenBao.
   if (deployment.targetCluster === 'gcp') await require('./openbao-runtime-provisioner-client').remove(deployment);
+  // Azure : les secrets du coffre d'abord (il doit encore exister), puis le coffre et l'identité de l'app.
+  if (deployment.targetCluster === 'azure') {
+    if (record) await azure(deployment, record.ownedNames);
+    await require('./openbao-runtime-provisioner-client').remove(deployment);
+  }
   if (!record) return;
-  if (deployment.targetCluster === 'azure') await azure(deployment, record.ownedNames);
   // Cloud privé : aucune copie hors d'OpenBao. Le Secret « variables » produit par External Secrets disparaît avec le
   // namespace ; il ne reste qu'à détruire les versions ci-dessous.
-  else if (deployment.targetCluster !== 'private-aws') {
+  if (!['azure', 'private-aws'].includes(deployment.targetCluster)) {
     await gcp(deployment, record.ownedNames);
     if (deployment.failoverRequested) aws(deployment, record.ownedNames);
   }
