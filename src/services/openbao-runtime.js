@@ -159,6 +159,15 @@ function applyAzureReferences(files, deployment, prepared) {
   return files;
 }
 
+// Gives the app's dedicated GCP runtime account read access to other secrets its revision references.
+async function grantRuntimeSecretAccess(deployment, secretIds) {
+  if (!secretIds.length) return [];
+  if (!process.env.GCP_PROJECT || !process.env.GCP_REGION) throw new Error('Configuration GCP des variables OpenBao manquante.');
+  const delivery = new GcpVariableDelivery({ project: process.env.GCP_PROJECT, region: process.env.GCP_REGION,
+    runtimeServiceAccount: gcpRuntimeIdentity(deployment) });
+  return delivery.grantRuntimeAccess(secretIds);
+}
+
 async function references(deployment) {
   if (!records.get(deployment.id)) return [];
   const published = await variables.service().published(deployment);
@@ -178,4 +187,4 @@ async function references(deployment) {
 }
 
 module.exports = { references, azureReferences, applyAzureReferences, privateReferences, azureRuntimeIdentity, gcpRuntimeIdentity,
-  awsRuntimeRole, failoverReferences, assertReady };
+  awsRuntimeRole, failoverReferences, assertReady, grantRuntimeSecretAccess };
