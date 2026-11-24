@@ -1,9 +1,9 @@
 'use strict';
 
 const commands = Object.freeze([
-  { command: '/applications', title: 'Applications', description: 'Lister les applications accessibles', tool: 'list_applications', prompt: 'Liste les applications disponibles' },
-  { command: '/deploiement', title: 'Déploiement', description: 'État, version et synchronisation de l’application sélectionnée', tool: 'get_deployment_status', prompt: 'Quel est le statut du déploiement ?' },
-  { command: '/logs', title: 'Logs', description: 'Consulter les logs récents de l’application sélectionnée', tool: 'get_application_logs', prompt: 'Montre les logs' },
+  { command: '/applications', title: 'Applications', description: 'Lister les applications accessibles (« /applications non sync » : seulement celles à problème)', tool: 'list_applications', prompt: 'Liste les applications disponibles' },
+  { command: '/deploiement', title: 'Déploiement', description: 'État, version et synchronisation (toutes les applications si aucune n’est choisie)', tool: 'get_deployment_status', prompt: 'Quel est le statut du déploiement ?' },
+  { command: '/logs', title: 'Logs', description: 'Erreurs et avertissements récents (toutes les applications si aucune n’est choisie)', tool: 'get_application_logs', prompt: 'Montre les logs' },
   { command: '/finops', title: 'FinOps', description: 'Utilisation et recommandation de ressources', tool: 'get_finops_recommendation', prompt: 'Donne une recommandation FinOps' },
   { command: '/gcp', title: 'Google Cloud', description: 'Question Google Cloud (Gemini Cloud Assist, managers uniquement)', tool: 'gcp_cloud_assist', capability: 'ask_cloud_assist', prompt: 'Question Google Cloud :' },
   { command: '/diagnostic', title: 'Diagnostic', description: 'Diagnostic croisé Argo CD, Datadog et Gemini Cloud Assist (managers uniquement)', tool: 'gcp_cloud_assist', capability: 'investigate_issue', transverse: true, prompt: 'Diagnostique un incident :' },

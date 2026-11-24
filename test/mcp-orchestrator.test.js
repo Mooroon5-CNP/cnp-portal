@@ -77,7 +77,7 @@ describe('MCP orchestrator', () => {
   });
 
   test('asks for target context when required', async () => {
-    const events = await collect({ message: 'Show deployment status' });
+    const events = await collect({ message: 'Show the FinOps recommendation' });
     expect(events[1].type).toBe('clarification_required');
   });
 
