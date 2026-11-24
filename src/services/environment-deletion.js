@@ -200,6 +200,13 @@ async function advance(id) {
       }
       save(id, { step: 'remove', state: 'running', message: 'Suppression des données autorisée dans Crossplane.' });
     } else if (row.step === 'remove') {
+      if (dep.targetCluster === 'azure') {
+        // Nom public détaché et certificat supprimé AVANT que Crossplane supprime la Container App (incident du 24/11).
+        const release = await require('./openbao-runtime-provisioner-client').releaseDomain(dep);
+        if (release && release.released !== true) {
+          throw Object.assign(new Error(`Libération du nom public Azure en cours (${release.reason || 'attente'}).`), { code: 'CLEANUP_PENDING' });
+        }
+      }
       await service.remove(dep, { cleanupFiles: row.plan.files || [] });
       save(id, { step: 'verify', state: 'waiting', message: 'Retrait publié ; attente de disparition des ressources.' });
     } else if (row.step === 'verify') {

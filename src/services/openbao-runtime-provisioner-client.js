@@ -19,6 +19,10 @@ async function call(operation, clouds, deployment, { transport = axios,
       appName: deployment.appName, environment: deployment.environment, targetCluster: deployment.targetCluster,
       failoverRequested: deployment.failoverRequested === true,
     }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000, maxRedirects: 0 });
+    if (operation === 'release-domain') {
+      if (typeof data?.released !== 'boolean') throw new Error(unconfirmed);
+      return data;
+    }
     if ((operation === 'ensure' ? data?.ready : data?.removed) !== true) throw new Error(unconfirmed);
     return data;
   } catch (error) {
@@ -39,4 +43,9 @@ async function remove(deployment, options) {
   return call('remove', ['gcp', 'azure'], deployment, options);
 }
 
-module.exports = { ensure, remove };
+// Avant la suppression d'un environnement Azure : { released } (false = réessayer plus tard). Sans provisionneur : null.
+async function releaseDomain(deployment, options) {
+  return call('release-domain', ['azure'], deployment, options);
+}
+
+module.exports = { ensure, remove, releaseDomain };

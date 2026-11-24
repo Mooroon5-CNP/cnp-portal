@@ -7,6 +7,7 @@ const https = require('https');
 const { ensureGcpIdentity, removeGcpIdentity } = require('./openbao-gcp-identity');
 const { ensureAzureIdentity, removeAzureIdentity } = require('./openbao-azure-identity');
 const { ensureAwsRole, removeAwsRole } = require('./openbao-aws-identity');
+const { releaseAppDomain } = require('./azure-app-domain');
 
 const API = `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT || 443}`;
 const SERVICE_ACCOUNT = 'system:serviceaccount:cnp-portal:cnp-portal';
@@ -39,7 +40,7 @@ function route(clouds, action) {
       if (!clouds.includes(deployment.targetCluster)) return res.status(400).json({ error: 'Cloud non pris en charge.' });
       return res.json(await action(deployment));
     } catch (error) {
-      const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration|Rôle|Isolation) [^.]{1,170}\.)$/.test(error.message)
+      const message = /^((Provisionnement|Identité|Compte|Paramètres|Configuration|Rôle|Isolation|Container) [^.]{1,170}\.)$/.test(error.message)
         ? error.message : 'Provisionnement runtime indisponible. Réessayez après correction.';
       console.error('OpenBao runtime provisioner:', message);
       return res.status(503).json({ error: message });
@@ -64,6 +65,9 @@ app.post('/remove', route(['gcp', 'azure'], async deployment => {
   const gcp = await removeGcpIdentity(deployment);
   return { removed: true, aws, gcp };
 }));
+
+// Avant la suppression d'un environnement Azure : nom public détaché et certificat supprimé (azure-app-domain.js).
+app.post('/release-domain', route(['azure'], async deployment => releaseAppDomain(deployment)));
 
 if (require.main === module) app.listen(3001, '0.0.0.0');
 module.exports = { app, authorized };

@@ -49,6 +49,11 @@ spec:
               value: cnp-sov-runtime-rg
             - name: CNP_AZURE_TENANT_ID
               value: 17c98ba4-ddf8-454c-ba05-95d5326dcf56
+            # Libération du nom public avant suppression d'une app Azure (azure-app-domain.js).
+            - name: CNP_AZURE_APPS_ENVIRONMENT_ID
+              value: /subscriptions/8e885538-8edd-4dd1-8e3c-64f1ae5ebc1e/resourceGroups/cnp-sov-fr-rg/providers/Microsoft.App/managedEnvironments/cnp-sov-fr-cae
+            - name: AZURE_PUBLIC_DOMAIN
+              value: eu.mooroon5.fr
             - name: CNP_AZURE_PROVISIONER_CLIENT_ID
               valueFrom:
                 configMapKeyRef:
