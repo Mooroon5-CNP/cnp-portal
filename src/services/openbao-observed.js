@@ -30,7 +30,10 @@ function azureMatches(observed, expected, ownedNames) {
     && typeof item.secretName === 'string' && item.secretName.length > 0
     && typeof item.keyVaultSecretId === 'string' && item.keyVaultSecretId.length > 0)) return false;
   const current = new Map(env.filter(item => item && typeof item.name === 'string').map(item => [item.name, item]));
-  const secretByName = new Map(secrets.filter(item => item && typeof item.name === 'string').map(item => [item.name, item]));
+  // Azure treats a Container App secret NAME as sensitive: Crossplane writes it through nameSecretRef and the observed
+  // state never contains it (24/11/2026, testapp09 prod waited forever). Match the observed secret by its pinned Key
+  // Vault version instead; the env entry still proves which secret name the variable uses.
+  const observedVersions = new Set(secrets.map(item => item?.keyVaultSecretId).filter(id => typeof id === 'string' && id));
   const wanted = new Map(expected.map(item => [item.name, item]));
   if (expected.length !== wanted.size) return false;
   for (const name of ownedNames) {
@@ -38,8 +41,7 @@ function azureMatches(observed, expected, ownedNames) {
   }
   return expected.every(item => {
     const actual = current.get(item.name);
-    const secret = secretByName.get(item.secretName);
-    return actual?.secretName === item.secretName && secret?.keyVaultSecretId === item.keyVaultSecretId;
+    return actual?.secretName === item.secretName && observedVersions.has(item.keyVaultSecretId);
   });
 }
 
