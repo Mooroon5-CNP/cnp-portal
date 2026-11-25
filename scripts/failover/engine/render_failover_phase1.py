@@ -67,7 +67,7 @@ def cloudsql(config):
         return {"name": secret, "namespace": "crossplane-system", "key": key}
     instance = resource("sql.gcp.upbound.io/v1beta2", "DatabaseInstance", name, {
         "project": PROJECT, "region": GCP_REGION, "databaseVersion": "POSTGRES_15",
-        "deletionProtection": True, "rootPasswordSecretRef": ref("admin-password"),
+        "deletionProtection": True,
         "settings": {"edition": "ENTERPRISE", "tier": "db-f1-micro", "availabilityType": "ZONAL",
             "diskSize": 10, "diskAutoresize": True, "deletionProtectionEnabled": True,
             "backupConfiguration": {"enabled": True, "pointInTimeRecoveryEnabled": True,
@@ -77,6 +77,9 @@ def cloudsql(config):
                 "privateNetwork": f"projects/{PROJECT}/global/networks/gcp-hybrid-vpc",
                 "sslMode": "ENCRYPTED_ONLY"}}}, app)
     instance["spec"]["deletionPolicy"] = "Orphan"
+    # Mot de passe administrateur : à la création seulement. Dans forProvider, Crossplane a retenté le 25/11/2026 une mise à
+    # jour refusée par Google (400 « Missing user password ») : base saine mais Synced=False, app Degraded dans Argo.
+    instance["spec"]["initProvider"] = {"rootPasswordSecretRef": ref("admin-password")}
     if instance_name(config) != name:
         # Le nom Kubernetes reste stable (observations, parcours) ; seul le nom chez Google porte la génération.
         instance["metadata"]["annotations"]["crossplane.io/external-name"] = instance_name(config)

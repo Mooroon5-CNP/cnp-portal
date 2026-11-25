@@ -71,7 +71,8 @@ class Phase1Tests(unittest.TestCase):
         self.assertEqual(spec["deletionPolicy"], "Orphan")
         self.assertFalse(spec["forProvider"]["settings"]["ipConfiguration"]["ipv4Enabled"])
         self.assertIn({"name": "cloudsql.logical_decoding", "value": "on"}, spec["forProvider"]["settings"]["databaseFlags"])
-        self.assertEqual(spec["forProvider"]["rootPasswordSecretRef"]["key"], "admin-password")
+        self.assertEqual(spec["initProvider"]["rootPasswordSecretRef"]["key"], "admin-password")
+        self.assertNotIn("rootPasswordSecretRef", spec["forProvider"])
 
     def test_users_reference_secret_without_password(self):
         for f in ["cnp_runtime.yaml", "cnp_replication.yaml"]:
