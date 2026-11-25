@@ -117,6 +117,22 @@ async function publicAddressAnswers(url) {
  * n'annonce « déployée » que si la Container App est prête SUR LA RÉVISION attendue. Un échec de création asynchrone
  * remonte avec sa cause ; une simple ReconcileError passagère n'est pas un échec.
  */
+// Secrets de base dans le Key Vault partagé restés en « existe déjà » après la recréation d'une app (incident testapp09
+// prod, 25/11/2026) : adoptés par Crossplane, puis synchronisation Argo relancée (elle a abandonné après ses essais).
+// Sans effet si rien n'est bloqué ; une erreur ici n'empêche jamais la lecture de l'état.
+async function adoptVaultSecrets(dep, names) {
+  const vault = String(config.azure.keyVaultId || '').split('/').pop();
+  if (!vault || !names.runtimeVaultSecret) return false;
+  try {
+    let adopted = false;
+    for (const name of [names.passwordSecret, names.runtimeVaultSecret]) {
+      if (await kubernetes.adoptExistingAzureVaultSecret(name, vault)) adopted = true;
+    }
+    if (adopted) await kubernetes.syncArgocdApplication(`${dep.appName}-${dep.environment}`);
+    return adopted;
+  } catch (_) { return false; }
+}
+
 async function readiness(dep, revision) {
   const names = azureTemplates.azureNames(dep.appName, config.azure, dep.environment);
   const url = azureTemplates.azureAppUrl(dep.appName, config.azure, dep.environment);
@@ -129,6 +145,9 @@ async function readiness(dep, revision) {
     return { phase: 'deploying', message: 'CI terminée ; vérification de l\'état des ressources Azure indisponible, nouvelle tentative…', cloudRunUrl: null };
   }
   if (status.phase === 'failed') return { phase: 'failed', message: `Azure : ${status.failure}`, cloudRunUrl: null };
+  if (status.phase !== 'ready' && await adoptVaultSecrets(dep, names)) {
+    return { phase: 'deploying', message: 'Mot de passe de base existant repris dans le Key Vault ; synchronisation relancée.', cloudRunUrl: null };
+  }
   if (status.phase === 'ready') {
     if (status.observedImage === imageRef(dep, revision)) {
       const record = deploymentVariables.get(dep.id);
