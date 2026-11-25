@@ -20,15 +20,33 @@
           <% if (files.length === 0) { %>
             <div style="padding:16px;color:var(--text-muted);font-size:13px;">Aucun fichier .md trouvé</div>
           <% } else { %>
-            <% files.forEach(file => {
-              const devopsOnly = typeof isDevopsFile === 'function' && isDevopsFile(file);
-              const label = file.replace(/^devops\//, '').replace(/\.md$/, '').replace(/_/g, ' ');
+            <%
+              // Folders open when they contain the current document (native <details>: this page runs no script).
+              const docLink = (file) => {
+                const devopsOnly = typeof isDevopsFile === 'function' && isDevopsFile(file);
+                const label = file.split('/').pop().replace(/\.md$/, '').replace(/_/g, ' ');
             %>
-              <a href="/docs/<%= file %>" class="<%= locals.currentFile === file ? 'active' : '' %>" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+              <a href="/docs/<%= file %>" class="<%= locals.currentFile === file ? 'active' : '' %>" title="<%= file %>" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
                 <span>📄 <%= label %></span>
                 <% if (devopsOnly) { %><span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--primary);color:#fff;flex-shrink:0;">DevOps</span><% } %>
               </a>
-            <% }) %>
+            <%
+              };
+              const docFolder = (folder) => {
+                const open = typeof locals.currentFile === 'string' && locals.currentFile.startsWith(folder.path + '/');
+            %>
+              <details class="doc-folder"<%= open ? ' open' : '' %>>
+                <summary>📁 <%= folder.name.replace(/_/g, ' ') %></summary>
+                <div class="doc-folder-items">
+                  <% folder.folders.forEach(docFolder) %>
+                  <% folder.files.forEach(docLink) %>
+                </div>
+              </details>
+            <%
+              };
+            %>
+            <% tree.files.forEach(docLink) %>
+            <% tree.folders.forEach(docFolder) %>
           <% } %>
         </div>
 

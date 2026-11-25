@@ -56,6 +56,26 @@ function sortedFiles(allFiles) {
   });
 }
 
+// Sidebar tree: folders in the order of their first document (so Users/, with PLATFORM_CONTRACT first, stays on top),
+// documents in the order given by sortedFiles. Root-level documents stay at the top level.
+function buildTree(files) {
+  const root = { name: '', path: '', folders: [], files: [] };
+  for (const file of files) {
+    const parts = file.split('/');
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      let child = node.folders.find(folder => folder.name === part);
+      if (!child) {
+        child = { name: part, path: node.path ? `${node.path}/${part}` : part, folders: [], files: [] };
+        node.folders.push(child);
+      }
+      node = child;
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+
 router.get('/', requireAuth, requirePermission('docs:read'), (req, res) => {
   return res.redirect('/docs/Users/PLATFORM_CONTRACT.md');
 });
@@ -91,6 +111,7 @@ router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
     title: `${requestedPath} — Documentation`,
     currentPage: 'docs',
     files,
+    tree: buildTree(files),
     content,
     currentFile: requestedPath,
     isDevopsFile,
@@ -100,3 +121,4 @@ router.get('/*', requireAuth, requirePermission('docs:read'), (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildTree = buildTree;

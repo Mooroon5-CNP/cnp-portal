@@ -747,6 +747,18 @@ input:focus, select:focus, textarea:focus {
 .doc-sidebar a:hover { background: var(--bg); color: var(--accent); }
 .doc-sidebar a.active { background: #ede9fe; color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
 
+/* Documentation folders (native <details>, the page runs no script). */
+.doc-folder > summary {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.doc-folder > summary:hover { background: var(--bg); color: var(--accent); }
+.doc-folder-items { padding-left: 12px; }
+
 .doc-content {
   background: var(--surface);
   border: 1px solid var(--border);
