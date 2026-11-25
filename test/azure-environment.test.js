@@ -27,6 +27,7 @@ jest.mock('../src/clients/github', () => ({ getInstallationOctokit: jest.fn(), g
 jest.mock('../src/clients/kubernetes', () => ({
   applyApplicationSet: jest.fn(), getV2ServiceStatus: jest.fn(), getAzureAppStatus: jest.fn(), cascadeDeleteArgocdApplication: jest.fn(),
   getArgocdApplicationIfExists: jest.fn(), removeApplicationSetPath: jest.fn(),
+  adoptExistingAzureVaultSecret: jest.fn(), syncArgocdApplication: jest.fn(),
 }));
 jest.mock('../src/services/failover-operations', () => ({ run: jest.fn().mockResolvedValue({ initialized: true }) }));
 jest.mock('../src/clients/argocd', () => ({ deleteApplication: jest.fn(), getProject: jest.fn(), getApplicationIfExists: jest.fn() }));
@@ -368,4 +369,22 @@ describe('suppression', () => {
     kubernetes.getAzureAppStatus.mockResolvedValue({ exists: false, deleting: false });
     await expect(azureEnv.confirmTeardown(dep, { attempts: 3, delayMs: 1 })).resolves.toBe('gone');
   });
+});
+
+test('readiness adopts a Key Vault secret stuck in "already exists" and restarts the Argo sync (testapp09 prod, 25/11)', async () => {
+  const { readiness } = require('../src/services/environment-azure');
+  const dep = { appName: 'todo-az', environment: 'prod', targetCluster: 'azure' };
+  kubernetes.getAzureAppStatus.mockResolvedValue({ phase: 'database', failure: null });
+  kubernetes.adoptExistingAzureVaultSecret.mockImplementation(async name => name === 'todo-az-prod-pg-password');
+  kubernetes.syncArgocdApplication.mockResolvedValue();
+  const result = await readiness(dep, 'abc');
+  expect(kubernetes.adoptExistingAzureVaultSecret.mock.calls).toEqual([['todo-az-prod-pg-password', 'vault'], ['todo-az-prod-pg-runtime-password', 'vault']]);
+  expect(kubernetes.syncArgocdApplication).toHaveBeenCalledWith('todo-az-prod');
+  expect(result).toMatchObject({ phase: 'deploying', message: expect.stringContaining('Key Vault') });
+  kubernetes.adoptExistingAzureVaultSecret.mockResolvedValue(false);
+  kubernetes.syncArgocdApplication.mockClear();
+  await readiness(dep, 'abc');
+  expect(kubernetes.syncArgocdApplication).not.toHaveBeenCalled();
+  kubernetes.adoptExistingAzureVaultSecret.mockRejectedValue(new Error('k8s down'));
+  await expect(readiness(dep, 'abc')).resolves.toMatchObject({ phase: 'deploying' });
 });

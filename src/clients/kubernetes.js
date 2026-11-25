@@ -349,6 +349,46 @@ async function refreshArgocdApplication(name) {
     { metadata: { annotations: { 'argocd.argoproj.io/refresh': 'normal' } } },
     undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
 }
+// Secret Key Vault (Crossplane) qui échoue en « existe déjà » : incident testapp09 prod du 25/11/2026. À la recréation
+// d'une app, Crossplane a récupéré l'ancien secret (supprimé de façon récupérable) puis en a perdu la trace ; chaque
+// nouvelle tentative trouvait « A resource with the ID ... already exists ». On le fait adopter (annotation
+// crossplane.io/external-name = <nom>/<version>, le format que Crossplane pose lui-même) UNIQUEMENT si l'ID cité est
+// dans le coffre attendu et porte exactement le nom de la ressource. Renvoie true si l'annotation a été posée.
+const VAULT_SECRET_EXISTS = /A resource with the ID "https:\/\/([a-z0-9-]{3,24})\.vault\.azure\.net\/secrets\/([A-Za-z0-9-]{1,127})\/([0-9a-f]{32})" already exists/;
+function vaultSecretToAdopt(body, name, vaultName) {
+  if (body?.metadata?.annotations?.['crossplane.io/external-name'] || body?.metadata?.deletionTimestamp) return null;
+  if (body?.spec?.forProvider?.name !== name || !String(body.spec.forProvider.keyVaultId || '').endsWith(`/vaults/${vaultName}`)) return null;
+  const match = (body.status?.conditions || []).map(item => VAULT_SECRET_EXISTS.exec(item.message || '')).find(Boolean);
+  if (!match || match[1] !== vaultName || match[2] !== name) return null;
+  return `${name}/${match[3]}`;
+}
+async function adoptExistingAzureVaultSecret(name, vaultName) {
+  const customApi = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  let body;
+  try { body = (await customApi.getClusterCustomObject('keyvault.azure.upbound.io', 'v1beta1', 'secrets', name)).body; }
+  catch (err) {
+    if (err.response?.statusCode === 404 || err.statusCode === 404) return false;
+    handleError(err, `adoptExistingAzureVaultSecret(${name})`);
+  }
+  const externalName = vaultSecretToAdopt(body, name, vaultName);
+  if (!externalName) return false;
+  await customApi.patchClusterCustomObject('keyvault.azure.upbound.io', 'v1beta1', 'secrets', name,
+    { metadata: { annotations: { 'crossplane.io/external-name': externalName } } },
+    undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
+  return true;
+}
+
+// Relance une synchronisation Argo CD (sans suppression). Argo ne retente pas seul une synchronisation automatique qui a
+// échoué pour la même révision ; utilisé après une réparation (adoption d'un secret existant).
+async function syncArgocdApplication(name) {
+  const customApi = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
+  customApi.addInterceptor(options => { options.timeout = 10000; });
+  await customApi.patchNamespacedCustomObject('argoproj.io', 'v1alpha1', 'argocd', 'applications', name,
+    { operation: { initiatedBy: { username: 'cnp-portal' }, sync: { prune: false } } },
+    undefined, undefined, undefined, { headers: { 'Content-Type': 'application/merge-patch+json' } });
+}
+
 async function getArgocdApplicationIfExists(name) {
   const kc = getKubeConfig();
   const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -733,6 +773,9 @@ async function provisionArgoCDLocalUser(username, bcryptHash, { dryRun = false }
 
 module.exports = {
   refreshArgocdApplication,
+  adoptExistingAzureVaultSecret,
+  vaultSecretToAdopt,
+  syncArgocdApplication,
   getPods, getAllPods, deletePod, scaleDeployment,
   getNamespaces, getEvents, getAllEvents, getAllResourceQuotas,
   getCompositeResources, checkConnectivity,
