@@ -223,19 +223,16 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: CNP_FAILOVER_PLATFORM, value: "/etc/cnp-failover/failover-platform.json"}
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value: {name: PORTAL_PUBLIC_URL, value: "https://cnp-platform.apps.mooroon5.fr"}
   - target:
       kind: Ingress
       name: cnp-portal
     patch: |-
       - op: replace
         path: /spec/tls/0/hosts/0
-        value: cnp-platform.apps.mooroon5.fr
+        value: portal.apps.mooroon5.fr
       - op: replace
         path: /spec/rules/0/host
-        value: cnp-platform.apps.mooroon5.fr
+        value: portal.apps.mooroon5.fr
       - op: replace
         path: /metadata/annotations/cert-manager.io~1cluster-issuer
         value: letsencrypt-prod

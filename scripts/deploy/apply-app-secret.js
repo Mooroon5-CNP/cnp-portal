@@ -72,7 +72,7 @@ if (!oauthSource.GITHUB_CLIENT_ID || !oauthSource.GITHUB_CLIENT_SECRET
 }
 stringData.GITHUB_CLIENT_ID = oauthSource.GITHUB_CLIENT_ID;
 stringData.GITHUB_CLIENT_SECRET = oauthSource.GITHUB_CLIENT_SECRET;
-stringData.GITHUB_REDIRECT_URI = 'https://cnp-platform.apps.mooroon5.fr/auth/github/callback';
+stringData.GITHUB_REDIRECT_URI = 'https://portal.apps.mooroon5.fr/auth/github/callback';
 
 // Argo CD's in-cluster DNS name is covered by its certificate. Keep the
 // Terraform-supplied credentials, but override its legacy public-IP endpoint
