@@ -18,8 +18,8 @@
 set -euo pipefail
 
 APP=${1:-cnp-test-azure}
-PROJECT=cnp-terraform-512313
-CONTEXT=gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform
+PROJECT=cnp-terraform-515922
+CONTEXT=gke_cnp-terraform-515922_europe-west9-b_cnp-cluster-terraform
 URL=https://$APP.apps.mooroon5.fr
 CR=$APP-prod-gcp-db
 

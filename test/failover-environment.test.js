@@ -28,8 +28,8 @@ beforeEach(() => {
   const profile = JSON.parse(fs.readFileSync(path.join(templates, 'postgres/recipe.example.json')));
   const contract = { database: 'appdb' };
   for (const side of ['gcp', 'aws']) Object.assign(profile[side], { app_name: APP, database_name: 'appdb', sql_contract: contract });
-  Object.assign(profile.gcp, { gcp_lb_ip: '34.54.71.90', credentials_secret_name: `cnp-${APP}-sql`, database_instance: `${APP}-prod-gcp-db-abc` });
-  profile.gcp.gcp_runtime.subnetwork = 'projects/cnp-terraform-512313/regions/europe-west9/subnetworks/gcp-subnet-1';
+  Object.assign(profile.gcp, { gcp_lb_ip: '136.82.215.79', credentials_secret_name: `cnp-${APP}-sql`, database_instance: `${APP}-prod-gcp-db-abc` });
+  profile.gcp.gcp_runtime.subnetwork = 'projects/cnp-terraform-515922/regions/europe-west9/subnetworks/gcp-subnet-1';
   Object.assign(profile.aws, { database_security_group_id: 'sg-0123456789abcdef0', listener_priority: 23456, master_password_secret: `cnp-${APP}-sql`,
     database_ca_pem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' });
   profile.automation = { ...profile.automation, regime: 'platform', worker_image: '', ecs_cluster_arn: 'arn:aws:ecs:eu-west-3:626278345026:cluster/cnp-cluster',
@@ -37,7 +37,7 @@ beforeEach(() => {
   // Références produites par initialize-secrets (régime plateforme : quatre secrets AWS et le secret runtime GCP).
   const credentials = { aws_secret_arns: Object.fromEntries(['bootstrap', 'source-admin', 'runtime', 'target-admin'].map(role => [role,
     `arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/${APP}/${role}-Ab1234`])),
-    gcp_runtime_secret: `projects/cnp-terraform-512313/secrets/${APP}-prod-runtime` };
+    gcp_runtime_secret: `projects/cnp-terraform-515922/secrets/${APP}-prod-runtime` };
   input = { profile, credentials, secrets: { app: APP, initialized: true, gcp_password_version: '1' }, observations: {} };
   service.configure(APP, input, manager);
   api = { request: jest.fn(async (route, args) => {

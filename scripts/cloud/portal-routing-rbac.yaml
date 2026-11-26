@@ -1,0 +1,28 @@
+# Droits ajoutés à la main sur l'ancien cluster et absents du ClusterRole cnp-portal-runtime créé par Terraform :
+# sans eux, le routage des apps casse. Rôle séparé et additif, pour qu'un apply Terraform ne le retire pas.
+# Règles identiques à celles de portal-rbac.yaml. À appliquer une fois le ServiceAccount cnp-portal/cnp-portal créé :
+#   kubectl --context <contexte> apply -f scripts/cloud/portal-routing-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnp-portal-routing-read
+rules:
+  - apiGroups: [compute.gcp.upbound.io]
+    resources: [regionnetworkendpointgroups, backendservices, urlmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [cert-manager.io]
+    resources: [clusterissuers]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnp-portal-routing-read
+subjects:
+  - kind: ServiceAccount
+    name: cnp-portal
+    namespace: cnp-portal
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cnp-portal-routing-read

@@ -9,7 +9,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
 
-const bucket = process.env.CNP_PORTAL_BACKUP_BUCKET || 'gs://cnp-portal-backup-512313';
+const bucket = process.env.CNP_PORTAL_BACKUP_BUCKET || 'gs://cnp-portal-backup-515922';
 const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 const object = `${bucket}/sqlite/${timestamp}.sqlite`;
 const remoteFile = `/tmp/cnp-portal-${timestamp}.sqlite`;

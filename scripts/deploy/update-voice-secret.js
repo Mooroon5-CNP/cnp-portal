@@ -34,7 +34,7 @@ function kubectl(args, input) {
 
 try {
   const context = kubectl(['config', 'current-context']).trim();
-  if (context !== 'gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform') {
+  if (context !== 'gke_cnp-terraform-515922_europe-west9-b_cnp-cluster-terraform') {
     throw new Error(`Unexpected Kubernetes context: ${context}`);
   }
   const current = JSON.parse(kubectl([

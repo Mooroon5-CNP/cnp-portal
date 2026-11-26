@@ -19,7 +19,7 @@ class DevDomainBootstrapTests(unittest.TestCase):
         cli.start()
         self.addCleanup(cli.stop)
         self.args = argparse.Namespace(apply=False, project='test-project', base_domain='apps.mooroon5.fr',
-                                       zone='TESTZONE', lb_ip='34.54.71.90', aws_region='eu-west-3', certificate_map='existing-map')
+                                       zone='TESTZONE', lb_ip='136.82.215.79', aws_region='eu-west-3', certificate_map='existing-map')
 
     def test_read_only_plan_performs_no_mutations(self):
         calls = []
@@ -86,17 +86,17 @@ class DevDomainBootstrapTests(unittest.TestCase):
         xml = b'''<ListResourceRecordSetsResponse xmlns="https://route53.amazonaws.com/doc/2013-04-01/">
         <ResourceRecordSets><ResourceRecordSet><Name>app.apps.mooroon5.fr.</Name><Type>A</Type>
         <SetIdentifier>primary</SetIdentifier><Failover>PRIMARY</Failover><HealthCheckId>hc</HealthCheckId>
-        <ResourceRecords><ResourceRecord><Value>34.54.71.90</Value></ResourceRecord></ResourceRecords>
+        <ResourceRecords><ResourceRecord><Value>136.82.215.79</Value></ResourceRecord></ResourceRecords>
         </ResourceRecordSet></ResourceRecordSets><IsTruncated>true</IsTruncated>
         <NextRecordName>next.apps.mooroon5.fr.</NextRecordName><NextRecordType>A</NextRecordType>
         <NextRecordIdentifier>secondary</NextRecordIdentifier></ListResourceRecordSetsResponse>'''
         records, page = module.parse_recordsets(xml)
         self.assertEqual(records[0]['Failover'], 'PRIMARY')
         self.assertEqual(records[0]['HealthCheckId'], 'hc')
-        self.assertEqual(records[0]['ResourceRecords'], [{'Value': '34.54.71.90'}])
+        self.assertEqual(records[0]['ResourceRecords'], [{'Value': '136.82.215.79'}])
         self.assertEqual(page['identifier'], 'secondary')
         with self.assertRaisesRegex(ValueError, 'routing policy'):
-            module.check_dns(records, 'app.apps.mooroon5.fr', 'A', '34.54.71.90')
+            module.check_dns(records, 'app.apps.mooroon5.fr', 'A', '136.82.215.79')
 
     def test_stdlib_route53_fallback_fetches_only_selected_zone_and_all_pages(self):
         with patch.object(module.shutil, 'which', return_value=None), \

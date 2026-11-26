@@ -1,9 +1,9 @@
 {
   "gcp": {
-    "gcp_lb_ip": "34.54.71.90",
+    "gcp_lb_ip": "136.82.215.79",
     "gcp_runtime": {
-      "service_account": "cloud-run-sa@cnp-terraform-512313.iam.gserviceaccount.com",
-      "subnetwork": "projects/cnp-terraform-512313/regions/europe-west9/subnetworks/gcp-subnet-1"
+      "service_account": "cloud-run-sa@cnp-terraform-515922.iam.gserviceaccount.com",
+      "subnetwork": "projects/cnp-terraform-515922/regions/europe-west9/subnetworks/gcp-subnet-1"
     }
   },
   "aws": {

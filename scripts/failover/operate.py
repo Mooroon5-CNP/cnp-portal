@@ -69,7 +69,7 @@ def bootstrap_operations(action, introspected):
 
 # Aucune CLI : le portail est fait pour tourner dans le cluster. Chaque lecture passe par une API, avec l'identité de
 # l'environnement (pod du portail, sinon poste de l'opérateur et `kube_context` du profil).
-PROJECT = os.environ.get('GCP_PROJECT', 'cnp-terraform-512313')
+PROJECT = os.environ.get('GCP_PROJECT', 'cnp-terraform-515922')
 AWS_ACCOUNT = os.environ.get('CNP_AWS_ACCOUNT_ID', '626278345026')
 AWS_REGION = os.environ.get('CNP_AWS_REGION', 'eu-west-3')
 GCP_REGION = os.environ.get('GCP_REGION', 'europe-west9')

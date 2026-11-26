@@ -149,7 +149,7 @@ describe('Gemini Cloud Assist in the portal chat (MOCKED)', () => {
     for (const message of ['/gcp quels services Cloud Run sont en erreur ?', '/diagnostic']) {
       const result = await turn(message, { gcaChatEnabled: false, context: { applicationId: 'majoutes-api', environment: 'dev' } });
       expect(result.events.at(-1)).toMatchObject({ type: 'error', code: 'GCA_NOT_ENABLED', retryable: false,
-        link: { href: 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-512313' } });
+        link: { href: 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-515922' } });
       expect(result.mcpClient.callTool).not.toHaveBeenCalled();
     }
   });

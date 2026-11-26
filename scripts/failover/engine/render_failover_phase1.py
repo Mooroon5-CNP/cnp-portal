@@ -14,7 +14,7 @@ import sys
 
 from render_aws_prod_example import resource, write_files
 
-PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
+PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-515922")
 GCP_REGION = os.environ.get("GCP_REGION", "europe-west9")
 BASE_DOMAIN = os.environ.get("APPLICATIONS_BASE_DOMAIN", "apps.mooroon5.fr")
 ALB_DNS = os.environ.get("CNP_AWS_ALB_DNS_NAME", "cnp-alb-1261477539.eu-west-3.elb.amazonaws.com")
