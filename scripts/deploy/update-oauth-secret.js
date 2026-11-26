@@ -7,7 +7,7 @@ const fs = require('fs');
 const { spawnSync } = require('child_process');
 const dotenv = require('dotenv');
 
-const callback = 'https://portal.apps.mooroon5.fr/auth/github/callback';
+const callback = 'https://cnp-platform.apps.mooroon5.fr/auth/github/callback';
 const file = process.argv[2];
 if (!file) {
   console.error('Usage: node scripts/deploy/update-oauth-secret.js <oauth-credentials.env>');
@@ -68,7 +68,7 @@ function kubectl(args, input) {
   let verified = false;
   for (let attempt = 0; attempt < 10 && !verified; attempt++) {
     try {
-      const live = await fetch('https://portal.apps.mooroon5.fr/auth/github', { redirect: 'manual' });
+      const live = await fetch('https://cnp-platform.apps.mooroon5.fr/auth/github', { redirect: 'manual' });
       const location = live.headers.get('location');
       if (live.status === 302 && location) {
         const authorization = new URL(location);
