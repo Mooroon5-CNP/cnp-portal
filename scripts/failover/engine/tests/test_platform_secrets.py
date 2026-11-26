@@ -20,7 +20,7 @@ import bootstrap
 import platform_secrets as ps
 
 APP = "weather-api"
-SA = "cnp-runtime@cnp-terraform-512313.iam.gserviceaccount.com"
+SA = "cnp-runtime@cnp-terraform-515922.iam.gserviceaccount.com"
 CONFIG = {"app": APP, "kubernetes_secret": f"cnp-{APP}-sql", "gcp_runtime_service_account": SA}
 
 
@@ -144,7 +144,7 @@ class Clients:
         return json.loads(self.aws.secrets[f"cnp/failover/{APP}/{role}"]["value"])
 
 
-GCP_NAME = f"projects/cnp-terraform-512313/secrets/{APP}-prod-runtime"
+GCP_NAME = f"projects/cnp-terraform-515922/secrets/{APP}-prod-runtime"
 
 
 class FirstRunTests(unittest.TestCase):
@@ -386,7 +386,7 @@ class SecretManagerAdapterTests(unittest.TestCase):
         self.client.get_secret.return_value = sm.Secret(labels={"application": APP})
         self.assertEqual(self.adapter.get_secret(GCP_NAME), {"labels": {"application": APP}})
         sm.GetSecretRequest(self.request("get_secret"))
-        self.adapter.create_secret("projects/cnp-terraform-512313", f"{APP}-prod-runtime", {"application": APP}, "europe-west9")
+        self.adapter.create_secret("projects/cnp-terraform-515922", f"{APP}-prod-runtime", {"application": APP}, "europe-west9")
         created = sm.CreateSecretRequest(self.request("create_secret"))
         self.assertEqual(created.secret.replication.user_managed.replicas[0].location, "europe-west9")
         self.client.list_secret_versions.return_value = [sm.SecretVersion(name=GCP_NAME + "/versions/1", state=sm.SecretVersion.State.ENABLED)]

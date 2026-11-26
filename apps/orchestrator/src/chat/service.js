@@ -68,7 +68,7 @@ const gcaMessages = {
 };
 const gcaFailure = (result) => result.errorCode || (result.errors && result.errors[0] && result.errors[0].code) || 'GCA_UNAVAILABLE';
 
-const GCA_CONSOLE_URL = 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-512313';
+const GCA_CONSOLE_URL = 'https://console.cloud.google.com/home/dashboard?project=cnp-terraform-515922';
 
 /** Gemini Cloud Assist turn: read-only, structured, never rewritten by the generative model. */
 async function* runGcaTurn(request, dependencies, { correlationId, conversationId, intent }) {

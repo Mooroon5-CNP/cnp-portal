@@ -21,7 +21,7 @@ const manager = { id: 'manager-test', role: 'manager' };
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cnp-failover-platform-'));
 const CA = '-----BEGIN CERTIFICATE-----\nMIIBplatform\n-----END CERTIFICATE-----';
 const platform = (overrides = {}) => ({
-  gcp: { gcp_lb_ip: '34.54.71.90', gcp_runtime: { service_account: 'runtime@example.test', subnetwork: 'projects/p/regions/r/subnetworks/s' } },
+  gcp: { gcp_lb_ip: '136.82.215.79', gcp_runtime: { service_account: 'runtime@example.test', subnetwork: 'projects/p/regions/r/subnetworks/s' } },
   aws: { database_security_group_id: 'sg-0123456789abcdef0', database_ca_pem: CA },
   automation: {
     worker_image: `626278345026.dkr.ecr.eu-west-3.amazonaws.com/cnp-failover-apps@sha256:${'a'.repeat(64)}`,
@@ -53,7 +53,7 @@ afterAll(() => {
 test('un profil PostgreSQL se construit depuis failover-platform.json, sans aucun fichier du pilote', async () => {
   await operations.createProfile('weather-api', 'postgres', contract, manager);
   const { profile } = service.profileFor('weather-api');
-  expect(profile.gcp.gcp_lb_ip).toBe('34.54.71.90');
+  expect(profile.gcp.gcp_lb_ip).toBe('136.82.215.79');
   expect(profile.gcp.gcp_runtime.service_account).toBe('runtime@example.test');
   expect(profile.aws.database_security_group_id).toBe('sg-0123456789abcdef0');
   expect(profile.aws.database_ca_pem).toBe(CA);

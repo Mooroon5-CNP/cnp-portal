@@ -87,7 +87,7 @@ Bibliothèques : `requirements.platform.txt`. Identités : celles de l'environne
 **Droits à donner à l'identité du portail (L1) :**
 - AWS, sur `arn:aws:secretsmanager:eu-west-3:626278345026:secret:cnp/failover/*` : `CreateSecret`, `TagResource`, `DescribeSecret`,
   `GetSecretValue`, `PutSecretValue` (plus `sts:GetCallerIdentity`) ;
-- GCP, projet `cnp-terraform-512313` : `secretmanager.secrets.{create,get,getIamPolicy,setIamPolicy}`, `secretmanager.versions.{add,list,access}` ;
+- GCP, projet `cnp-terraform-515922` : `secretmanager.secrets.{create,get,getIamPolicy,setIamPolicy}`, `secretmanager.versions.{add,list,access}` ;
 - Kubernetes : `get` et `create` sur `secrets` dans `crossplane-system` (pas `update`, `patch` ni `delete`).
 
 Non couvert : le retrait des secrets quand une app est supprimée (comme pour le pilote, ils restent, à supprimer à la main).

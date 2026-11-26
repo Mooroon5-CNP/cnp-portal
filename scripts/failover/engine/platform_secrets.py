@@ -20,7 +20,7 @@ import secrets
 from uuid import NAMESPACE_URL, uuid5
 
 ACCOUNT = os.environ.get("CNP_AWS_ACCOUNT_ID", "626278345026")
-PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-512313")
+PROJECT = os.environ.get("GCP_PROJECT", "cnp-terraform-515922")
 REGION = os.environ.get("CNP_AWS_REGION", "eu-west-3")
 GCP_LOCATION = os.environ.get("GCP_REGION", "europe-west9")
 NAMESPACE = "crossplane-system"

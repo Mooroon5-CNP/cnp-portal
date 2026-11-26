@@ -86,16 +86,16 @@ class OperatorTests(unittest.TestCase):
                 self.assertTrue(result['standby_ready'])
 
     def runtime(self, service):
-        session = FakeSession({f'https://run.googleapis.com/v2/projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod': service})
+        session = FakeSession({f'https://run.googleapis.com/v2/projects/cnp-terraform-515922/locations/europe-west9/services/weather-api-prod': service})
         with patch.dict(sys.modules, {'boto3': self.aws}):
             return operator.execute({**self.request, 'action': 'runtime-verify', '_google': session})
 
 
-REVISION = 'projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod/revisions/weather-api-prod-00002-abc'
+REVISION = 'projects/cnp-terraform-515922/locations/europe-west9/services/weather-api-prod/revisions/weather-api-prod-00002-abc'
 # Forme réelle de l'API Cloud Run v2, relevée sur cnp-test-azure-prod le 6/11 : `reconciling` est ABSENT quand il est faux.
 SERVICE = {'terminalCondition': {'state': 'CONDITION_SUCCEEDED', 'type': 'Ready'},
            'latestReadyRevision': REVISION, 'latestCreatedRevision': REVISION,
-           'template': {'containers': [{'image': 'europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/weather-api@sha256:' + 'a' * 64}]}}
+           'template': {'containers': [{'image': 'europe-west9-docker.pkg.dev/cnp-terraform-515922/cnp-registry/weather-api@sha256:' + 'a' * 64}]}}
 
 
 class FakeSession:
@@ -507,7 +507,7 @@ class ObserveTests(unittest.TestCase):
         self.objects = {(plural, name.format(app=app)): ({**value, 'status': {'atProvider': addresses[plural], **value['status']}}
                                                           if plural in addresses and 'status' in value else value)
                         for (plural, name), value in objects.items()}
-        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
+        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-515922/instances/{app}-prod-gcp-db':
                                {'serverCaCert': {'cert': 'CA'}, 'state': self.sql_state}})
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
         parent.mkdir(exist_ok=True, parents=True)
@@ -566,7 +566,7 @@ class ObserveTests(unittest.TestCase):
         profile = fixtures.platform_profile()
         app = profile['gcp']['app_name']
         self.objects = {('databaseinstances', f'{app}-prod-gcp-db'): {'kind': 'DatabaseInstance'}, ('instances', f'{app}-prod-db'): {'kind': 'Instance'}}
-        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/{app}-prod-gcp-db':
+        session = FakeSession({f'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-515922/instances/{app}-prod-gcp-db':
                                {'serverCaCert': {'cert': '-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----'}}})
         parent = SOURCE.parents[2] / 'data' / 'failover-operations'
         parent.mkdir(exist_ok=True, parents=True)
@@ -580,8 +580,8 @@ class ObserveTests(unittest.TestCase):
 class GcpAvailabilityTests(ObserveTests):
     """Voyant « GCP disponible » : chaque condition se lit chez son fournisseur ; une lecture refusée l'éteint."""
     APP = 'weather-api'
-    SQL = 'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-512313/instances/weather-api-prod-gcp-db'
-    RUN = 'https://run.googleapis.com/v2/projects/cnp-terraform-512313/locations/europe-west9/services/weather-api-prod'
+    SQL = 'https://sqladmin.googleapis.com/v1/projects/cnp-terraform-515922/instances/weather-api-prod-gcp-db'
+    RUN = 'https://run.googleapis.com/v2/projects/cnp-terraform-515922/locations/europe-west9/services/weather-api-prod'
 
     def gcp(self, sql=None, run=None, paused=False, fence='GCP_FENCED'):
         ok = {'conditions': [{'type': 'Ready', 'status': 'True'}, {'type': 'Synced', 'status': 'True'}]}

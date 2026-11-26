@@ -11,7 +11,7 @@ import render_aws_prod_example as aws
 def config():
     # Profil PostgreSQL de la plateforme : seul le nom de la base se déclare, le schéma se lit dans la base.
     return {"app_name": "cnp-failover-recette", "environment": "prod", "database_name": "appdb",
-            "credentials_secret_name": "cnp-recette-sql", "gcp_lb_ip": "34.54.71.90",
+            "credentials_secret_name": "cnp-recette-sql", "gcp_lb_ip": "136.82.215.79",
             "application_profile": "postgres", "sql_contract": {"database": "appdb"}}
 
 
@@ -83,7 +83,7 @@ class Phase1Tests(unittest.TestCase):
     def test_dns_does_not_follow_name_that_switches(self):
         files = renderer.dns(config())
         check = files["healthcheck.yaml"]["spec"]["forProvider"]
-        self.assertEqual(check["ipAddress"], "34.54.71.90")
+        self.assertEqual(check["ipAddress"], "136.82.215.79")
         self.assertEqual(check["fqdn"], "cnp-failover-recette.apps.mooroon5.fr")
         self.assertTrue(check["enableSni"])
         self.assertEqual(check["resourcePath"], "/health")

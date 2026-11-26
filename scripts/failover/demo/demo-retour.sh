@@ -17,8 +17,8 @@
 set -euo pipefail
 
 APP=${1:-cnp-test-azure}
-PROJECT=cnp-terraform-512313
-CONTEXT=gke_cnp-terraform-512313_europe-west9-b_cnp-cluster-terraform
+PROJECT=cnp-terraform-515922
+CONTEXT=gke_cnp-terraform-515922_europe-west9-b_cnp-cluster-terraform
 URL=https://$APP.apps.mooroon5.fr
 CR=$APP-prod-gcp-db
 
@@ -60,7 +60,7 @@ for _ in $(seq 1 160); do
   STATE=$(field state)
   DNS=$(dig +short "$APP.apps.mooroon5.fr" A @8.8.8.8 | head -1)
   # Adresse du répartiteur GCP de la plateforme (profil gcp_lb_ip) ; l'ALB AWS répond sur des adresses qui alternent.
-  [ "$DNS" = 34.54.71.90 ] && DNS=GCP || DNS=AWS
+  [ "$DNS" = 136.82.215.79 ] && DNS=GCP || DNS=AWS
   NOW="HTTP=$HEALTH worker=$STATE dns=$DNS"
   if [ "$NOW" != "$last" ]; then printf '+%3ds %s %s\n' $(( $(date +%s) - T1 )) "$(date +%H:%M:%S)" "$NOW"; last=$NOW; fi
   [ "$STATE" = WAIT_SIGNALS ] && [ "$HEALTH" = 200 ] && [ "$DNS" = GCP ] && break
