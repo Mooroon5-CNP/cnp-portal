@@ -99,7 +99,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: europe-west9-docker.pkg.dev/cnp-terraform-512313/cnp-registry/cnp-portal@sha256:8dedc83b82b6c901b23d679c243399c887f1a7c67ea31e8ddaea18c3f46bcffc
+        value: europe-west9-docker.pkg.dev/cnp-terraform-515922/cnp-registry/cnp-portal@sha256:f8594903cfd24963de07ab33ad3bac8ff4637837049e3a0136101b5799e40a03
       - op: replace
         path: /spec/template/metadata/labels/tags.datadoghq.com~1env
         value: "prod"
@@ -223,16 +223,19 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: CNP_FAILOVER_PLATFORM, value: "/etc/cnp-failover/failover-platform.json"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: PORTAL_PUBLIC_URL, value: "https://cnp-platform.apps.mooroon5.fr"}
   - target:
       kind: Ingress
       name: cnp-portal
     patch: |-
       - op: replace
         path: /spec/tls/0/hosts/0
-        value: portal.apps.mooroon5.fr
+        value: cnp-platform.apps.mooroon5.fr
       - op: replace
         path: /spec/rules/0/host
-        value: portal.apps.mooroon5.fr
+        value: cnp-platform.apps.mooroon5.fr
       - op: replace
         path: /metadata/annotations/cert-manager.io~1cluster-issuer
         value: letsencrypt-prod
