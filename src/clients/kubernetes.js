@@ -558,7 +558,7 @@ function azureObservedVariables(containerApp) {
     secrets: Array.isArray(observed.secret) ? observed.secret : null };
 }
 
-function azureAppStatusFrom({ server, database, containerApp }) {
+function azureAppStatusFrom({ server, copyServer, database, containerApp }) {
   const ready = body => !!body && conditionOf(body, 'Ready')?.status === 'True';
   if (ready(containerApp) && conditionOf(containerApp, 'Synced')?.status === 'True') {
     return { phase: 'ready', failure: null, observedImage: azureObservedImage(containerApp),
@@ -567,18 +567,21 @@ function azureAppStatusFrom({ server, database, containerApp }) {
   // Un échec de création ou de mise à jour ASYNCHRONE est définitif tant que personne n'intervient (constaté le
   // 25/10/2026 : image de départ introuvable, la Container App reste « Failed »). Une simple erreur de
   // réconciliation (ReconcileError) peut être passagère : on ne la déclare pas en échec.
-  for (const [name, body] of [['Container App', containerApp], ['base de données', database], ['serveur PostgreSQL', server]]) {
+  for (const [name, body] of [['Container App', containerApp], ['base de données', database], ['serveur PostgreSQL', server],
+    ['serveur PostgreSQL de copie', copyServer]]) {
     const op = conditionOf(body, 'LastAsyncOperation');
     if (op && op.status === 'False' && ['AsyncCreateFailure', 'AsyncUpdateFailure'].includes(op.reason)) {
       const detail = String(op.message || op.reason).replace(/\s+/g, ' ').trim();
       // Azure refused the server for lack of capacity in the region: it drops the half-created server and Crossplane
       // then reports a misleading "delegated_subnet_id from """ replacement. Say what actually happened.
-      if (name === 'serveur PostgreSQL' && (/SkuNotAvailable|RegionalAllocationFailed/i.test(detail)
-        || /delegated_subnet_id" from "" to/.test(detail))) {
+      const code = detail.match(/RegionalAllocationFailed|SkuNotAvailable/i)?.[0];
+      if (name.startsWith('serveur PostgreSQL') && (code || /delegated_subnet_id" from "" to/.test(detail))) {
         const region = body?.spec?.forProvider?.location || 'demandée';
+        const setting = body === copyServer ? 'AZURE_COPY_LOCATION' : 'AZURE_DB_LOCATION';
         return { phase: 'failed', regionUnavailable: region,
-          failure: `serveur PostgreSQL : région Azure ${region} indisponible pour cette souscription (capacité refusée par Azure). `
-            + 'Réessayez plus tard ou configurez une autre région pour les bases (AZURE_DB_LOCATION).' };
+          failure: `${name} : ${code ? `${code} : ` : ''}pas assez de capacité pour cette taille de machine dans cette région `
+            + `(région Azure ${region} indisponible pour cette souscription). Supprimez ce déploiement, puis réessayez plus tard `
+            + `ou configurez une autre région (${setting}).` };
       }
       return { phase: 'failed', failure: `${name} : ${detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}` };
     }
@@ -632,17 +635,19 @@ async function getPrivateAppStatus(appName, environment, { expectedImage } = {})
   }
 }
 
-async function getAzureAppStatus(appName, { serverName, databaseName, containerAppName }) {
+async function getAzureAppStatus(appName, { serverName, copyServerName, databaseName, containerAppName }) {
   const api = getKubeConfig().makeApiClient(k8s.CustomObjectsApi);
   try {
-    const [server, database, containerApp] = await Promise.all([
+    const [server, copyServer, database, containerApp] = await Promise.all([
       getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', serverName),
+      // Prod only: the copy server in the second region can be refused on its own, and must also be gone after a deletion.
+      copyServerName ? getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleservers', copyServerName) : null,
       getAzureObject(api, 'dbforpostgresql.azure.upbound.io', 'v1beta1', 'flexibleserverdatabases', databaseName),
       getAzureObject(api, 'containerapp.azure.upbound.io', 'v1beta2', 'containerapps', containerAppName || appName),
     ]);
-    const present = [server, database, containerApp].filter(Boolean);
+    const present = [server, copyServer, database, containerApp].filter(Boolean);
     return {
-      ...azureAppStatusFrom({ server, database, containerApp }),
+      ...azureAppStatusFrom({ server, copyServer, database, containerApp }),
       // Pour confirmer un démontage : quelque chose existe encore / quelque chose est en cours de suppression.
       exists: present.length > 0,
       deleting: present.some(body => !!body.metadata?.deletionTimestamp),

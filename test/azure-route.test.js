@@ -225,3 +225,24 @@ describe('page de détail d\'un déploiement Azure dev/prod', () => {
     expect(res.text).toContain('https://todo-az-dev.env.example.io');
   });
 });
+
+describe('serveur de copie refusé par Azure (27/11/2026, swedencentral)', () => {
+  const ok = { status: { conditions: [{ type: 'Ready', status: 'True' }, { type: 'Synced', status: 'True' }] } };
+  const refused = { spec: { forProvider: { location: 'swedencentral' } }, status: { conditions: [
+    { type: 'Ready', status: 'False', reason: 'Creating' },
+    { type: 'LastAsyncOperation', status: 'False', reason: 'AsyncCreateFailure',
+      message: 'async create failed: Status: "RegionalAllocationFailed" Message: "We do not have sufficient capacity"' },
+  ] } };
+
+  test('l’échec est annoncé avec son code, sa cause et la région, même si le serveur principal est prêt', () => {
+    const status = azureAppStatusFrom({ server: ok, copyServer: refused });
+    expect(status).toMatchObject({ phase: 'failed', regionUnavailable: 'swedencentral' });
+    expect(status.failure).toMatch(/serveur PostgreSQL de copie : RegionalAllocationFailed : pas assez de capacité pour cette taille de machine dans cette région/);
+    expect(status.failure).toMatch(/swedencentral/);
+    expect(status.failure).toMatch(/AZURE_COPY_LOCATION/);
+  });
+
+  test('une Container App déjà prête n’est pas déclarée en échec à cause de la copie', () => {
+    expect(azureAppStatusFrom({ server: ok, copyServer: refused, database: ok, containerApp: ok }).phase).toBe('ready');
+  });
+});
