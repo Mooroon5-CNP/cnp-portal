@@ -38,7 +38,10 @@
                     <%= stats.syncedApps ?? '—' %>
                   </div>
                   <div class="stat-meta">
-                    <%= stats.totalApps ?? '—' %> apps gérées
+                    synchronisée(s) sur <%= stats.totalApps ?? '—' %> application(s)
+                    <% if (stats.platformServices) { %>
+                      <br>+ <%= stats.platformServices %> services plateforme (<%= stats.syncedPlatformServices %> synchronisés)
+                    <% } %>
                   </div>
                 </div>
               </div>
