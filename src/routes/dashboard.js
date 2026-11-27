@@ -10,7 +10,7 @@ const argocdService = require('../services/argocd');
 const deploymentModel = require('../models/deployment');
 const teamService = require('../services/teams');
 const { config } = require('../config/env');
-const { readDashboardSources } = require('../services/dashboard-sources');
+const { readDashboardSources, splitArgoApps } = require('../services/dashboard-sources');
 const applicationAddress = require('../services/application-address');
 const failover = require('../services/environment-failover');
 const { azureAppUrl } = require('../services/azure-templates');
@@ -60,12 +60,18 @@ router.get('/', requireAuth, async (req, res) => {
     const myPods = pods.filter(podInScope);
     const myApps = apps.filter(argoAppInScope);
 
+    const { applications, platform } = splitArgoApps(myApps);
+    const argo = sources['Argo CD'].available;
+    const synced = list => list.filter(a => a.status === 'Synced').length;
+
     const stats = {
       totalPods:    sources.Kubernetes.available ? myPods.length : null,
       runningPods:  sources.Kubernetes.available ? myPods.filter(p => p.status === 'Running').length : null,
       activeAlerts: sources.Datadog.available ? alerts.filter(a => a.status === 'ALERT').length : null,
-      syncedApps:   sources['Argo CD'].available ? myApps.filter(a => a.status === 'Synced').length : null,
-      totalApps:    sources['Argo CD'].available ? myApps.length : null,
+      syncedApps:   argo ? synced(applications) : null,
+      totalApps:    argo ? applications.length : null,
+      platformServices:       argo ? platform.length : null,
+      syncedPlatformServices: argo ? synced(platform) : null,
     };
 
     // Build per-app summary for the "Mes Applications" panel.
@@ -107,7 +113,8 @@ router.get('/', requireAuth, async (req, res) => {
     res.render('dashboard', {
       title: 'Dashboard — CNP Portal',
       currentPage: 'dashboard',
-      stats: { totalPods: null, runningPods: null, activeAlerts: null, syncedApps: null, totalApps: null },
+      stats: { totalPods: null, runningPods: null, activeAlerts: null, syncedApps: null, totalApps: null,
+        platformServices: null, syncedPlatformServices: null },
       unavailableSources: ['Kubernetes', 'Datadog', 'Argo CD'],
       recentAlerts: [],
       myAppsList: [],

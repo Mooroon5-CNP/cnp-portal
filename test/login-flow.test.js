@@ -43,5 +43,5 @@ test('admin reaches the dashboard when a cloud provider never responds', async (
   expect(dashboard.status).toBe(200);
   expect(dashboard.text).toContain('Bienvenue, admin');
   expect(dashboard.text).toContain('Données temporairement indisponibles : Kubernetes, Argo CD');
-  expect(dashboard.text).toContain('— apps gérées');
+  expect(dashboard.text).toContain('— application(s)');
 }, 10000);

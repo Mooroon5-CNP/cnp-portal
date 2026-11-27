@@ -17,4 +17,11 @@ async function readDashboardSources(sources, timeoutMs = 3000) {
   }));
   return Object.fromEntries(entries);
 }
-module.exports = { readDashboardSources };
+// Les applications des équipes vivent dans les projets Argo CD team-cnp-* ; le reste (Crossplane, routage,
+// ingress, certificats, portail) est la plateforme et ne se compte pas comme une application.
+function splitArgoApps(apps) {
+  const isApplication = app => String(app.project || '').startsWith('team-cnp-');
+  return { applications: apps.filter(isApplication), platform: apps.filter(app => !isApplication(app)) };
+}
+
+module.exports = { readDashboardSources, splitArgoApps };

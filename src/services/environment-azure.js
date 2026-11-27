@@ -133,6 +133,9 @@ async function adoptVaultSecrets(dep, names) {
   } catch (_) { return false; }
 }
 
+// La copie n'existe qu'en prod ; une lecture d'un serveur absent est sans effet.
+const copyServerOf = (dep, names) => (dep.environment === 'prod' ? { copyServerName: names.copyServer } : {});
+
 async function readiness(dep, revision) {
   const names = azureTemplates.azureNames(dep.appName, config.azure, dep.environment);
   const url = azureTemplates.azureAppUrl(dep.appName, config.azure, dep.environment);
@@ -140,6 +143,7 @@ async function readiness(dep, revision) {
   try {
     status = await kubernetes.getAzureAppStatus(dep.appName, {
       serverName: names.server, databaseName: names.database, containerAppName: names.containerApp,
+      ...copyServerOf(dep, names),
     });
   } catch (_) {
     return { phase: 'deploying', message: 'CI terminée ; vérification de l\'état des ressources Azure indisponible, nouvelle tentative…', cloudRunUrl: null };
@@ -179,6 +183,7 @@ async function confirmTeardown(dep, { attempts = 10, delayMs = 3000 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const status = await kubernetes.getAzureAppStatus(dep.appName, {
       serverName: names.server, databaseName: names.database, containerAppName: names.containerApp,
+      ...copyServerOf(dep, names),
     });
     if (!status.exists) return 'gone';
     if (status.deleting) return 'deleting';

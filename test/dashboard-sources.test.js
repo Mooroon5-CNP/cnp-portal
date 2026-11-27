@@ -21,3 +21,14 @@ test('failed and late providers do not become fabricated healthy data', async ()
   const result = await readDashboardSources({ Argo: async () => { throw new Error('unavailable'); } });
   expect(result.Argo.available).toBe(false);
 });
+
+describe('décompte Argo CD du tableau de bord', () => {
+  const { splitArgoApps } = require('../src/services/dashboard-sources');
+  test('les services de la plateforme ne sont pas comptés comme des applications', () => {
+    const platform = ['cert-manager', 'platform', 'platform', 'platform', 'cnp-portal', 'cnp-portal-bootstrap', 'platform'];
+    const apps = [{ name: 'demo-dev', project: 'team-cnp-dev' }, ...platform.map((project, i) => ({ name: `p${i}`, project }))];
+    const result = splitArgoApps(apps);
+    expect(result.applications.map(a => a.name)).toEqual(['demo-dev']);
+    expect(result.platform).toHaveLength(7);
+  });
+});
